@@ -1,0 +1,19 @@
+{
+  "model_name": "ClawLingua Cloze",
+  "deck_name": "ClawLingua Default Deck",
+  "fields": [
+    "Text",
+    "Original",
+    "Translation",
+    "Note",
+    "Audio"
+  ],
+  "card_templates": [
+    {
+      "name": "Card 1",
+      "qfmt": "{{cloze:Text}}<br>{{Audio}}",
+      "afmt": "{{cloze:Text}}<hr id=\"answer\">{{Translation}}<br><br><div class=\"original\">{{Original}}</div><br><div class=\"note\">{{Note}}</div><br>{{Audio}}"
+    }
+  ],
+  "css": ".card { font-family: arial; font-size: 20px; text-align: left; color: black; background-color: white; } .original { color: #666; font-size: 16px; } .note { color: #888; font-size: 14px; }"
+}

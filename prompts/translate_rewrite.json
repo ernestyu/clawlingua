@@ -1,0 +1,24 @@
+{
+  "name": "translate_rewrite",
+  "version": "0.1.0",
+  "description": "Generate learning-oriented translation for Anki Translation field.",
+  "mode": "translate",
+  "system_prompt": "你是语言学习翻译器。只输出 JSON 数组，不要输出解释和代码块标记。",
+  "user_prompt_template": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\n\n请将下列原文翻译并意译为目标语言。输出必须是 JSON 数组，每项格式为：\n{\n  \"translation\": \"最终翻译文本\"\n}\n\n要求：\n1) 允许适度意译，保证自然可读。\n2) 不要添加“翻译：”等前缀。\n3) 可以使用 <b>...</b>，不允许 Markdown **。\n4) 无法翻译时返回空数组。\n\ntext_original:\n{text_original}\n\nchunk_text:\n{chunk_text}",
+  "placeholders": [
+    "source_lang",
+    "target_lang",
+    "document_title",
+    "source_url",
+    "chunk_text",
+    "text_original"
+  ],
+  "output_format": {
+    "type": "json",
+    "schema_name": "translation_cards_v1"
+  },
+  "parser": {
+    "strip_code_fences": true,
+    "expect_json_array": true
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "cloze_contextual",
+  "version": "0.1.0",
+  "description": "Generate contextual cloze text for Anki Text field.",
+  "mode": "cloze",
+  "system_prompt": "你是语言学习材料编辑器。只输出 JSON 数组，不要输出解释和代码块标记。",
+  "user_prompt_template": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\n\n请基于下面文本生成 Anki Cloze 候选。输出必须是 JSON 数组，数组每项格式为：\n{\n  \"text\": \"带 cloze 的句子（最多3句）\",\n  \"original\": \"对应纯文本\",\n  \"target_phrases\": [\"短语1\", \"短语2\"],\n  \"note_hint\": \"可选简短提示\"\n}\n\n要求：\n1) text 必须包含至少一个 {{c1::...}}。\n2) original 不能包含 cloze 标记和 HTML。\n3) 可用 <b>...</b> 强调，不可使用 Markdown **。\n4) 无合适内容时返回空数组。\n\nchunk_text:\n{chunk_text}",
+  "placeholders": [
+    "source_lang",
+    "target_lang",
+    "document_title",
+    "source_url",
+    "chunk_text"
+  ],
+  "output_format": {
+    "type": "json",
+    "schema_name": "cloze_cards_v1"
+  },
+  "parser": {
+    "strip_code_fences": true,
+    "expect_json_array": true
+  }
+}
