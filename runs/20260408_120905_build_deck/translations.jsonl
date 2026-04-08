@@ -1,0 +1,4 @@
+{"original":"The more whimsical explanation is that maybe RL training makes the models a little too single-minded and narrowly focused.","translation":"更富想象力的解释是，也许强化学习训练会让模型变得过于专注和狭隘，甚至有些迟钝，尽管在其他方面它们也变得更加敏锐。正因如此，它们反而无法完成一些基本任务。"}
+{"original":"Because of this, they can’t do basic things, even though it also makes them aware in some other ways.","translation":"因此，尽管它们在某些方面也具备了意识，但仍然无法完成一些基本任务。"}
+{"original":"Back when people were doing pre-training, the question of what data to train on was answered, because that answer was everything.","translation":"但还有另一种解释。当初人们进行预训练时，关于该用什么数据训练的问题已经有了答案，因为那个答案就是全部数据。进行预训练时，你需要所有数据，因此你无需纠结该用这些数据还是那些数据。"}
+{"original":"When you do pre-training, you need all the data. So you don’t have to think if it’s going to be this data or that data.","translation":"但还有另一种解释。在人们进行预训练的早期，关于使用什么数据来训练的问题已经有了答案——那就是全部数据。进行预训练时，你需要全部数据，因此无需纠结该用哪些数据，不该用哪些数据。"}
