@@ -86,7 +86,8 @@ class OpenAICompatibleClient:
                 last_err = exc
                 if attempt >= self._cfg.llm_max_retries:
                     break
-                time.sleep(self._cfg.llm_retry_backoff_seconds * attempt)
+                delay = self._cfg.llm_retry_backoff_seconds * (2 ** (attempt - 1))
+                time.sleep(delay)
 
         raise build_error(
             error_code="LLM_REQUEST_FAILED",
@@ -99,4 +100,3 @@ class OpenAICompatibleClient:
             ],
             exit_code=ExitCode.LLM_REQUEST_ERROR,
         )
-

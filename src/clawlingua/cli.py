@@ -53,9 +53,9 @@ def _run_guard(func, *, debug: bool = False):  # type: ignore[no-untyped-def]
             raise
         err = build_error(
             error_code="INTERNAL_ERROR",
-            cause="未预期内部错误。",
+            cause="Unexpected internal error.",
             detail=str(exc),
-            next_steps=["使用 --debug 复现并查看 traceback"],
+            next_steps=["Use --debug to reproduce and inspect traceback"],
             exit_code=ExitCode.INTERNAL_ERROR,
         )
         _echo_error(err)
@@ -82,9 +82,9 @@ def init(
         if missing:
             raise build_error(
                 error_code="INIT_REQUIRED_FILE_MISSING",
-                cause="初始化检查失败。",
+                cause="Initialization check failed.",
                 detail=f"missing={missing}",
-                next_steps=["补齐 prompts/templates 文件后重试"],
+                next_steps=["Add missing prompts/templates files and retry"],
                 exit_code=ExitCode.SCHEMA_ERROR,
             )
 
@@ -137,8 +137,7 @@ def doctor(
             checks.append(("template:schema", True, "ok"))
         except ClawLinguaError as exc:
             checks.append(("template:schema", False, "; ".join(exc.to_lines())))
-
-        # 主 LLM connectivity（基于 CLAWLINGUA_LLM_*）
+        # Primary LLM connectivity check.
         try:
             endpoint = cfg.llm_base_url.rstrip("/") + "/models"
             headers = {"Authorization": f"Bearer {cfg.llm_api_key}"} if cfg.llm_api_key else {}
@@ -148,8 +147,7 @@ def doctor(
             checks.append(("llm:connectivity", ok, f"status={response.status_code}"))
         except Exception as exc:
             checks.append(("llm:connectivity", False, str(exc)))
-
-        # small LLM 配置与连通性检查（CLAWLINGUA_TRANSLATE_LLM_*）
+        # small LLM config and connectivity checks (CLAWLINGUA_TRANSLATE_LLM_*)
         if cfg.translate_llm_base_url or cfg.translate_llm_model or cfg.translate_llm_api_key:
             missing_fields: list[str] = []
             if not cfg.translate_llm_base_url:
@@ -157,7 +155,7 @@ def doctor(
             if not cfg.translate_llm_model:
                 missing_fields.append("CLAWLINGUA_TRANSLATE_LLM_MODEL")
             if not (cfg.translate_llm_api_key or cfg.llm_api_key):
-                # 翻译 LLM 明确没有单独 API key，且主 LLM 也没有可重用 key。
+                # translate LLM has no dedicated API key and no fallback key is available.
                 missing_fields.append("CLAWLINGUA_TRANSLATE_LLM_API_KEY or CLAWLINGUA_LLM_API_KEY")
 
             if missing_fields:
@@ -196,13 +194,28 @@ def doctor(
             checks.append(("output:writable", True, str(out_dir)))
         except Exception as exc:
             checks.append(("output:writable", False, str(exc)))
+        # Cloze control parameters sanity check.
+        checks.append(
+            (
+                "cloze:controls",
+                True,
+                (
+                    f"max_sentences={cfg.cloze_max_sentences}, "
+                    f"min_chars={cfg.cloze_min_chars}, "
+                    f"difficulty={cfg.cloze_difficulty}, "
+                    f"max_per_chunk={cfg.cloze_max_per_chunk}"
+                ),
+            )
+        )
 
-        # Cloze 控制参数检查（主要是 sanity 信息，避免明显配置错误）
-        checks.append((
-            "cloze:controls",
-            True,
-            f"max_sentences={cfg.cloze_max_sentences}, max_per_chunk={cfg.cloze_max_per_chunk}",
-        ))
+        # TTS voice checks: empty means audio is disabled for this run.
+        voices = cfg.get_source_voices(cfg.default_source_lang)
+        if not voices:
+            checks.append(("tts:voices", True, "audio disabled (no voices configured)"))
+        elif len(voices) < 3:
+            checks.append(("tts:voices", True, f"voices={len(voices)} (warning: <3)"))
+        else:
+            checks.append(("tts:voices", True, f"voices={len(voices)}"))
 
         failed = False
         for name, ok, detail in checks:
@@ -214,9 +227,9 @@ def doctor(
         if failed:
             raise build_error(
                 error_code="DOCTOR_CHECK_FAILED",
-                cause="doctor 检查未通过。",
-                detail="至少一个检查项失败。",
-                next_steps=["根据 FAIL 项修复后重试"],
+                cause="Doctor checks did not pass.",
+                detail="At least one check failed.",
+                next_steps=["Fix failing checks and run again"],
                 exit_code=ExitCode.CONFIG_ERROR,
             )
         typer.echo("INFO | doctor complete")
@@ -253,9 +266,9 @@ def build_deck(
         if input_type not in {"auto", "url", "file"}:
             raise build_error(
                 error_code="ARG_INPUT_TYPE_INVALID",
-                cause="input-type 参数非法。",
+                cause="input-type value is invalid.",
                 detail=f"input_type={input_type}",
-                next_steps=["使用 auto/url/file 之一"],
+                next_steps=["Use one of: auto, url, file"],
                 exit_code=ExitCode.ARGUMENT_ERROR,
             )
 
@@ -327,4 +340,5 @@ def main() -> Any:
 
 if __name__ == "__main__":
     main()
+
 

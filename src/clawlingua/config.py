@@ -21,6 +21,12 @@ from .errors import build_error
 from .exit_codes import ExitCode
 
 _VOICE_ENV_RE = re.compile(r"^CLAWLINGUA_TTS_EDGE_([A-Z0-9_]+)_VOICES$")
+_VOICE_SLOT_ENV_KEYS = (
+    "CLAWLINGUA_TTS_EDGE_VOICE1",
+    "CLAWLINGUA_TTS_EDGE_VOICE2",
+    "CLAWLINGUA_TTS_EDGE_VOICE3",
+    "CLAWLINGUA_TTS_EDGE_VOICE4",
+)
 
 
 class AppConfig(BaseModel):
@@ -36,8 +42,8 @@ class AppConfig(BaseModel):
     llm_timeout_seconds: int = 120
     llm_max_retries: int = 3
     llm_retry_backoff_seconds: float = 2.0
-    # Base sleep between successful LLM calls (seconds);实际 sleep 会
-    # 在 [llm_request_sleep_seconds, 3*llm_request_sleep_seconds] 之间随机。
+    # Base sleep between successful LLM calls (seconds); actual sleep is randomized
+    # within [llm_request_sleep_seconds, 3*llm_request_sleep_seconds].
     llm_request_sleep_seconds: float = 0.0
     llm_temperature: float = 0.2
 
@@ -46,21 +52,20 @@ class AppConfig(BaseModel):
     http_verify_ssl: bool = True
 
     chunk_max_chars: int = 1800
-    # chunk_max_sentences was removed; chunking 现以字符数为主，由句子边界软切，
-    # 不再通过配置限制每块的句子数。
+    # chunk_max_sentences was removed; chunking 閻滈浜掔€涙顑侀弫棰佽礋娑撲紮绱濋悽鍗炲綖鐎涙劘绔熼悾宀冭拫閸掑浄绱?    # Do not use per-chunk sentence count caps; chunking is char-count-first.
     chunk_min_chars: int = 120
     chunk_overlap_sentences: int = 1
 
-    # Cloze-level controls（针对单条卡片）
+    # Cloze-level controls for per-card validation.
     cloze_max_sentences: int = 3
-    # 单条 cloze 文本的最小字符数（太短的句子会被丢弃），0 表示不限制
+    # Minimum chars per cloze text; 0 means no lower bound.
     cloze_min_chars: int = 0
     cloze_difficulty: str = "intermediate"  # beginner|intermediate|advanced
     cloze_max_per_chunk: int | None = None
-    # LLM chunk 级别的 batch 大小（一次处理多少个 chunk）；1 表示逐块调用。
+    # LLM chunk-level batch size; 1 means per-chunk requests.
     llm_chunk_batch_size: int = 1
 
-    # Translation LLM（small LLM）配置；为空时退回主 LLM 配置
+    # Translation LLM (small LLM) settings; fallback to main LLM when empty.
     translate_llm_base_url: str | None = None
     translate_llm_api_key: str | None = None
     translate_llm_model: str | None = None
@@ -81,6 +86,7 @@ class AppConfig(BaseModel):
     tts_volume: str = "+0%"
     tts_random_seed: int | None = None
 
+    tts_edge_voices: list[str] = Field(default_factory=list)
     tts_edge_voice_map: dict[str, list[str]] = Field(default_factory=dict)
 
     @field_validator(
@@ -89,6 +95,7 @@ class AppConfig(BaseModel):
         "llm_provider",
         "log_level",
         "tts_provider",
+        "cloze_difficulty",
         mode="before",
     )
     @classmethod
@@ -97,38 +104,38 @@ class AppConfig(BaseModel):
             return v.strip()
         return v
 
+    @field_validator("cloze_difficulty")
+    @classmethod
+    def _validate_cloze_difficulty(cls, v: str) -> str:
+        value = (v or "intermediate").strip().lower()
+        if value not in {"beginner", "intermediate", "advanced"}:
+            raise ValueError("cloze_difficulty must be beginner|intermediate|advanced")
+        return value
+
     def resolve_path(self, value: Path) -> Path:
         if value.is_absolute():
             return value
         return (self.workspace_root / value).resolve()
 
     def get_source_voices(self, source_lang: str) -> list[str]:
+        if self.tts_edge_voices:
+            return list(self.tts_edge_voices)
         lang = source_lang.lower()
         fallback = lang.split("-")[0]
         if lang in self.tts_edge_voice_map:
-            return self.tts_edge_voice_map[lang]
+            return list(self.tts_edge_voice_map[lang])
         if fallback in self.tts_edge_voice_map:
-            return self.tts_edge_voice_map[fallback]
-        raise build_error(
-            error_code="TTS_VOICE_NOT_CONFIGURED",
-            cause="当前源语言没有可用的 TTS voice 配置。",
-            detail=(
-                f"source_lang={source_lang}，未找到对应 "
-                f"CLAWLINGUA_TTS_EDGE_{fallback.upper()}_VOICES。"
-            ),
-            next_steps=[
-                "在 .env 中为该语言配置至少 3 个 edge_tts voice",
-                "或切换为其它已支持 voice 的源语言",
-                "运行 clawlingua doctor 检查 TTS 配置",
-            ],
-            exit_code=ExitCode.CONFIG_ERROR,
-        )
+            return list(self.tts_edge_voice_map[fallback])
+        return []
 
     def masked_dump(self) -> dict[str, Any]:
         data = self.model_dump(mode="python")
         api_key = data.get("llm_api_key") or ""
         if api_key:
             data["llm_api_key"] = _mask_secret(api_key)
+        translate_api_key = data.get("translate_llm_api_key") or ""
+        if translate_api_key:
+            data["translate_llm_api_key"] = _mask_secret(translate_api_key)
         return data
 
 
@@ -138,7 +145,23 @@ def _mask_secret(secret: str) -> str:
     return f"{secret[:3]}***{secret[-3:]}"
 
 
-def _parse_voices(data: dict[str, Any]) -> dict[str, list[str]]:
+def _parse_voice_slots(data: dict[str, Any]) -> list[str]:
+    voices: list[str] = []
+    seen: set[str] = set()
+    for key in _VOICE_SLOT_ENV_KEYS:
+        value = data.get(key)
+        if value is None:
+            continue
+        for item in str(value).split(","):
+            voice = item.strip()
+            if not voice or voice in seen:
+                continue
+            voices.append(voice)
+            seen.add(voice)
+    return voices
+
+
+def _parse_legacy_voice_map(data: dict[str, Any]) -> dict[str, list[str]]:
     voice_map: dict[str, list[str]] = {}
     for key, value in data.items():
         match = _VOICE_ENV_RE.match(key)
@@ -186,7 +209,8 @@ def load_config(
             merged[k] = v
 
     _normalize_env_aliases(merged)
-    voice_map = _parse_voices(merged)
+    voice_slots = _parse_voice_slots(merged)
+    voice_map = _parse_legacy_voice_map(merged)
 
     payload: dict[str, Any] = {
         "workspace_root": root,
@@ -262,6 +286,7 @@ def load_config(
         "tts_rate": _env_value(merged.get("CLAWLINGUA_TTS_RATE"), "+0%"),
         "tts_volume": _env_value(merged.get("CLAWLINGUA_TTS_VOLUME"), "+0%"),
         "tts_random_seed": _env_value(merged.get("CLAWLINGUA_TTS_RANDOM_SEED"), None),
+        "tts_edge_voices": voice_slots,
         "tts_edge_voice_map": voice_map,
     }
 
@@ -281,11 +306,11 @@ def validate_base_config(cfg: AppConfig) -> None:
         if not path.exists():
             raise build_error(
                 error_code="CONFIG_PATH_NOT_FOUND",
-                cause="关键配置文件不存在。",
+                cause="Required config file is missing.",
                 detail=f"{key} -> {path}",
                 next_steps=[
-                    "检查 .env 配置路径",
-                    "运行 clawlingua init 生成默认配置文件",
+                    "Check the path values in .env",
+                    "Run `clawlingua init` to generate default config files",
                 ],
                 exit_code=ExitCode.CONFIG_ERROR,
             )
@@ -296,21 +321,20 @@ def validate_runtime_config(cfg: AppConfig) -> None:
         if not cfg.llm_api_key:
             raise build_error(
                 error_code="CONFIG_MISSING_API_KEY",
-                cause="LLM API key 缺失。",
-                detail="未在 .env 或命令行参数中找到 CLAWLINGUA_LLM_API_KEY。",
+                cause="LLM API key is missing.",
+                detail="`CLAWLINGUA_LLM_API_KEY` was not found in .env or environment variables.",
                 next_steps=[
-                    "在 .env 中添加 CLAWLINGUA_LLM_API_KEY",
-                    "或通过 --env-file 指定正确的环境文件",
-                    "运行 clawlingua config validate 检查配置",
+                    "Add `CLAWLINGUA_LLM_API_KEY` to .env",
+                    "Or point to the correct env file via `--env-file`",
+                    "Run `clawlingua config validate` to check config",
                 ],
                 exit_code=ExitCode.CONFIG_ERROR,
             )
         if not cfg.llm_model:
             raise build_error(
                 error_code="CONFIG_MISSING_MODEL",
-                cause="LLM model 缺失。",
-                detail="未在配置中找到 CLAWLINGUA_LLM_MODEL。",
-                next_steps=["在 .env 中添加 CLAWLINGUA_LLM_MODEL"],
+                cause="LLM model is missing.",
+                detail="`CLAWLINGUA_LLM_MODEL` was not found in configuration.",
+                next_steps=["Add `CLAWLINGUA_LLM_MODEL` to .env"],
                 exit_code=ExitCode.CONFIG_ERROR,
             )
-

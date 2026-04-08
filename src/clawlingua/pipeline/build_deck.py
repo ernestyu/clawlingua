@@ -251,6 +251,25 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             for item in items:
                 cid = str(item.get("chunk_id") or "").strip()
                 chunk = chunk_map.get(cid) if cid else None
+                if len(batch) > 1 and chunk is None:
+                    # batch 模式下必须有可识别的 chunk_id，避免候选挂错 chunk。
+                    errors.append(
+                        {
+                            "stage": "cloze_batch_mapping",
+                            "reason": "missing_or_unknown_chunk_id",
+                            "chunk_id": cid,
+                            "item": item,
+                        }
+                    )
+                    if options.continue_on_error:
+                        continue
+                    raise build_error(
+                        error_code="CLOZE_BATCH_CHUNK_ID_MISSING",
+                        cause="批量 cloze 输出缺少有效 chunk_id。",
+                        detail=f"chunk_id={cid!r}",
+                        next_steps=["在 cloze prompt 中强制输出正确 chunk_id"],
+                        exit_code=ExitCode.LLM_PARSE_ERROR,
+                    )
                 if chunk is not None:
                     item["chunk_id"] = chunk.chunk_id
                     item["chunk_text"] = chunk.source_text
@@ -273,6 +292,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             item,
             max_sentences=cfg.cloze_max_sentences,
             min_chars=cfg.cloze_min_chars,
+            difficulty=cfg.cloze_difficulty,
         )
         if not ok:
             if options.continue_on_error:
@@ -304,13 +324,12 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
 
     cards: list[CardRecord] = []
     for idx, item in enumerate(deduped, start=1):
-        chunk_text = str(item.get("chunk_text", ""))
         try:
             translation = generate_translation(
                 client=translate_client,
                 prompt=translate_prompt,
                 document=document,
-                chunk_text=chunk_text,
+                chunk_text="",
                 text_original=str(item["original"]),
                 temperature=options.temperature,
             )
@@ -366,33 +385,36 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         )
     logger.info("translation generation complete | translated=%d", len(cards))
 
-    tts_provider = get_tts_provider(cfg)
     voices = cfg.get_source_voices(document.source_lang)
-    if len(voices) < 3:
-        logger.warning("tts voice list has less than 3 voices | source_lang=%s", document.source_lang)
-    selector = UniformVoiceSelector(seed=cfg.tts_random_seed)
     media_manager = MediaManager(run_ctx.media_dir, ext=cfg.tts_output_format)
     media_files: list[Path] = []
 
-    for card in cards:
-        media = media_manager.next_audio_file()
-        voice = selector.select(voices)
-        try:
-            tts_provider.synthesize(
-                text=card.original,
-                voice=voice,
-                output_path=media.path,
-                lang=card.source_lang,
-            )
-        except ClawLinguaError as exc:
-            if not options.continue_on_error:
-                raise
-            errors.append({"stage": "tts", "card_id": card.card_id, "error": exc.to_lines()})
-            continue
-        card.audio_file = media.filename
-        card.audio_field = media_manager.to_anki_sound_field(media.filename)
-        media_files.append(media.path)
-    logger.info("tts generation complete | audio=%d", len(media_files))
+    if not voices:
+        logger.info("tts skipped | reason=no voices configured")
+    else:
+        tts_provider = get_tts_provider(cfg)
+        if len(voices) < 3:
+            logger.warning("tts voice list has less than 3 voices | voices=%d", len(voices))
+        selector = UniformVoiceSelector(seed=cfg.tts_random_seed)
+        for card in cards:
+            media = media_manager.next_audio_file()
+            voice = selector.select(voices)
+            try:
+                tts_provider.synthesize(
+                    text=card.original,
+                    voice=voice,
+                    output_path=media.path,
+                    lang=card.source_lang,
+                )
+            except ClawLinguaError as exc:
+                if not options.continue_on_error:
+                    raise
+                errors.append({"stage": "tts", "card_id": card.card_id, "error": exc.to_lines()})
+                continue
+            card.audio_file = media.filename
+            card.audio_field = media_manager.to_anki_sound_field(media.filename)
+            media_files.append(media.path)
+        logger.info("tts generation complete | audio=%d", len(media_files))
 
     output_path = options.output or (run_ctx.run_dir / "output.apkg")
     if not output_path.is_absolute():
@@ -427,4 +449,3 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         cards_count=len(cards),
         errors_count=len(errors),
     )
-
