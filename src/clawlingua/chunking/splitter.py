@@ -10,20 +10,26 @@ from ..utils.text import count_sentences, split_sentences
 
 
 def _split_long_paragraph(
-    paragraph: str, *, max_chars: int, max_sentences: int, overlap_sentences: int
+    paragraph: str, *, max_chars: int, overlap_sentences: int
 ) -> list[str]:
     sentences = split_sentences(paragraph)
     if not sentences:
         return []
     chunks: list[str] = []
     i = 0
+    # 以字符数为主，从当前位置开始尽量向后扩展句子，直到接近 max_chars。
     while i < len(sentences):
-        end = min(i + max_sentences, len(sentences))
-        while end > i + 1:
+        end = i + 1
+        while end <= len(sentences):
             candidate = " ".join(sentences[i:end]).strip()
-            if len(candidate) <= max_chars:
+            if len(candidate) > max_chars:
+                # 超出上限，则回退到上一句作为 chunk。
+                end -= 1
                 break
-            end -= 1
+            end += 1
+        if end <= i:
+            # 单句已经超过 max_chars，强行截断到这一句。
+            end = i + 1
         candidate = " ".join(sentences[i:end]).strip()
         if candidate:
             chunks.append(candidate)
@@ -58,7 +64,6 @@ def split_into_chunks(
     run_id: str,
     text: str,
     max_chars: int,
-    max_sentences: int,
     min_chars: int,
     overlap_sentences: int,
 ) -> list[ChunkRecord]:
@@ -67,14 +72,13 @@ def split_into_chunks(
 
     chunk_texts: list[str] = []
     for para in merged_paragraphs:
-        if len(para) <= max_chars and count_sentences(para) <= max_sentences:
+        if len(para) <= max_chars:
             chunk_texts.append(para)
             continue
         chunk_texts.extend(
             _split_long_paragraph(
                 para,
                 max_chars=max_chars,
-                max_sentences=max_sentences,
                 overlap_sentences=overlap_sentences,
             )
         )
