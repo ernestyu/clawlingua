@@ -36,3 +36,6 @@ dist_test/
 .pytest_cache/
 pytest-cache-files-*
 .gitconfig_codex
+
+# user-specific files
+tests/
