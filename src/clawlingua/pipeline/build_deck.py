@@ -51,6 +51,7 @@ class BuildDeckOptions:
     max_sentences: int | None = None
     max_notes: int | None = None
     temperature: float | None = None
+    cloze_difficulty: str | None = None
     save_intermediate: bool | None = None
     continue_on_error: bool = False
 
@@ -181,6 +182,10 @@ def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> D
 def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult:
     validate_base_config(cfg)
     validate_runtime_config(cfg)
+
+    # CLI 的 --difficulty 优先级高于 env；如提供则覆盖 cfg.cloze_difficulty
+    if options.cloze_difficulty:
+        cfg.cloze_difficulty = options.cloze_difficulty
 
     run_ctx = create_run_context(cfg, name="build_deck")
     template = load_anki_template(cfg.resolve_path(cfg.anki_template))
