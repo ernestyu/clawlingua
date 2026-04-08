@@ -39,3 +39,4 @@ pytest-cache-files-*
 
 # user-specific files
 tests/
+runs/
