@@ -19,6 +19,14 @@ CLAWLINGUA_CHUNK_MAX_SENTENCES=8
 CLAWLINGUA_CHUNK_MIN_CHARS=120
 CLAWLINGUA_CHUNK_OVERLAP_SENTENCES=1
 
+# Cloze-level controls
+# 每条 cloze 文本允许的最大句子数（影响 validator 和 prompt 文案）。
+CLAWLINGUA_CLOZE_MAX_SENTENCES=3
+# 难度：beginner | intermediate | advanced
+CLAWLINGUA_CLOZE_DIFFICULTY=intermediate
+# 每个 chunk 最多生成多少条候选（去重之后的上限，空则不限制）
+CLAWLINGUA_CLOZE_MAX_PER_CHUNK=
+
 CLAWLINGUA_PROMPT_CLOZE=./prompts/cloze_contextual.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json

@@ -27,6 +27,8 @@ def generate_cloze_candidates(
         "document_title": document.title or "",
         "source_url": document.source_url or "",
         "chunk_text": chunk.source_text,
+        "difficulty": client.config.cloze_difficulty,
+        "cloze_max_sentences": str(client.config.cloze_max_sentences),
     }
     user_prompt = _render(prompt.user_prompt_template, placeholders)
     content = client.chat(

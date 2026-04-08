@@ -18,6 +18,10 @@ class OpenAICompatibleClient:
         self._cfg = cfg
         self._endpoint = cfg.llm_base_url.rstrip("/") + "/chat/completions"
 
+    @property
+    def config(self) -> AppConfig:
+        return self._cfg
+
     def chat(self, messages: list[dict[str, str]], *, temperature: float | None = None) -> str:
         temp = self._cfg.llm_temperature if temperature is None else temperature
         payload = {

@@ -47,6 +47,11 @@ class AppConfig(BaseModel):
     chunk_min_chars: int = 120
     chunk_overlap_sentences: int = 1
 
+    # Cloze-level controls
+    cloze_max_sentences: int = 3
+    cloze_difficulty: str = "intermediate"  # beginner|intermediate|advanced
+    cloze_max_per_chunk: int | None = None
+
     prompt_cloze: Path = DEFAULT_PROMPT_CLOZE
     prompt_translate: Path = DEFAULT_PROMPT_TRANSLATE
     anki_template: Path = DEFAULT_ANKI_TEMPLATE
@@ -195,6 +200,15 @@ def load_config(
         "chunk_min_chars": _env_value(merged.get("CLAWLINGUA_CHUNK_MIN_CHARS"), 120),
         "chunk_overlap_sentences": _env_value(
             merged.get("CLAWLINGUA_CHUNK_OVERLAP_SENTENCES"), 1
+        ),
+        "cloze_max_sentences": _env_value(
+            merged.get("CLAWLINGUA_CLOZE_MAX_SENTENCES"), 3
+        ),
+        "cloze_difficulty": _env_value(
+            merged.get("CLAWLINGUA_CLOZE_DIFFICULTY"), "intermediate"
+        ),
+        "cloze_max_per_chunk": _env_value(
+            merged.get("CLAWLINGUA_CLOZE_MAX_PER_CHUNK"), None
         ),
         "prompt_cloze": _env_value(merged.get("CLAWLINGUA_PROMPT_CLOZE"), DEFAULT_PROMPT_CLOZE),
         "prompt_translate": _env_value(

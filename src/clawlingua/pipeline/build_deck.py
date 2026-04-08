@@ -229,7 +229,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
 
     valid_candidates: list[dict] = []
     for item in raw_candidates:
-        ok, reason = validate_text_candidate(item)
+        ok, reason = validate_text_candidate(item, max_sentences=cfg.cloze_max_sentences)
         if not ok:
             if options.continue_on_error:
                 errors.append({"stage": "validate_text", "reason": reason, "item": item})
@@ -244,6 +244,16 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         valid_candidates.append(item)
 
     deduped = dedupe_candidates(valid_candidates)
+    if cfg.cloze_max_per_chunk and cfg.cloze_max_per_chunk > 0:
+        # Per-chunk cap to avoid generating too many cards from a single segment.
+        by_chunk: dict[str, list[dict]] = {}
+        for item in deduped:
+            cid = str(item.get("chunk_id", ""))
+            bucket = by_chunk.setdefault(cid, [])
+            if len(bucket) < cfg.cloze_max_per_chunk:
+                bucket.append(item)
+        deduped = [c for bucket in by_chunk.values() for c in bucket]
+
     if options.max_notes and options.max_notes > 0:
         deduped = deduped[: options.max_notes]
     logger.info("text generation complete | raw=%d valid=%d", len(raw_candidates), len(deduped))
