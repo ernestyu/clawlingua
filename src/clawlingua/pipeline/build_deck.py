@@ -195,6 +195,37 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     document = _build_document(cfg, run_ctx.run_id, options)
     logger.info('ingest complete | title="%s"', document.title or "")
 
+    save_intermediate = cfg.save_intermediate if options.save_intermediate is None else options.save_intermediate
+    output_path = options.output or (run_ctx.run_dir / "output.apkg")
+    if not output_path.is_absolute():
+        output_path = (cfg.workspace_root / output_path).resolve()
+
+    errors: list[dict] = []
+    raw_candidates: list[dict] = []
+    valid_candidates: list[dict] = []
+    deduped: list[dict] = []
+    cards: list[CardRecord] = []
+    chunks: list = []
+
+    def _save_failure_snapshot(exc: ClawLinguaError) -> None:
+        if not save_intermediate:
+            return
+        validated = deduped if deduped else valid_candidates
+        snapshot_errors = [*errors, {"stage": "fatal", "error": exc.to_lines()}]
+        try:
+            _save_intermediate(
+                run_dir=run_ctx.run_dir,
+                document=document,
+                chunks=chunks,
+                raw_candidates=raw_candidates,
+                valid_candidates=validated,
+                cards=cards,
+                errors=snapshot_errors,
+                output_path=output_path,
+            )
+        except Exception:
+            logger.exception("failed to persist failure snapshot")
+
     chunks = split_into_chunks(
         run_id=run_ctx.run_id,
         text=document.cleaned_text,
@@ -203,19 +234,19 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         overlap_sentences=cfg.chunk_overlap_sentences,
     )
     if not chunks:
-        raise build_error(
+        err = build_error(
             error_code="CHUNKING_EMPTY",
-            cause="文本分块失败。",
-            detail="无法生成有效 chunk。",
-            next_steps=["降低 min_chars 或检查输入文本结构"],
+            cause="Text chunking failed.",
+            detail="No valid chunks were produced.",
+            next_steps=["Lower min_chars or check input text structure"],
             exit_code=ExitCode.CHUNKING_ERROR,
         )
+        _save_failure_snapshot(err)
+        raise err
     logger.info("chunking complete | chunks=%d", len(chunks))
 
     client = OpenAICompatibleClient(cfg)
     translate_client = OpenAICompatibleClient(cfg, for_translation=True)
-    errors: list[dict] = []
-    raw_candidates: list[dict] = []
 
     # LLM chunk batch：一次可以处理多个 chunk。
     batch_size = max(1, int(cfg.llm_chunk_batch_size or 1))
@@ -263,19 +294,22 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                     )
                     if options.continue_on_error:
                         continue
-                    raise build_error(
+                    err = build_error(
                         error_code="CLOZE_BATCH_CHUNK_ID_MISSING",
-                        cause="批量 cloze 输出缺少有效 chunk_id。",
+                        cause="Batch cloze output is missing a valid chunk_id.",
                         detail=f"chunk_id={cid!r}",
-                        next_steps=["在 cloze prompt 中强制输出正确 chunk_id"],
+                        next_steps=["Force model output to include a valid chunk_id"],
                         exit_code=ExitCode.LLM_PARSE_ERROR,
                     )
+                    _save_failure_snapshot(err)
+                    raise err
                 if chunk is not None:
                     item["chunk_id"] = chunk.chunk_id
                     item["chunk_text"] = chunk.source_text
                 raw_candidates.append(item)
         except ClawLinguaError as exc:
             if not options.continue_on_error:
+                _save_failure_snapshot(exc)
                 raise
             # 记录整个 batch 的错误，但保留每个 chunk_id 方便排查。
             errors.append(
@@ -286,7 +320,8 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 }
             )
 
-    valid_candidates: list[dict] = []
+    validation_rejects = 0
+    first_validation_reason: str | None = None
     for item in raw_candidates:
         ok, reason = validate_text_candidate(
             item,
@@ -295,17 +330,30 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             difficulty=cfg.cloze_difficulty,
         )
         if not ok:
-            if options.continue_on_error:
-                errors.append({"stage": "validate_text", "reason": reason, "item": item})
-                continue
-            raise build_error(
-                error_code="CARD_VALIDATION_FAILED",
-                cause="卡片校验失败。",
-                detail=reason,
-                next_steps=["检查 cloze prompt 输出结构与内容规则"],
-                exit_code=ExitCode.CARD_VALIDATION_ERROR,
-            )
+            validation_rejects += 1
+            if first_validation_reason is None:
+                first_validation_reason = reason
+            errors.append({"stage": "validate_text", "reason": reason, "item": item})
+            continue
         valid_candidates.append(item)
+
+    if validation_rejects:
+        logger.warning(
+            "validation filtered candidates | rejected=%d raw=%d first_reason=%s",
+            validation_rejects,
+            len(raw_candidates),
+            first_validation_reason or "",
+        )
+    if not valid_candidates:
+        err = build_error(
+            error_code="CARD_VALIDATION_FAILED",
+            cause="All candidates failed validation.",
+            detail=f"raw={len(raw_candidates)}, first_reason={first_validation_reason or 'unknown'}",
+            next_steps=["Adjust prompt constraints", "Lower CLAWLINGUA_CLOZE_MIN_CHARS if needed"],
+            exit_code=ExitCode.CARD_VALIDATION_ERROR,
+        )
+        _save_failure_snapshot(err)
+        raise err
 
     deduped = dedupe_candidates(valid_candidates)
     if cfg.cloze_max_per_chunk and cfg.cloze_max_per_chunk > 0:
@@ -322,7 +370,6 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         deduped = deduped[: options.max_notes]
     logger.info("text generation complete | raw=%d valid=%d", len(raw_candidates), len(deduped))
 
-    cards: list[CardRecord] = []
     for idx, item in enumerate(deduped, start=1):
         try:
             translation = generate_translation(
@@ -344,6 +391,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 )
         except ClawLinguaError as exc:
             if not options.continue_on_error:
+                _save_failure_snapshot(exc)
                 raise
             errors.append({"stage": "translation", "index": idx, "error": exc.to_lines()})
             continue
@@ -376,13 +424,15 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         )
 
     if not cards:
-        raise build_error(
+        err = build_error(
             error_code="CARD_EMPTY",
-            cause="没有可导出的卡片。",
-            detail="候选项校验/翻译后为空。",
-            next_steps=["检查输入内容质量", "启用 --save-intermediate 检查中间结果"],
+            cause="No exportable cards were produced.",
+            detail="Candidates became empty after validation/translation.",
+            next_steps=["Check input quality", "Enable --save-intermediate and inspect outputs"],
             exit_code=ExitCode.CARD_VALIDATION_ERROR,
         )
+        _save_failure_snapshot(err)
+        raise err
     logger.info("translation generation complete | translated=%d", len(cards))
 
     voices = cfg.get_source_voices(document.source_lang)
@@ -408,6 +458,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 )
             except ClawLinguaError as exc:
                 if not options.continue_on_error:
+                    _save_failure_snapshot(exc)
                     raise
                 errors.append({"stage": "tts", "card_id": card.card_id, "error": exc.to_lines()})
                 continue
@@ -416,20 +467,19 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             media_files.append(media.path)
         logger.info("tts generation complete | audio=%d", len(media_files))
 
-    output_path = options.output or (run_ctx.run_dir / "output.apkg")
-    if not output_path.is_absolute():
-        output_path = (cfg.workspace_root / output_path).resolve()
-
-    export_apkg(
-        cards=cards,
-        template=template,
-        output_path=output_path,
-        media_files=media_files,
-        deck_name_override=options.deck_name or cfg.default_deck_name,
-    )
+    try:
+        export_apkg(
+            cards=cards,
+            template=template,
+            output_path=output_path,
+            media_files=media_files,
+            deck_name_override=options.deck_name or cfg.default_deck_name,
+        )
+    except ClawLinguaError as exc:
+        _save_failure_snapshot(exc)
+        raise
     logger.info("deck export complete | file=%s", output_path)
 
-    save_intermediate = cfg.save_intermediate if options.save_intermediate is None else options.save_intermediate
     if save_intermediate:
         _save_intermediate(
             run_dir=run_ctx.run_dir,
