@@ -269,7 +269,11 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
 
     valid_candidates: list[dict] = []
     for item in raw_candidates:
-        ok, reason = validate_text_candidate(item, max_sentences=cfg.cloze_max_sentences)
+        ok, reason = validate_text_candidate(
+            item,
+            max_sentences=cfg.cloze_max_sentences,
+            min_chars=cfg.cloze_min_chars,
+        )
         if not ok:
             if options.continue_on_error:
                 errors.append({"stage": "validate_text", "reason": reason, "item": item})

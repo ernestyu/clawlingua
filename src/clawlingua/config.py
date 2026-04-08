@@ -53,6 +53,8 @@ class AppConfig(BaseModel):
 
     # Cloze-level controls（针对单条卡片）
     cloze_max_sentences: int = 3
+    # 单条 cloze 文本的最小字符数（太短的句子会被丢弃），0 表示不限制
+    cloze_min_chars: int = 0
     cloze_difficulty: str = "intermediate"  # beginner|intermediate|advanced
     cloze_max_per_chunk: int | None = None
     # LLM chunk 级别的 batch 大小（一次处理多少个 chunk）；1 表示逐块调用。
@@ -217,6 +219,9 @@ def load_config(
         ),
         "cloze_max_sentences": _env_value(
             merged.get("CLAWLINGUA_CLOZE_MAX_SENTENCES"), 3
+        ),
+        "cloze_min_chars": _env_value(
+            merged.get("CLAWLINGUA_CLOZE_MIN_CHARS"), 0
         ),
         "cloze_difficulty": _env_value(
             merged.get("CLAWLINGUA_CLOZE_DIFFICULTY"), "intermediate"

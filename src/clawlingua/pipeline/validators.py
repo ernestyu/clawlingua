@@ -45,7 +45,7 @@ def _auto_inject_cloze(text: str, target_phrases: list[str]) -> str:
     return text
 
 
-def validate_text_candidate(item: dict, *, max_sentences: int) -> tuple[bool, str]:
+def validate_text_candidate(item: dict, *, max_sentences: int, min_chars: int = 0) -> tuple[bool, str]:
     text = str(item.get("text", "")).strip()
     original = str(item.get("original", "")).strip()
     target_phrases_raw = item.get("target_phrases") or []
@@ -55,6 +55,8 @@ def validate_text_candidate(item: dict, *, max_sentences: int) -> tuple[bool, st
         return False, "text 为空"
     if not original:
         return False, "original 为空"
+    if min_chars and len(text) < min_chars:
+        return False, f"text 字符数不足 {min_chars}"
     if _CLOZE_MARK_RE.search(original) or _CLOZE_MARK_SINGLE_RE.search(original):
         return False, "original 不应包含 cloze 标记"
 

@@ -24,6 +24,8 @@ CLAWLINGUA_CHUNK_OVERLAP_SENTENCES=1
 # Cloze-level controls
 # 每条 cloze 文本允许的最大句子数（影响 validator 和 prompt 文案）。
 CLAWLINGUA_CLOZE_MAX_SENTENCES=3
+# 每条 cloze 文本的最小字符数（太短的句子会被丢弃，0 表示不限制）。
+CLAWLINGUA_CLOZE_MIN_CHARS=200
 # 难度：beginner | intermediate | advanced
 CLAWLINGUA_CLOZE_DIFFICULTY=intermediate
 # 每个 chunk 最多生成多少条候选（去重之后的上限，空则不限制）
