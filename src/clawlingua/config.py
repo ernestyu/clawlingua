@@ -55,6 +55,8 @@ class AppConfig(BaseModel):
     cloze_max_sentences: int = 3
     cloze_difficulty: str = "intermediate"  # beginner|intermediate|advanced
     cloze_max_per_chunk: int | None = None
+    # LLM chunk 级别的 batch 大小（一次处理多少个 chunk）；1 表示逐块调用。
+    llm_chunk_batch_size: int = 1
 
     # Translation LLM（small LLM）配置；为空时退回主 LLM 配置
     translate_llm_base_url: str | None = None
@@ -221,6 +223,9 @@ def load_config(
         ),
         "cloze_max_per_chunk": _env_value(
             merged.get("CLAWLINGUA_CLOZE_MAX_PER_CHUNK"), None
+        ),
+        "llm_chunk_batch_size": _env_value(
+            merged.get("CLAWLINGUA_LLM_CHUNK_BATCH_SIZE"), 1
         ),
         "translate_llm_base_url": _env_value(
             merged.get("CLAWLINGUA_TRANSLATE_LLM_BASE_URL"), None

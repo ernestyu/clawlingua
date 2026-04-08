@@ -19,7 +19,10 @@ from ..ingest.main_content import extract_main_content
 from ..ingest.normalizer import normalize_text
 from ..ingest.url_fetcher import fetch_url
 from ..llm.client import OpenAICompatibleClient
-from ..llm.cloze_generator import generate_cloze_candidates
+from ..llm.cloze_generator import (
+    generate_cloze_candidates_for_batch,
+    generate_cloze_candidates_for_chunk,
+)
 from ..llm.prompt_loader import load_prompt
 from ..llm.translation_generator import generate_translation
 from ..models.card import CardRecord
@@ -209,23 +212,55 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     errors: list[dict] = []
     raw_candidates: list[dict] = []
 
-    for chunk in chunks:
+    # LLM chunk batch：一次可以处理多个 chunk。
+    batch_size = max(1, int(cfg.llm_chunk_batch_size or 1))
+
+    def _iter_batches(items: list[ChunkRecord], size: int) -> list[list[ChunkRecord]]:
+        if size <= 1:
+            return [[c] for c in items]
+        return [items[i : i + size] for i in range(0, len(items), size)]
+
+    for batch in _iter_batches(chunks, batch_size):
         try:
-            items = generate_cloze_candidates(
-                client=client,
-                prompt=cloze_prompt,
-                document=document,
-                chunk=chunk,
-                temperature=options.temperature,
-            )
+            if len(batch) == 1:
+                # 保持单 chunk 行为，便于 debug。
+                chunk = batch[0]
+                items = generate_cloze_candidates_for_chunk(
+                    client=client,
+                    prompt=cloze_prompt,
+                    document=document,
+                    chunk=chunk,
+                    temperature=options.temperature,
+                )
+            else:
+                items = generate_cloze_candidates_for_batch(
+                    client=client,
+                    prompt=cloze_prompt,
+                    document=document,
+                    chunks=batch,
+                    temperature=options.temperature,
+                )
+
+            # 补充 chunk_id/chunk_text（有些模型可能没带 chunk_text）
+            chunk_map = {c.chunk_id: c for c in batch}
             for item in items:
-                item["chunk_id"] = chunk.chunk_id
-                item["chunk_text"] = chunk.source_text
-            raw_candidates.extend(items)
+                cid = str(item.get("chunk_id") or "").strip()
+                chunk = chunk_map.get(cid) if cid else None
+                if chunk is not None:
+                    item["chunk_id"] = chunk.chunk_id
+                    item["chunk_text"] = chunk.source_text
+                raw_candidates.append(item)
         except ClawLinguaError as exc:
             if not options.continue_on_error:
                 raise
-            errors.append({"stage": "cloze", "chunk_id": chunk.chunk_id, "error": exc.to_lines()})
+            # 记录整个 batch 的错误，但保留每个 chunk_id 方便排查。
+            errors.append(
+                {
+                    "stage": "cloze",
+                    "chunk_ids": [c.chunk_id for c in batch],
+                    "error": exc.to_lines(),
+                }
+            )
 
     valid_candidates: list[dict] = []
     for item in raw_candidates:
