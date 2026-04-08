@@ -43,14 +43,21 @@ class AppConfig(BaseModel):
     http_verify_ssl: bool = True
 
     chunk_max_chars: int = 1800
-    chunk_max_sentences: int = 8
+    # chunk_max_sentences was removed; chunking 现以字符数为主，由句子边界软切，
+    # 不再通过配置限制每块的句子数。
     chunk_min_chars: int = 120
     chunk_overlap_sentences: int = 1
 
-    # Cloze-level controls
+    # Cloze-level controls（针对单条卡片）
     cloze_max_sentences: int = 3
     cloze_difficulty: str = "intermediate"  # beginner|intermediate|advanced
     cloze_max_per_chunk: int | None = None
+
+    # Translation LLM（small LLM）配置；为空时退回主 LLM 配置
+    translate_llm_base_url: str | None = None
+    translate_llm_api_key: str | None = None
+    translate_llm_model: str | None = None
+    translate_llm_temperature: float | None = None
 
     prompt_cloze: Path = DEFAULT_PROMPT_CLOZE
     prompt_translate: Path = DEFAULT_PROMPT_TRANSLATE
@@ -196,7 +203,6 @@ def load_config(
         "http_user_agent": _env_value(merged.get("CLAWLINGUA_HTTP_USER_AGENT"), "ClawLingua/0.1"),
         "http_verify_ssl": _env_value(merged.get("CLAWLINGUA_HTTP_VERIFY_SSL"), True),
         "chunk_max_chars": _env_value(merged.get("CLAWLINGUA_CHUNK_MAX_CHARS"), 1800),
-        "chunk_max_sentences": _env_value(merged.get("CLAWLINGUA_CHUNK_MAX_SENTENCES"), 8),
         "chunk_min_chars": _env_value(merged.get("CLAWLINGUA_CHUNK_MIN_CHARS"), 120),
         "chunk_overlap_sentences": _env_value(
             merged.get("CLAWLINGUA_CHUNK_OVERLAP_SENTENCES"), 1
@@ -209,6 +215,18 @@ def load_config(
         ),
         "cloze_max_per_chunk": _env_value(
             merged.get("CLAWLINGUA_CLOZE_MAX_PER_CHUNK"), None
+        ),
+        "translate_llm_base_url": _env_value(
+            merged.get("CLAWLINGUA_TRANSLATE_LLM_BASE_URL"), None
+        ),
+        "translate_llm_api_key": _env_value(
+            merged.get("CLAWLINGUA_TRANSLATE_LLM_API_KEY"), None
+        ),
+        "translate_llm_model": _env_value(
+            merged.get("CLAWLINGUA_TRANSLATE_LLM_MODEL"), None
+        ),
+        "translate_llm_temperature": _env_value(
+            merged.get("CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE"), None
         ),
         "prompt_cloze": _env_value(merged.get("CLAWLINGUA_PROMPT_CLOZE"), DEFAULT_PROMPT_CLOZE),
         "prompt_translate": _env_value(

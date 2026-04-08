@@ -191,7 +191,6 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         run_id=run_ctx.run_id,
         text=document.cleaned_text,
         max_chars=options.max_chars or cfg.chunk_max_chars,
-        max_sentences=options.max_sentences or cfg.chunk_max_sentences,
         min_chars=cfg.chunk_min_chars,
         overlap_sentences=cfg.chunk_overlap_sentences,
     )
@@ -206,6 +205,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     logger.info("chunking complete | chunks=%d", len(chunks))
 
     client = OpenAICompatibleClient(cfg)
+    translate_client = OpenAICompatibleClient(cfg, for_translation=True)
     errors: list[dict] = []
     raw_candidates: list[dict] = []
 
@@ -263,7 +263,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         chunk_text = str(item.get("chunk_text", ""))
         try:
             translation = generate_translation(
-                client=client,
+                client=translate_client,
                 prompt=translate_prompt,
                 document=document,
                 chunk_text=chunk_text,

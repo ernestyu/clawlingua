@@ -14,23 +14,43 @@ from ..utils.jsonx import loads
 
 
 class OpenAICompatibleClient:
-    def __init__(self, cfg: AppConfig) -> None:
+    def __init__(self, cfg: AppConfig, *, for_translation: bool = False) -> None:
         self._cfg = cfg
-        self._endpoint = cfg.llm_base_url.rstrip("/") + "/chat/completions"
+        self._for_translation = for_translation
+        # 根据用途选择 base_url
+        if for_translation and cfg.translate_llm_base_url:
+            base = cfg.translate_llm_base_url
+        else:
+            base = cfg.llm_base_url
+        self._endpoint = base.rstrip("/") + "/chat/completions"
 
     @property
     def config(self) -> AppConfig:
         return self._cfg
 
     def chat(self, messages: list[dict[str, str]], *, temperature: float | None = None) -> str:
-        temp = self._cfg.llm_temperature if temperature is None else temperature
+        # 根据用途选择模型/温度/API key
+        if self._for_translation and self._cfg.translate_llm_model:
+            model = self._cfg.translate_llm_model
+            api_key = self._cfg.translate_llm_api_key or self._cfg.llm_api_key
+            temp_default = (
+                self._cfg.translate_llm_temperature
+                if self._cfg.translate_llm_temperature is not None
+                else self._cfg.llm_temperature
+            )
+        else:
+            model = self._cfg.llm_model
+            api_key = self._cfg.llm_api_key
+            temp_default = self._cfg.llm_temperature
+
+        temp = temp_default if temperature is None else temperature
         payload = {
-            "model": self._cfg.llm_model,
+            "model": model,
             "messages": messages,
             "temperature": temp,
         }
         headers = {
-            "Authorization": f"Bearer {self._cfg.llm_api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
         last_err: Exception | None = None
