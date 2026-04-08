@@ -138,6 +138,7 @@ def doctor(
         except ClawLinguaError as exc:
             checks.append(("template:schema", False, "; ".join(exc.to_lines())))
 
+        # 主 LLM connectivity（基于 CLAWLINGUA_LLM_*）
         try:
             endpoint = cfg.llm_base_url.rstrip("/") + "/models"
             headers = {"Authorization": f"Bearer {cfg.llm_api_key}"} if cfg.llm_api_key else {}
@@ -148,6 +149,44 @@ def doctor(
         except Exception as exc:
             checks.append(("llm:connectivity", False, str(exc)))
 
+        # small LLM 配置与连通性检查（CLAWLINGUA_TRANSLATE_LLM_*）
+        if cfg.translate_llm_base_url or cfg.translate_llm_model or cfg.translate_llm_api_key:
+            missing_fields: list[str] = []
+            if not cfg.translate_llm_base_url:
+                missing_fields.append("CLAWLINGUA_TRANSLATE_LLM_BASE_URL")
+            if not cfg.translate_llm_model:
+                missing_fields.append("CLAWLINGUA_TRANSLATE_LLM_MODEL")
+            if not (cfg.translate_llm_api_key or cfg.llm_api_key):
+                # 翻译 LLM 明确没有单独 API key，且主 LLM 也没有可重用 key。
+                missing_fields.append("CLAWLINGUA_TRANSLATE_LLM_API_KEY or CLAWLINGUA_LLM_API_KEY")
+
+            if missing_fields:
+                checks.append(
+                    (
+                        "llm:translate_config",
+                        False,
+                        "missing=" + ",".join(missing_fields),
+                    )
+                )
+            else:
+                checks.append(("llm:translate_config", True, "ok"))
+
+            # connectivity for translate LLM
+            if cfg.translate_llm_base_url:
+                try:
+                    endpoint = cfg.translate_llm_base_url.rstrip("/") + "/models"
+                    headers = {}
+                    if cfg.translate_llm_api_key:
+                        headers["Authorization"] = f"Bearer {cfg.translate_llm_api_key}"
+                    elif cfg.llm_api_key:
+                        headers["Authorization"] = f"Bearer {cfg.llm_api_key}"
+                    with httpx.Client(timeout=cfg.llm_timeout_seconds) as client:
+                        response = client.get(endpoint, headers=headers)
+                    ok = response.status_code < 500
+                    checks.append(("llm:translate_connectivity", ok, f"status={response.status_code}"))
+                except Exception as exc:
+                    checks.append(("llm:translate_connectivity", False, str(exc)))
+
         out_dir = cfg.resolve_path(cfg.output_dir)
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -157,6 +196,13 @@ def doctor(
             checks.append(("output:writable", True, str(out_dir)))
         except Exception as exc:
             checks.append(("output:writable", False, str(exc)))
+
+        # Cloze 控制参数检查（主要是 sanity 信息，避免明显配置错误）
+        checks.append((
+            "cloze:controls",
+            True,
+            f"max_sentences={cfg.cloze_max_sentences}, max_per_chunk={cfg.cloze_max_per_chunk}",
+        ))
 
         failed = False
         for name, ok, detail in checks:

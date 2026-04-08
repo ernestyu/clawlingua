@@ -36,6 +36,9 @@ class AppConfig(BaseModel):
     llm_timeout_seconds: int = 120
     llm_max_retries: int = 3
     llm_retry_backoff_seconds: float = 2.0
+    # Base sleep between successful LLM calls (seconds);实际 sleep 会
+    # 在 [llm_request_sleep_seconds, 3*llm_request_sleep_seconds] 之间随机。
+    llm_request_sleep_seconds: float = 0.0
     llm_temperature: float = 0.2
 
     http_timeout_seconds: int = 30
@@ -197,6 +200,9 @@ def load_config(
         "llm_max_retries": _env_value(merged.get("CLAWLINGUA_LLM_MAX_RETRIES"), 3),
         "llm_retry_backoff_seconds": _env_value(
             merged.get("CLAWLINGUA_LLM_RETRY_BACKOFF_SECONDS"), 2.0
+        ),
+        "llm_request_sleep_seconds": _env_value(
+            merged.get("CLAWLINGUA_LLM_REQUEST_SLEEP_SECONDS"), 0.0
         ),
         "llm_temperature": _env_value(merged.get("CLAWLINGUA_LLM_TEMPERATURE"), 0.2),
         "http_timeout_seconds": _env_value(merged.get("CLAWLINGUA_HTTP_TIMEOUT_SECONDS"), 30),

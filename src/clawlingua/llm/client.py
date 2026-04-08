@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import time
 from typing import Any
 
@@ -58,6 +59,10 @@ class OpenAICompatibleClient:
             try:
                 with httpx.Client(timeout=self._cfg.llm_timeout_seconds) as client:
                     response = client.post(self._endpoint, json=payload, headers=headers)
+                # 成功请求后，按 llm_request_sleep_seconds 做轻量节流，避免固定节奏触发风控。
+                if self._cfg.llm_request_sleep_seconds and self._cfg.llm_request_sleep_seconds > 0:
+                    base = float(self._cfg.llm_request_sleep_seconds)
+                    time.sleep(random.uniform(base, 3 * base))
                 if response.status_code >= 400:
                     raise httpx.HTTPStatusError(
                         message=f"status={response.status_code}",
