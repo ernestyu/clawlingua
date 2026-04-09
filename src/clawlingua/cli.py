@@ -32,7 +32,7 @@ app = typer.Typer(
     name="clawlingua",
     add_completion=False,
     no_args_is_help=True,
-    help="Build Anki cloze decks from local text/EPUB/PDF files.",
+    help="Build Anki cloze decks from local text/EPUB files.",
 )
 build_app = typer.Typer(no_args_is_help=True, help="Build commands.")
 prompt_app = typer.Typer(no_args_is_help=True, help="Prompt file commands.")
@@ -114,15 +114,6 @@ def doctor(
                 checks.append((f"dependency:{module_name}", True, "ok"))
             except Exception as exc:
                 checks.append((f"dependency:{module_name}", False, str(exc)))
-        try:
-            importlib.import_module("pymupdf")
-            checks.append(("dependency:pymupdf", True, "ok"))
-        except Exception:
-            try:
-                importlib.import_module("fitz")
-                checks.append(("dependency:pymupdf", True, "ok (fitz alias)"))
-            except Exception as exc:
-                checks.append(("dependency:pymupdf", False, str(exc)))
 
         try:
             validate_base_config(cfg)
@@ -259,7 +250,7 @@ def doctor(
 
 @build_app.command("deck", help=BUILD_DECK_HELP)
 def build_deck(
-    input_value: str = typer.Argument(..., help="Path to .txt/.md/.epub/.pdf input."),
+    input_value: str = typer.Argument(..., help="Path to .txt/.md/.epub input."),
     source_lang: str | None = typer.Option(None, "--source-lang", help="Source language code."),
     target_lang: str | None = typer.Option(None, "--target-lang", help="Target language code."),
     content_profile: str | None = typer.Option(

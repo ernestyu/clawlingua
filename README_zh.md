@@ -5,7 +5,7 @@ ClawLingua 是一个 Python CLI 工具，用来把真实语料（播客字幕、
 
 核心能力：
 
-- 从本地 `.txt` / `.md` / `.epub` / `.pdf` 文件读取内容；
+- 从本地 `.txt` / `.md` / `.epub` 文件读取内容；
 - 清洗文本、按语境切块；
 - 使用 OpenAI-compatible LLM 生成带上下文的 cloze 句子；
 - 使用单独的小模型（small LLM）负责翻译/意译；
@@ -88,7 +88,6 @@ CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS=3
 - 设为 `0` 可关闭该过滤；
 - `.md` 会先转纯文本；
 - `.epub` 会解包并抽取章节文本；
-- `.pdf` 会按页抽取纯文本。
 
 ### 2.3 切块（Chunking）
 
@@ -279,7 +278,7 @@ python -m clawlingua.cli init
 python -m clawlingua.cli doctor --env-file .env
 ```
 
-- 检查依赖（edge_tts / genanki / httpx / typer / pymupdf）；
+- 检查依赖（edge_tts / genanki / httpx / typer）；
 - 校验基础配置（路径、prompt/template）；
 - 检查 LLM（主 + translate）配置与连通性；
 - 检查 cloze 控制参数（max_sentences / min_chars / difficulty / max_per_chunk / profile）；
@@ -305,7 +304,7 @@ python -m clawlingua.cli build deck INPUT \
   --debug
 ```
 
-- `INPUT`：本地文件路径（支持 `.txt` / `.md` / `.epub` / `.pdf`）；
+- `INPUT`：本地文件路径（支持 `.txt` / `.md` / `.epub`）；
 - `--content-profile`：切换内容策略（`general` 或 `textbook_examples`）；
 - `--difficulty`：覆盖 env 中的 `CLOZE_DIFFICULTY`；
 - `--max-chars`：覆盖当前 run 的 `CHUNK_MAX_CHARS`；
@@ -315,6 +314,7 @@ python -m clawlingua.cli build deck INPUT \
 - `--save-intermediate`：将中间结果保存到 `OUTPUT_DIR/runs/<run_id>`；
 - `--continue-on-error`：遇到单条失败时跳过、记录错误，而不是直接退出；
 - `--debug`：出错时抛出完整 traceback，便于调试。
+- 默认牌组名使用输入文件名（不含扩展名）；可用 `--deck-name` 覆盖。
 
 ### 4.4 `prompt validate`
 

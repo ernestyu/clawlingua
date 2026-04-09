@@ -16,7 +16,6 @@ from ..errors import ClawLinguaError, build_error
 from ..exit_codes import ExitCode
 from ..ingest.epub_reader import read_epub_file
 from ..ingest.file_reader import read_text_file
-from ..ingest.pdf_reader import read_pdf_file
 from ..ingest.normalizer import NormalizeOptions, normalize_text, strip_markdown_to_text
 from ..llm.client import OpenAICompatibleClient
 from ..llm.cloze_generator import (
@@ -86,6 +85,15 @@ def _build_note(
         f"target_lang: {target_lang}",
     ]
     return "\n".join(lines)
+
+
+def _resolve_deck_name(*, cfg: AppConfig, options: BuildDeckOptions, document: DocumentRecord) -> str:
+    if options.deck_name:
+        return options.deck_name
+    source_name = Path(document.source_value).stem.strip()
+    if source_name:
+        return source_name
+    return cfg.default_deck_name
 
 
 def _save_intermediate(
@@ -168,17 +176,13 @@ def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> D
             error_code="INPUT_FILE_TYPE_UNSUPPORTED",
             cause="Unsupported input file type.",
             detail=f"suffix={suffix or '<none>'}",
-            next_steps=["Use one of: .txt, .md, .markdown, .epub, .pdf"],
+            next_steps=["Use one of: .txt, .md, .markdown, .epub"],
             exit_code=ExitCode.INPUT_ERROR,
         )
     if suffix == ".epub":
         epub_result = read_epub_file(file_path)
         raw_text = epub_result.text
         title = epub_result.title or file_path.stem
-    elif suffix == ".pdf":
-        pdf_result = read_pdf_file(file_path)
-        raw_text = pdf_result.text
-        title = pdf_result.title or file_path.stem
     else:
         raw_text = read_text_file(file_path)
         if suffix in {".md", ".markdown"}:
@@ -517,12 +521,13 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         logger.info("tts generation complete | audio=%d", len(media_files))
 
     try:
+        deck_name = _resolve_deck_name(cfg=cfg, options=options, document=document)
         export_apkg(
             cards=cards,
             template=template,
             output_path=output_path,
             media_files=media_files,
-            deck_name_override=options.deck_name or cfg.default_deck_name,
+            deck_name_override=deck_name,
         )
     except ClawLinguaError as exc:
         _save_failure_snapshot(exc)

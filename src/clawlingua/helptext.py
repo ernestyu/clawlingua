@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 BUILD_DECK_HELP = (
-    "Build an Anki .apkg from local text/markdown/EPUB/PDF file input.\n\n"
-    "Input: .txt, .md, .epub, .pdf\n"
+    "Build an Anki .apkg from local text/markdown/EPUB file input.\n\n"
+    "Input: .txt, .md, .epub\n"
     "Profiles: general, textbook_examples\n"
     "Output: .apkg deck with fields Text/Original/Translation/Note/Audio\n"
     "Text prompt: ./prompts/cloze_contextual.json\n"

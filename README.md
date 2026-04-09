@@ -5,7 +5,7 @@ into Anki cloze decks (`.apkg`) for language learning.
 
 It:
 
-- ingests content from local `.txt`/`.md`/`.epub`/`.pdf` files
+- ingests content from local `.txt`/`.md`/`.epub` files
 - cleans and chunks the text into context blocks
 - uses an OpenAI-compatible LLM to generate contextual cloze sentences
 - uses a separate (usually cheaper) LLM for translations
@@ -88,7 +88,6 @@ This controls pre-LLM line filtering:
 - set `CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS=0` to disable this filter.
 - `.md` input is converted to plain text before filtering.
 - `.epub` input is unpacked and chapter HTML is converted to plain text before filtering.
-- `.pdf` input is extracted page-by-page into plain text before filtering.
 
 ### 2.3 Chunking
 
@@ -286,7 +285,7 @@ python -m clawlingua.cli doctor --env-file .env
 
 Performs a series of checks:
 
-- Python dependencies (`edge_tts`, `genanki`, `httpx`, `typer`, `pymupdf`)
+- Python dependencies (`edge_tts`, `genanki`, `httpx`, `typer`)
 - base config (paths, prompt/template files)
 - runtime config (LLM, TTS voices)
 - cloze/translate prompt schema
@@ -321,7 +320,7 @@ python -m clawlingua.cli build deck INPUT \
 
 Where:
 
-- `INPUT`: path to `.txt`/`.md`/`.epub`/`.pdf` file.
+- `INPUT`: path to `.txt`/`.md`/`.epub` file.
 - `--source-lang` / `--target-lang` override defaults from env.
 - `--content-profile` switches prompt policy (`general` or `textbook_examples`).
 - `--input-char-limit` lets you process only the first N characters for quick tests.
@@ -334,6 +333,7 @@ Where:
 - `--save-intermediate` dumps intermediates under `CLAWLINGUA_OUTPUT_DIR/runs/<run_id>`.
 - `--continue-on-error` logs and skips individual failures instead of aborting.
 - `--debug` makes `_run_guard` re-raise exceptions with tracebacks.
+- By default, deck name uses the input file name (without extension); `--deck-name` overrides it.
 
 ### 4.4 `prompt validate`
 
