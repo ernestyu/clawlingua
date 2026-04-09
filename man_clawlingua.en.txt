@@ -99,6 +99,9 @@ COMMANDS
                 Override CLAWLINGUA_CLOZE_DIFFICULTY. Supported values:
                     beginner | intermediate | advanced.
 
+            --prompt-lang
+                Prompt language for multi-lingual prompts (en|zh).
+
             --save-intermediate / --no-save-intermediate
                 Enable/disable dumping intermediate JSONL files under
                 CLAWLINGUA_OUTPUT_DIR/<run_id>.
@@ -133,6 +136,7 @@ ENVIRONMENT
     CLAWLINGUA_TRANSLATE_LLM_*   Optional small LLM for translation
     CLAWLINGUA_CHUNK_*           Chunking controls
     CLAWLINGUA_CLOZE_*           Cloze-level controls
+    CLAWLINGUA_PROMPT_LANG       Default prompt language (en|zh)
     CLAWLINGUA_CONTENT_PROFILE   Default content profile
     CLAWLINGUA_TTS_*             TTS provider and voice lists
     CLAWLINGUA_OUTPUT_DIR        Output directory for run data (JSONL, media)
