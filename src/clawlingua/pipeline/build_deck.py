@@ -248,7 +248,18 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     logger.info('ingest complete | title="%s"', document.title or "")
 
     save_intermediate = cfg.save_intermediate if options.save_intermediate is None else options.save_intermediate
-    output_path = options.output or (run_ctx.run_dir / "output.apkg")
+
+    # Resolve final export path: by default use a timestamped directory under
+    # export_dir (e.g. ./outputs/<run_id>/output.apkg). When --output is
+    # provided, honour it as-is.
+    if options.output is not None:
+        output_path = options.output
+    else:
+        export_root = cfg.resolve_path(cfg.export_dir)
+        export_dir = export_root / document.run_id
+        export_dir.mkdir(parents=True, exist_ok=True)
+        output_path = export_dir / "output.apkg"
+
     if not output_path.is_absolute():
         output_path = (cfg.workspace_root / output_path).resolve()
 

@@ -162,7 +162,10 @@ CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
-CLAWLINGUA_OUTPUT_DIR=./outputs
+# Intermediate run data (JSONL, media snapshots)
+CLAWLINGUA_OUTPUT_DIR=./runs
+# Final exported decks (when --output is not provided)
+CLAWLINGUA_EXPORT_DIR=./outputs
 CLAWLINGUA_LOG_DIR=./logs
 CLAWLINGUA_LOG_LEVEL=INFO
 CLAWLINGUA_SAVE_INTERMEDIATE=true
@@ -332,6 +335,8 @@ Where:
   unless you explicitly provide `--cloze-min-chars`.
 - `--max-notes` imposes a global cap on number of notes.
 - `--save-intermediate` dumps intermediates under `CLAWLINGUA_OUTPUT_DIR/<run_id>`.
+- When `--output` is not provided, the final deck is written to
+  `CLAWLINGUA_EXPORT_DIR/<run_id>/output.apkg`.
 - `--continue-on-error` logs and skips individual failures instead of aborting.
 - `--debug` makes `_run_guard` re-raise exceptions with tracebacks.
 - By default, deck name uses the input file name (without extension); `--deck-name` overrides it.

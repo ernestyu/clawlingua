@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 from .constants import (
     DEFAULT_ANKI_TEMPLATE,
     DEFAULT_DECK_NAME,
+    DEFAULT_EXPORT_DIR,
     DEFAULT_LOG_DIR,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_PROMPT_CLOZE,
@@ -80,6 +81,7 @@ class AppConfig(BaseModel):
     content_profile: str = "general"
 
     output_dir: Path = DEFAULT_OUTPUT_DIR
+    export_dir: Path = DEFAULT_EXPORT_DIR
     log_dir: Path = DEFAULT_LOG_DIR
     log_level: str = "INFO"
     save_intermediate: bool = True
@@ -297,6 +299,7 @@ def load_config(
             merged.get("CLAWLINGUA_CONTENT_PROFILE"), "general"
         ),
         "output_dir": _env_value(merged.get("CLAWLINGUA_OUTPUT_DIR"), DEFAULT_OUTPUT_DIR),
+        "export_dir": _env_value(merged.get("CLAWLINGUA_EXPORT_DIR"), DEFAULT_EXPORT_DIR),
         "log_dir": _env_value(merged.get("CLAWLINGUA_LOG_DIR"), DEFAULT_LOG_DIR),
         "log_level": _env_value(merged.get("CLAWLINGUA_LOG_LEVEL"), "INFO"),
         "save_intermediate": _env_value(merged.get("CLAWLINGUA_SAVE_INTERMEDIATE"), True),

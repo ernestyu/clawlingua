@@ -36,7 +36,10 @@ CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
-CLAWLINGUA_OUTPUT_DIR=./outputs
+# Intermediate run data (JSONL, media snapshots)
+CLAWLINGUA_OUTPUT_DIR=./runs
+# Final exported decks (when --output is not provided)
+CLAWLINGUA_EXPORT_DIR=./outputs
 CLAWLINGUA_LOG_DIR=./logs
 CLAWLINGUA_LOG_LEVEL=INFO
 CLAWLINGUA_SAVE_INTERMEDIATE=true

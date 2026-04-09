@@ -101,7 +101,7 @@ COMMANDS
 
             --save-intermediate / --no-save-intermediate
                 Enable/disable dumping intermediate JSONL files under
-                CLAWLINGUA_OUTPUT_DIR/runs/<run_id>.
+                CLAWLINGUA_OUTPUT_DIR/<run_id>.
 
             --continue-on-error
                 Continue on individual cloze/translation/TTS errors and
@@ -135,7 +135,8 @@ ENVIRONMENT
     CLAWLINGUA_CLOZE_*           Cloze-level controls
     CLAWLINGUA_CONTENT_PROFILE   Default content profile
     CLAWLINGUA_TTS_*             TTS provider and voice lists
-    CLAWLINGUA_OUTPUT_DIR        Output directory for runs
+    CLAWLINGUA_OUTPUT_DIR        Output directory for run data (JSONL, media)
+    CLAWLINGUA_EXPORT_DIR        Output directory for exported decks
     CLAWLINGUA_LOG_DIR           Directory for log files
 
 SEE ALSO

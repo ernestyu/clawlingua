@@ -98,7 +98,7 @@ clawlingua(1) -- 从本地文本/EPUB 构建 Anki 填空牌组
                     beginner | intermediate | advanced
 
             --save-intermediate / --no-save-intermediate
-                是否在 CLAWLINGUA_OUTPUT_DIR/runs/<run_id> 下输出
+                是否在 CLAWLINGUA_OUTPUT_DIR/<run_id> 下输出
                 中间 JSONL 文件（chunks、候选、翻译、最终卡片等）。
 
             --continue-on-error
@@ -133,7 +133,8 @@ clawlingua(1) -- 从本地文本/EPUB 构建 Anki 填空牌组
     CLAWLINGUA_CLOZE_*           cloze 粒度控制
     CLAWLINGUA_CONTENT_PROFILE   默认内容策略
     CLAWLINGUA_TTS_*             TTS 提供方与 voice 列表
-    CLAWLINGUA_OUTPUT_DIR        输出目录
+    CLAWLINGUA_OUTPUT_DIR        输出目录（中间运行数据 JSONL/媒体）
+    CLAWLINGUA_EXPORT_DIR        导出牌组目录
     CLAWLINGUA_LOG_DIR           日志目录
 
 参见

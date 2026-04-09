@@ -160,7 +160,10 @@ CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
-CLAWLINGUA_OUTPUT_DIR=./outputs
+# 中间运行数据（JSONL、media 快照）
+CLAWLINGUA_OUTPUT_DIR=./runs
+# 最终导出的牌组（未显式指定 --output 时）
+CLAWLINGUA_EXPORT_DIR=./outputs
 CLAWLINGUA_LOG_DIR=./logs
 CLAWLINGUA_LOG_LEVEL=INFO
 CLAWLINGUA_SAVE_INTERMEDIATE=true
@@ -313,6 +316,8 @@ python -m clawlingua.cli build deck INPUT \
 - `textbook_examples` 模式下，若 env 的 `CLOZE_MIN_CHARS > 120` 且未 CLI 覆盖，会直接拒绝执行；
 - `--max-notes`：对整套牌组做全局上限；
 - `--save-intermediate`：将中间结果保存到 `OUTPUT_DIR/<run_id>`；
+- 未显式提供 `--output` 时，最终 `.apkg` 会写入
+  `CLAWLINGUA_EXPORT_DIR/<run_id>/output.apkg`。
 - `--continue-on-error`：遇到单条失败时跳过、记录错误，而不是直接退出；
 - `--debug`：出错时抛出完整 traceback，便于调试。
 - 默认牌组名使用输入文件名（不含扩展名）；可用 `--deck-name` 覆盖。

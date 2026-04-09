@@ -18,6 +18,15 @@ class RunContext:
 
 
 def create_run_context(cfg: AppConfig, *, name: str = "build_deck") -> RunContext:
+    """Create a run context.
+
+    - ``run_dir`` is always under ``output_dir`` (typically ./runs/<run_id>) and
+      holds intermediate JSONL files and media.
+    - The final exported deck path is derived separately in the pipeline using
+      ``export_dir`` (typically ./outputs/<run_id>/output.apkg) unless
+      ``--output`` is provided.
+    """
+
     run_id = make_run_id(name)
     run_dir = ensure_dir(cfg.resolve_path(cfg.output_dir) / run_id)
     media_dir = ensure_dir(run_dir / "media")
