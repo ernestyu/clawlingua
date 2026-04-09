@@ -11,10 +11,12 @@ from ..anki.media_manager import MediaManager
 from ..anki.template_loader import load_anki_template
 from ..chunking.splitter import split_into_chunks
 from ..config import AppConfig, validate_base_config, validate_runtime_config
+from ..constants import SUPPORTED_FILE_SUFFIXES
 from ..errors import ClawLinguaError, build_error
 from ..exit_codes import ExitCode
 from ..ingest.epub_reader import read_epub_file
 from ..ingest.file_reader import read_text_file
+from ..ingest.pdf_reader import read_pdf_file
 from ..ingest.normalizer import NormalizeOptions, normalize_text, strip_markdown_to_text
 from ..llm.client import OpenAICompatibleClient
 from ..llm.cloze_generator import (
@@ -122,10 +124,22 @@ def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> D
     if not file_path.is_absolute():
         file_path = (cfg.workspace_root / file_path).resolve()
     suffix = file_path.suffix.lower()
+    if suffix not in SUPPORTED_FILE_SUFFIXES:
+        raise build_error(
+            error_code="INPUT_FILE_TYPE_UNSUPPORTED",
+            cause="Unsupported input file type.",
+            detail=f"suffix={suffix or '<none>'}",
+            next_steps=["Use one of: .txt, .md, .markdown, .epub, .pdf"],
+            exit_code=ExitCode.INPUT_ERROR,
+        )
     if suffix == ".epub":
         epub_result = read_epub_file(file_path)
         raw_text = epub_result.text
         title = epub_result.title or file_path.stem
+    elif suffix == ".pdf":
+        pdf_result = read_pdf_file(file_path)
+        raw_text = pdf_result.text
+        title = pdf_result.title or file_path.stem
     else:
         raw_text = read_text_file(file_path)
         if suffix in {".md", ".markdown"}:

@@ -13,6 +13,5 @@ DEFAULT_OUTPUT_DIR = Path("./runs")
 DEFAULT_DECK_NAME = "ClawLingua Default Deck"
 
 ANKI_FIELDS_ORDER = ["Text", "Original", "Translation", "Note", "Audio"]
-SUPPORTED_FILE_SUFFIXES = {".txt", ".md"}
-SUPPORTED_INPUT_TYPES = {"auto", "url", "file"}
-
+SUPPORTED_FILE_SUFFIXES = {".txt", ".md", ".markdown", ".epub", ".pdf"}
+SUPPORTED_INPUT_TYPES = {"file"}

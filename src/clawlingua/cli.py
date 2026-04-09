@@ -31,7 +31,7 @@ app = typer.Typer(
     name="clawlingua",
     add_completion=False,
     no_args_is_help=True,
-    help="Build Anki cloze decks from local text/EPUB files.",
+    help="Build Anki cloze decks from local text/EPUB/PDF files.",
 )
 build_app = typer.Typer(no_args_is_help=True, help="Build commands.")
 prompt_app = typer.Typer(no_args_is_help=True, help="Prompt file commands.")
@@ -106,7 +106,7 @@ def doctor(
 
         checks: list[tuple[str, bool, str]] = []
 
-        for module_name in ["edge_tts", "genanki", "httpx", "typer"]:
+        for module_name in ["edge_tts", "genanki", "httpx", "typer", "pypdf"]:
             try:
                 importlib.import_module(module_name)
                 checks.append((f"dependency:{module_name}", True, "ok"))
@@ -246,7 +246,7 @@ def doctor(
 
 @build_app.command("deck", help=BUILD_DECK_HELP)
 def build_deck(
-    input_value: str = typer.Argument(..., help="Path to .txt/.md/.epub input."),
+    input_value: str = typer.Argument(..., help="Path to .txt/.md/.epub/.pdf input."),
     source_lang: str | None = typer.Option(None, "--source-lang", help="Source language code."),
     target_lang: str | None = typer.Option(None, "--target-lang", help="Target language code."),
     input_char_limit: int | None = typer.Option(

@@ -5,7 +5,7 @@ ClawLingua 是一个 Python CLI 工具，用来把真实语料（播客字幕、
 
 核心能力：
 
-- 从 URL 或本地 `.txt` / `.md` 文件读取内容；
+- 从本地 `.txt` / `.md` / `.epub` / `.pdf` 文件读取内容；
 - 清洗文本、按语境切块；
 - 使用 OpenAI-compatible LLM 生成带上下文的 cloze 句子；
 - 使用单独的小模型（small LLM）负责翻译/意译；
@@ -75,15 +75,19 @@ CLAWLINGUA_LLM_TEMPERATURE=0.2
 
 要求它是 OpenAI-compatible 的 `/chat/completions` 接口即可。
 
-### 2.2 HTTP / 抓取
+### 2.2 输入清洗
 
 ```env
-CLAWLINGUA_HTTP_TIMEOUT_SECONDS=30
-CLAWLINGUA_HTTP_USER_AGENT=ClawLingua/0.1
-CLAWLINGUA_HTTP_VERIFY_SSL=true
+CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS=3
 ```
 
-用于 URL 抓取与 doctor 检查。
+用于预处理输入文本：
+
+- 会过滤过短、无学习价值的孤立短行；
+- 设为 `0` 可关闭该过滤；
+- `.md` 会先转纯文本；
+- `.epub` 会解包并抽取章节文本；
+- `.pdf` 会按页抽取纯文本。
 
 ### 2.3 切块（Chunking）
 
@@ -257,7 +261,7 @@ python -m clawlingua.cli init
 python -m clawlingua.cli doctor --env-file .env
 ```
 
-- 检查依赖（edge_tts / genanki / httpx / typer）；
+- 检查依赖（edge_tts / genanki / httpx / typer / pypdf）；
 - 校验基础配置（路径、prompt/template）；
 - 检查 LLM（主 + translate）配置与连通性；
 - 检查 cloze 控制参数（max_sentences / min_chars / difficulty / max_per_chunk）；
@@ -267,7 +271,6 @@ python -m clawlingua.cli doctor --env-file .env
 
 ```bash
 python -m clawlingua.cli build deck INPUT \
-  --input-type auto|url|file \
   --source-lang en \
   --target-lang zh \
   --env-file .env \
@@ -282,7 +285,7 @@ python -m clawlingua.cli build deck INPUT \
   --debug
 ```
 
-- `INPUT`：可以是 URL 或本地文件路径；
+- `INPUT`：本地文件路径（支持 `.txt` / `.md` / `.epub` / `.pdf`）；
 - `--difficulty`：覆盖 env 中的 `CLOZE_DIFFICULTY`；
 - `--max-chars`：覆盖当前 run 的 `CHUNK_MAX_CHARS`；
 - `--max-notes`：对整套牌组做全局上限；
