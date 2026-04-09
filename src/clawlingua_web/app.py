@@ -291,11 +291,6 @@ def build_interface() -> gr.Blocks:
                     value=cfg.cloze_difficulty,
                     label="Difficulty",
                 )
-                prompt_lang_run = gr.Dropdown(
-                    choices=["zh", "en"],
-                    value=cfg.prompt_lang,
-                    label="Prompt language (en/zh)",
-                )
 
             with gr.Row():
                 max_notes = gr.Number(label="Max notes (0 = no limit)", value=None, precision=0)
@@ -340,7 +335,6 @@ def build_interface() -> gr.Blocks:
                 tgt,
                 profile,
                 diff,
-                prompt_lang_val,
                 max_notes_val,
                 input_limit_val,
                 cloze_min_val,
@@ -356,7 +350,6 @@ def build_interface() -> gr.Blocks:
                     target_lang=tgt,
                     content_profile=profile,
                     difficulty=diff,
-                    prompt_lang=str(prompt_lang_val) if prompt_lang_val else None,
                     max_notes=int(max_notes_val) if max_notes_val and max_notes_val > 0 else None,
                     input_char_limit=int(input_limit_val) if input_limit_val and input_limit_val > 0 else None,
                     cloze_min_chars=int(cloze_min_val) if cloze_min_val and cloze_min_val >= 0 else None,
@@ -385,7 +378,6 @@ def build_interface() -> gr.Blocks:
                     target_lang,
                     content_profile,
                     difficulty,
-                    prompt_lang_run,
                     max_notes,
                     input_char_limit,
                     cloze_min_chars,
