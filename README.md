@@ -160,6 +160,7 @@ CLAWLINGUA_CONTENT_PROFILE=general
 CLAWLINGUA_PROMPT_CLOZE=./prompts/cloze_contextual.json
 CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
+CLAWLINGUA_PROMPT_LANG=zh
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
 # Intermediate run data (JSONL, media snapshots)
@@ -174,6 +175,7 @@ CLAWLINGUA_DEFAULT_DECK_NAME=ClawLingua Default Deck
 
 - `CLAWLINGUA_CONTENT_PROFILE=general` uses `cloze_contextual.json`.
 - `CLAWLINGUA_CONTENT_PROFILE=textbook_examples` uses `cloze_textbook_examples.json`.
+- `CLAWLINGUA_PROMPT_LANG` controls which language variant is used for multi-lingual prompts (`en` or `zh`), and can be overridden by `--prompt-lang`.
 
 ### 2.7 TTS (edge_tts)
 
@@ -199,9 +201,16 @@ each card, selecting a voice from the configured list based on `source_lang`.
 
 ### 3.1 Cloze prompt: `prompts/cloze_contextual.json`
 
-This prompt controls how cloze candidates are generated. It uses
-`source_lang`, `target_lang`, `difficulty`, `cloze_max_sentences`, and a
-merged `chunk_text` (possibly containing multiple chunk blocks) as
+This prompt controls how cloze candidates are generated.
+
+- Prompt fields support both legacy and multi-lingual formats:
+  - Legacy string format: `"system_prompt": "..."`.
+  - Multi-lingual map: `"system_prompt": { "en": "...", "zh": "..." }`.
+- At runtime, the language variant is selected based on
+  `CLAWLINGUA_PROMPT_LANG` (or the `--prompt-lang` CLI override).
+
+It uses `source_lang`, `target_lang`, `difficulty`, `cloze_max_sentences`, and
+a merged `chunk_text` (possibly containing multiple chunk blocks) as
 placeholders.
 
 The expected output is **JSON array**, each element roughly:
@@ -248,6 +257,11 @@ that mix headwords, definitions, and example sentences. The prompt is tuned to:
 - extract cloze candidates only from natural example sentences.
 
 ### 3.3 Translation prompt: `prompts/translate_rewrite.json`
+
+The translation prompt follows the same multi-lingual structure support as the
+cloze prompts: `system_prompt` and `user_prompt_template` may be plain strings
+or `{ "en": "...", "zh": "..." }` maps, selected via
+`CLAWLINGUA_PROMPT_LANG` / `--prompt-lang`.
 
 The translation prompt expects the LLM to return a JSON array of:
 
@@ -317,6 +331,7 @@ python -m clawlingua.cli build deck INPUT \
   --max-notes 200 \
   --temperature 0.2 \
   --difficulty beginner|intermediate|advanced \
+  --prompt-lang en|zh \
   --save-intermediate \
   --continue-on-error \
   --debug
@@ -329,6 +344,7 @@ Where:
 - `--content-profile` switches prompt policy (`general` or `textbook_examples`).
 - `--input-char-limit` lets you process only the first N characters for quick tests.
 - `--difficulty` overrides `CLAWLINGUA_CLOZE_DIFFICULTY`.
+- `--prompt-lang` overrides `CLAWLINGUA_PROMPT_LANG` for multi-lingual prompts.
 - `--max-chars` overrides `CLAWLINGUA_CHUNK_MAX_CHARS` for this run.
 - `--cloze-min-chars` overrides `CLAWLINGUA_CLOZE_MIN_CHARS` for this run.
 - In `textbook_examples` profile, runs are rejected when env `CLOZE_MIN_CHARS > 120`
@@ -442,7 +458,7 @@ python -m clawlingua_web.app
 This starts a Gradio app bound to `127.0.0.1:7860`. Open
 <http://127.0.0.1:7860> in your browser.
 
-The web UI has two tabs:
+The web UI has three tabs:
 
 - **Run** — upload a `.txt`/`.md`/`.epub` file, select source/target language,
   content profile, difficulty, and per-run overrides (max notes, input char
@@ -450,12 +466,19 @@ The web UI has two tabs:
   same `run_build_deck` pipeline and writes intermediate data to
   `CLAWLINGUA_OUTPUT_DIR/<run_id>` and the final deck to
   `CLAWLINGUA_EXPORT_DIR/<run_id>/output.apkg`.
-- **Config** — a basic `.env` editor for common `CLAWLINGUA_*` settings
-  (LLM endpoints, chunk/cloze defaults, output/log directories, default deck
-  name). Saving changes writes a new `.env`, validates it via
-  `clawlingua.config.validate_base_config` + `validate_runtime_config`, and
-  rolls back on failure. Per-run overrides from the Run tab always take
-  precedence over these defaults.
+- **Config** — a `.env` editor for common `CLAWLINGUA_*` settings (LLM
+  endpoints, chunk/cloze defaults, prompt language, output/log directories,
+  default deck name, TTS, etc.). Saving changes writes a new `.env`, validates
+  it via `clawlingua.config.validate_base_config` + `validate_runtime_config`,
+  and rolls back on failure. The "Load defaults" button loads values from
+  `ENV_EXAMPLE.md` into the form without writing to disk. The Config tab also
+  provides "List models" / "Test connectivity" helpers for both the primary
+  LLM and the translation LLM using their `/models` endpoints.
+- **Prompt** — inspect and edit prompt JSON files
+  (`cloze_contextual.json`, `cloze_textbook_examples.json`,
+  `translate_rewrite.json`), switch between them, view multi-lingual prompt
+  content, validate against the expected schema, and save changes when the JSON
+  is valid (with automatic backups of previous versions).
 
 The web UI is optional; OpenClaw skills and automated usage should continue
 calling the CLI directly.
