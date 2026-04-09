@@ -384,7 +384,51 @@ python -m clawlingua.cli config validate --env-file .env
 
 ---
 
-## 7. 后续可改进点
+## 7. 可选 Web 管理界面
+
+除了纯命令行，ClawLingua 还提供一个基于 Gradio 的本地 Web 界面，方便
+在浏览器里上传文件、调整参数。该界面是可选的，不会改变 CLI 的行为，
+只有在你主动启动时才会运行。
+
+### 7.1 安装
+
+在项目根目录下安装 `web` extra 依赖：
+
+```bash
+pip install .[web]
+```
+
+### 7.2 启动 Web UI
+
+```bash
+clawlingua-web
+# 或
+python -m clawlingua_web.app
+```
+
+默认监听 `127.0.0.1:7860`，在浏览器中访问：
+<http://127.0.0.1:7860>
+
+Web 界面包含两个 Tab：
+
+- **Run**：上传 `.txt` / `.md` / `.epub` 文件，选择源语言/目标语言、
+  内容 profile（`general` / `textbook_examples`）、难度等级，并按需设置
+  本次运行的 override（最大卡片数、input char limit、cloze_min_chars、
+  chunk_max_chars、temperature 等）。后端调用与 CLI 相同的
+  `run_build_deck` pipeline，将中间数据写入
+  `CLAWLINGUA_OUTPUT_DIR/<run_id>`，最终牌组写入
+  `CLAWLINGUA_EXPORT_DIR/<run_id>/output.apkg`。
+- **Config**：简单的 `.env` 配置编辑器，用于修改常见的
+  `CLAWLINGUA_*` 变量（例如 LLM 地址/模型、chunk/cloze 默认值、
+  输出/日志目录、默认牌组名称等）。点击 Save 时会写入新的 `.env`，
+  并通过 `clawlingua.config.validate_base_config` +
+  `validate_runtime_config` 做一轮校验，失败会自动回滚。Run 页中的
+  per-run override 仍然优先于这些默认配置。
+
+对于 OpenClaw 的 skill 或自动化场景，仍然推荐直接使用 CLI，Web UI
+主要面向「临时跑一组文件」的人机交互需求。
+
+## 8. 后续可改进点
 
 - cloze 编号：当出现多个 `c1` 时，需要自动重排为 `c1/c2/c3`；
 - cloze 格式：进一步收紧到

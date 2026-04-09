@@ -415,7 +415,52 @@ it if you want different field names or card faces.
 
 ---
 
-## 7. Known limitations / future work
+## 7. Optional web UI
+
+For users who prefer a browser-based interface, ClawLingua ships an optional
+local-only web UI built with Gradio. This does **not** change the core CLI
+behaviour and is only started when explicitly invoked.
+
+### 7.1 Installation
+
+Install the `web` extra (in addition to the core dependencies):
+
+```bash
+pip install .[web]
+```
+
+### 7.2 Launching the web UI
+
+From the project root:
+
+```bash
+clawlingua-web
+# or
+python -m clawlingua_web.app
+```
+
+This starts a Gradio app bound to `127.0.0.1:7860`. Open
+<http://127.0.0.1:7860> in your browser.
+
+The web UI has two tabs:
+
+- **Run** — upload a `.txt`/`.md`/`.epub` file, select source/target language,
+  content profile, difficulty, and per-run overrides (max notes, input char
+  limit, cloze min chars, chunk max chars, temperature). The backend calls the
+  same `run_build_deck` pipeline and writes intermediate data to
+  `CLAWLINGUA_OUTPUT_DIR/<run_id>` and the final deck to
+  `CLAWLINGUA_EXPORT_DIR/<run_id>/output.apkg`.
+- **Config** — a basic `.env` editor for common `CLAWLINGUA_*` settings
+  (LLM endpoints, chunk/cloze defaults, output/log directories, default deck
+  name). Saving changes writes a new `.env`, validates it via
+  `clawlingua.config.validate_base_config` + `validate_runtime_config`, and
+  rolls back on failure. Per-run overrides from the Run tab always take
+  precedence over these defaults.
+
+The web UI is optional; OpenClaw skills and automated usage should continue
+calling the CLI directly.
+
+## 8. Known limitations / future work
 
 - Cloze numbering: when multiple clozes appear in a single `text`, we may need
   to renumber them deterministically (`c1`, `c2`, `c3`) in order of appearance.
