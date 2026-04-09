@@ -18,7 +18,7 @@ dependencies = [
   "edge-tts>=6.1.12",
   "genanki>=0.13.1",
   "chardet>=5.2.0",
-  "pypdf>=5.9.0",
+  "PyMuPDF>=1.24.0",
 ]
 
 [project.optional-dependencies]

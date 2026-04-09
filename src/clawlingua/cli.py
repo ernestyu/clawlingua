@@ -108,12 +108,21 @@ def doctor(
 
         checks: list[tuple[str, bool, str]] = []
 
-        for module_name in ["edge_tts", "genanki", "httpx", "typer", "pypdf"]:
+        for module_name in ["edge_tts", "genanki", "httpx", "typer"]:
             try:
                 importlib.import_module(module_name)
                 checks.append((f"dependency:{module_name}", True, "ok"))
             except Exception as exc:
                 checks.append((f"dependency:{module_name}", False, str(exc)))
+        try:
+            importlib.import_module("pymupdf")
+            checks.append(("dependency:pymupdf", True, "ok"))
+        except Exception:
+            try:
+                importlib.import_module("fitz")
+                checks.append(("dependency:pymupdf", True, "ok (fitz alias)"))
+            except Exception as exc:
+                checks.append(("dependency:pymupdf", False, str(exc)))
 
         try:
             validate_base_config(cfg)

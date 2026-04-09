@@ -279,7 +279,7 @@ python -m clawlingua.cli init
 python -m clawlingua.cli doctor --env-file .env
 ```
 
-- 检查依赖（edge_tts / genanki / httpx / typer / pypdf）；
+- 检查依赖（edge_tts / genanki / httpx / typer / pymupdf）；
 - 校验基础配置（路径、prompt/template）；
 - 检查 LLM（主 + translate）配置与连通性；
 - 检查 cloze 控制参数（max_sentences / min_chars / difficulty / max_per_chunk / profile）；

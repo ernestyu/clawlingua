@@ -286,7 +286,7 @@ python -m clawlingua.cli doctor --env-file .env
 
 Performs a series of checks:
 
-- Python dependencies (`edge_tts`, `genanki`, `httpx`, `typer`, `pypdf`)
+- Python dependencies (`edge_tts`, `genanki`, `httpx`, `typer`, `pymupdf`)
 - base config (paths, prompt/template files)
 - runtime config (LLM, TTS voices)
 - cloze/translate prompt schema
