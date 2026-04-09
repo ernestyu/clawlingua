@@ -5,8 +5,10 @@ from __future__ import annotations
 BUILD_DECK_HELP = (
     "Build an Anki .apkg from local text/markdown/EPUB/PDF file input.\n\n"
     "Input: .txt, .md, .epub, .pdf\n"
+    "Profiles: general, textbook_examples\n"
     "Output: .apkg deck with fields Text/Original/Translation/Note/Audio\n"
     "Text prompt: ./prompts/cloze_contextual.json\n"
+    "Textbook prompt: ./prompts/cloze_textbook_examples.json\n"
     "Translation prompt: ./prompts/translate_rewrite.json\n"
     "Template: ./templates/anki_cloze_default.json"
 )

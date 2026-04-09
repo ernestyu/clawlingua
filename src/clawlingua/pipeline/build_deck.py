@@ -11,7 +11,7 @@ from ..anki.media_manager import MediaManager
 from ..anki.template_loader import load_anki_template
 from ..chunking.splitter import split_into_chunks
 from ..config import AppConfig, validate_base_config, validate_runtime_config
-from ..constants import SUPPORTED_FILE_SUFFIXES
+from ..constants import SUPPORTED_CONTENT_PROFILES, SUPPORTED_FILE_SUFFIXES
 from ..errors import ClawLinguaError, build_error
 from ..exit_codes import ExitCode
 from ..ingest.epub_reader import read_epub_file
@@ -37,6 +37,7 @@ from .dedupe import dedupe_candidates
 from .validators import validate_text_candidate, validate_translation_text
 
 logger = logging.getLogger(__name__)
+TEXTBOOK_PROFILE_MAX_RECOMMENDED_CLOZE_MIN_CHARS = 120
 
 
 @dataclass
@@ -52,6 +53,8 @@ class BuildDeckOptions:
     max_notes: int | None = None
     temperature: float | None = None
     cloze_difficulty: str | None = None
+    cloze_min_chars: int | None = None
+    content_profile: str | None = None
     save_intermediate: bool | None = None
     continue_on_error: bool = False
 
@@ -95,6 +98,7 @@ def _save_intermediate(
     cards: list[CardRecord],
     errors: list[dict],
     output_path: Path,
+    content_profile: str,
 ) -> None:
     dump_json(run_dir / "document.json", document.model_dump(mode="json"))
     (run_dir / "document.md").write_text(document.cleaned_text, encoding="utf-8")
@@ -111,9 +115,44 @@ def _save_intermediate(
             "run_id": document.run_id,
             "cards": len(cards),
             "errors": len(errors),
+            "content_profile": content_profile,
             "output_path": str(output_path),
         },
     )
+
+
+def _resolve_content_profile(cfg: AppConfig, options: BuildDeckOptions) -> str:
+    profile = (options.content_profile or cfg.content_profile or "general").strip().lower()
+    if profile not in SUPPORTED_CONTENT_PROFILES:
+        allowed = ", ".join(sorted(SUPPORTED_CONTENT_PROFILES))
+        raise build_error(
+            error_code="ARG_CONTENT_PROFILE_INVALID",
+            cause="Invalid content profile.",
+            detail=f"content_profile={profile!r}",
+            next_steps=[f"Use one of: {allowed}"],
+            exit_code=ExitCode.ARGUMENT_ERROR,
+        )
+    return profile
+
+
+def _check_textbook_profile_settings(*, cfg: AppConfig, options: BuildDeckOptions, content_profile: str) -> None:
+    if content_profile != "textbook_examples":
+        return
+    if options.cloze_min_chars is None and cfg.cloze_min_chars > TEXTBOOK_PROFILE_MAX_RECOMMENDED_CLOZE_MIN_CHARS:
+        raise build_error(
+            error_code="TEXTBOOK_PROFILE_MIN_CHARS_TOO_HIGH",
+            cause="textbook_examples profile requires shorter minimum cloze length.",
+            detail=(
+                "CLAWLINGUA_CLOZE_MIN_CHARS="
+                f"{cfg.cloze_min_chars} exceeds recommended max "
+                f"{TEXTBOOK_PROFILE_MAX_RECOMMENDED_CLOZE_MIN_CHARS}"
+            ),
+            next_steps=[
+                "Lower `CLAWLINGUA_CLOZE_MIN_CHARS` in .env (recommended 40-80)",
+                "Or override this run with `--cloze-min-chars <value>`",
+            ],
+            exit_code=ExitCode.ARGUMENT_ERROR,
+        )
 
 
 def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> DocumentRecord:
@@ -190,10 +229,15 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     # CLI 的 --difficulty 优先级高于 env；如提供则覆盖 cfg.cloze_difficulty
     if options.cloze_difficulty:
         cfg.cloze_difficulty = options.cloze_difficulty
+    if options.cloze_min_chars is not None:
+        cfg.cloze_min_chars = options.cloze_min_chars
+    content_profile = _resolve_content_profile(cfg, options)
+    _check_textbook_profile_settings(cfg=cfg, options=options, content_profile=content_profile)
 
     run_ctx = create_run_context(cfg, name="build_deck")
     template = load_anki_template(cfg.resolve_path(cfg.anki_template))
-    cloze_prompt = load_prompt(cfg.resolve_path(cfg.prompt_cloze))
+    cloze_prompt_path = cfg.prompt_cloze_textbook if content_profile == "textbook_examples" else cfg.prompt_cloze
+    cloze_prompt = load_prompt(cfg.resolve_path(cloze_prompt_path))
     translate_prompt = load_prompt(cfg.resolve_path(cfg.prompt_translate))
 
     document = _build_document(cfg, run_ctx.run_id, options)
@@ -226,6 +270,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 cards=cards,
                 errors=snapshot_errors,
                 output_path=output_path,
+                content_profile=content_profile,
             )
         except Exception:
             logger.exception("failed to persist failure snapshot")
@@ -494,6 +539,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             cards=cards,
             errors=errors,
             output_path=output_path,
+            content_profile=content_profile,
         )
 
     return BuildDeckResult(

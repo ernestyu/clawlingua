@@ -15,7 +15,9 @@ from .constants import (
     DEFAULT_DECK_NAME,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_PROMPT_CLOZE,
+    DEFAULT_PROMPT_CLOZE_TEXTBOOK,
     DEFAULT_PROMPT_TRANSLATE,
+    SUPPORTED_CONTENT_PROFILES,
 )
 from .errors import build_error
 from .exit_codes import ExitCode
@@ -71,8 +73,10 @@ class AppConfig(BaseModel):
     translate_llm_temperature: float | None = None
 
     prompt_cloze: Path = DEFAULT_PROMPT_CLOZE
+    prompt_cloze_textbook: Path = DEFAULT_PROMPT_CLOZE_TEXTBOOK
     prompt_translate: Path = DEFAULT_PROMPT_TRANSLATE
     anki_template: Path = DEFAULT_ANKI_TEMPLATE
+    content_profile: str = "general"
 
     output_dir: Path = DEFAULT_OUTPUT_DIR
     log_level: str = "INFO"
@@ -95,6 +99,7 @@ class AppConfig(BaseModel):
         "log_level",
         "tts_provider",
         "cloze_difficulty",
+        "content_profile",
         mode="before",
     )
     @classmethod
@@ -109,6 +114,15 @@ class AppConfig(BaseModel):
         value = (v or "intermediate").strip().lower()
         if value not in {"beginner", "intermediate", "advanced"}:
             raise ValueError("cloze_difficulty must be beginner|intermediate|advanced")
+        return value
+
+    @field_validator("content_profile")
+    @classmethod
+    def _validate_content_profile(cls, v: str) -> str:
+        value = (v or "general").strip().lower()
+        if value not in SUPPORTED_CONTENT_PROFILES:
+            allowed = ", ".join(sorted(SUPPORTED_CONTENT_PROFILES))
+            raise ValueError(f"content_profile must be one of: {allowed}")
         return value
 
     def resolve_path(self, value: Path) -> Path:
@@ -269,10 +283,17 @@ def load_config(
             merged.get("CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE"), None
         ),
         "prompt_cloze": _env_value(merged.get("CLAWLINGUA_PROMPT_CLOZE"), DEFAULT_PROMPT_CLOZE),
+        "prompt_cloze_textbook": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK"),
+            DEFAULT_PROMPT_CLOZE_TEXTBOOK,
+        ),
         "prompt_translate": _env_value(
             merged.get("CLAWLINGUA_PROMPT_TRANSLATE"), DEFAULT_PROMPT_TRANSLATE
         ),
         "anki_template": _env_value(merged.get("CLAWLINGUA_ANKI_TEMPLATE"), DEFAULT_ANKI_TEMPLATE),
+        "content_profile": _env_value(
+            merged.get("CLAWLINGUA_CONTENT_PROFILE"), "general"
+        ),
         "output_dir": _env_value(merged.get("CLAWLINGUA_OUTPUT_DIR"), DEFAULT_OUTPUT_DIR),
         "log_level": _env_value(merged.get("CLAWLINGUA_LOG_LEVEL"), "INFO"),
         "save_intermediate": _env_value(merged.get("CLAWLINGUA_SAVE_INTERMEDIATE"), True),
@@ -299,6 +320,7 @@ def load_config(
 def validate_base_config(cfg: AppConfig) -> None:
     required_paths = [
         ("CLAWLINGUA_PROMPT_CLOZE", cfg.resolve_path(cfg.prompt_cloze)),
+        ("CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK", cfg.resolve_path(cfg.prompt_cloze_textbook)),
         ("CLAWLINGUA_PROMPT_TRANSLATE", cfg.resolve_path(cfg.prompt_translate)),
         ("CLAWLINGUA_ANKI_TEMPLATE", cfg.resolve_path(cfg.anki_template)),
     ]

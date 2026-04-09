@@ -41,6 +41,7 @@ python -m clawlingua.cli init
 - 若当前目录存在 `.env.example` 而没有 `.env`，则复制一份；
 - 检查以下文件是否存在：
   - `./prompts/cloze_contextual.json`
+  - `./prompts/cloze_textbook_examples.json`
   - `./prompts/translate_rewrite.json`
   - `./templates/anki_cloze_default.json`
 
@@ -135,6 +136,9 @@ CLAWLINGUA_LLM_CHUNK_BATCH_SIZE=1
   - 设为 0/留空 → 不限制；
 - `CLOZE_MIN_CHARS` 可以避免“一句两句太短”的 cloze 通过校验。
 
+当 `content_profile=textbook_examples` 时，如果 `CLOZE_MIN_CHARS > 120`
+且未通过 `--cloze-min-chars` 显式覆盖，程序会拒绝执行，避免把教材例句全部过滤掉。
+
 ### 2.5 翻译 LLM（small LLM）
 
 ```env
@@ -151,7 +155,9 @@ CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE=
 ### 2.6 Prompt、模板与输出
 
 ```env
+CLAWLINGUA_CONTENT_PROFILE=general
 CLAWLINGUA_PROMPT_CLOZE=./prompts/cloze_contextual.json
+CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
@@ -160,6 +166,9 @@ CLAWLINGUA_LOG_LEVEL=INFO
 CLAWLINGUA_SAVE_INTERMEDIATE=true
 CLAWLINGUA_DEFAULT_DECK_NAME=ClawLingua Default Deck
 ```
+
+- `CLAWLINGUA_CONTENT_PROFILE=general` 使用 `cloze_contextual.json`。
+- `CLAWLINGUA_CONTENT_PROFILE=textbook_examples` 使用 `cloze_textbook_examples.json`。
 
 ### 2.7 TTS（edge_tts）
 
@@ -223,7 +232,16 @@ CLAWLINGUA_TTS_EDGE_JA_VOICES=ja-JP-NanamiNeural,ja-JP-KeitaNeural,ja-JP-AoiNeur
 
 > 未来可能需要对多个 `c1` 做自动重编号（按出现顺序变成 c1/c2/c3）。
 
-### 3.2 翻译 Prompt (`prompts/translate_rewrite.json`)
+### 3.2 教材例句 Prompt (`prompts/cloze_textbook_examples.json`)
+
+该 prompt 用于 `--content-profile textbook_examples`，适合“词条 + 释义 + 例句”结构。
+核心策略是：
+
+- 忽略词条标题行；
+- 忽略词典式释义行；
+- 只从自然例句里抽取可学习表达并挖空。
+
+### 3.3 翻译 Prompt (`prompts/translate_rewrite.json`)
 
 - 输入：`source_lang`、`target_lang`、`document_title`、`source_url`、`text_original`、`chunk_text`；
 - 输出：JSON 数组，每项包含一个 `translation` 字段：
@@ -264,7 +282,7 @@ python -m clawlingua.cli doctor --env-file .env
 - 检查依赖（edge_tts / genanki / httpx / typer / pypdf）；
 - 校验基础配置（路径、prompt/template）；
 - 检查 LLM（主 + translate）配置与连通性；
-- 检查 cloze 控制参数（max_sentences / min_chars / difficulty / max_per_chunk）；
+- 检查 cloze 控制参数（max_sentences / min_chars / difficulty / max_per_chunk / profile）；
 - 检查 TTS voice 列表。
 
 ### 4.3 `build deck`
@@ -273,10 +291,12 @@ python -m clawlingua.cli doctor --env-file .env
 python -m clawlingua.cli build deck INPUT \
   --source-lang en \
   --target-lang zh \
+  --content-profile general|textbook_examples \
   --env-file .env \
   --output deck.apkg \
   --deck-name "My Cloze Deck" \
   --max-chars 1500 \
+  --cloze-min-chars 60 \
   --max-notes 200 \
   --temperature 0.2 \
   --difficulty beginner|intermediate|advanced \
@@ -286,8 +306,11 @@ python -m clawlingua.cli build deck INPUT \
 ```
 
 - `INPUT`：本地文件路径（支持 `.txt` / `.md` / `.epub` / `.pdf`）；
+- `--content-profile`：切换内容策略（`general` 或 `textbook_examples`）；
 - `--difficulty`：覆盖 env 中的 `CLOZE_DIFFICULTY`；
 - `--max-chars`：覆盖当前 run 的 `CHUNK_MAX_CHARS`；
+- `--cloze-min-chars`：覆盖当前 run 的 `CLOZE_MIN_CHARS`；
+- `textbook_examples` 模式下，若 env 的 `CLOZE_MIN_CHARS > 120` 且未 CLI 覆盖，会直接拒绝执行；
 - `--max-notes`：对整套牌组做全局上限；
 - `--save-intermediate`：将中间结果保存到 `OUTPUT_DIR/runs/<run_id>`；
 - `--continue-on-error`：遇到单条失败时跳过、记录错误，而不是直接退出；
@@ -297,6 +320,7 @@ python -m clawlingua.cli build deck INPUT \
 
 ```bash
 python -m clawlingua.cli prompt validate ./prompts/cloze_contextual.json
+python -m clawlingua.cli prompt validate ./prompts/cloze_textbook_examples.json
 ```
 
 对 prompt 文件做 schema 校验（字段是否齐全、类型是否正确）。

@@ -43,6 +43,7 @@ python -m clawlingua.cli init
 - create `.env` from `.env.example` (if missing)
 - verify that the default prompts and template exist:
   - `./prompts/cloze_contextual.json`
+  - `./prompts/cloze_textbook_examples.json`
   - `./prompts/translate_rewrite.json`
   - `./templates/anki_cloze_default.json`
 
@@ -136,6 +137,9 @@ CLAWLINGUA_LLM_CHUNK_BATCH_SIZE=1
   dedupe; set to `0` or empty to disable.
 - Difficulty is a prompt parameter used to adjust how “aggressive” clozes are.
 
+For `content_profile=textbook_examples`, if `CLOZE_MIN_CHARS` is above 120
+and you do not override with `--cloze-min-chars`, the run is rejected.
+
 ### 2.5 Translation LLM (small LLM)
 
 ```env
@@ -153,7 +157,9 @@ CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE=
 ### 2.6 Prompts, templates, output
 
 ```env
+CLAWLINGUA_CONTENT_PROFILE=general
 CLAWLINGUA_PROMPT_CLOZE=./prompts/cloze_contextual.json
+CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
@@ -162,6 +168,9 @@ CLAWLINGUA_LOG_LEVEL=INFO
 CLAWLINGUA_SAVE_INTERMEDIATE=true
 CLAWLINGUA_DEFAULT_DECK_NAME=ClawLingua Default Deck
 ```
+
+- `CLAWLINGUA_CONTENT_PROFILE=general` uses `cloze_contextual.json`.
+- `CLAWLINGUA_CONTENT_PROFILE=textbook_examples` uses `cloze_textbook_examples.json`.
 
 ### 2.7 TTS (edge_tts)
 
@@ -226,7 +235,16 @@ The validator further:
 > NOTE: future work may include renumbering multiple `c1` occurrences to `c1`,
 > `c2`, `c3` in order of appearance.
 
-### 3.2 Translation prompt: `prompts/translate_rewrite.json`
+### 3.2 Textbook prompt: `prompts/cloze_textbook_examples.json`
+
+Use this with `--content-profile textbook_examples` for textbook-style entries
+that mix headwords, definitions, and example sentences. The prompt is tuned to:
+
+- ignore standalone headword/title lines;
+- ignore dictionary-style definition lines;
+- extract cloze candidates only from natural example sentences.
+
+### 3.3 Translation prompt: `prompts/translate_rewrite.json`
 
 The translation prompt expects the LLM to return a JSON array of:
 
@@ -275,7 +293,7 @@ Performs a series of checks:
 - primary LLM connectivity (`CLAWLINGUA_LLM_*`)
 - translation LLM config & connectivity (`CLAWLINGUA_TRANSLATE_LLM_*`)
 - output directory writability
-- cloze control summary (max_sentences / min_chars / difficulty / max_per_chunk)
+- cloze control summary (max_sentences / min_chars / difficulty / max_per_chunk / profile)
 - TTS voices for `default_source_lang`
 
 ### 4.3 `build deck`
@@ -286,11 +304,13 @@ Core command:
 python -m clawlingua.cli build deck INPUT \
   --source-lang en \
   --target-lang zh \
+  --content-profile general|textbook_examples \
   --input-char-limit 4000 \
   --env-file .env \
   --output deck.apkg \
   --deck-name "My Cloze Deck" \
   --max-chars 1500 \
+  --cloze-min-chars 60 \
   --max-notes 200 \
   --temperature 0.2 \
   --difficulty beginner|intermediate|advanced \
@@ -303,9 +323,13 @@ Where:
 
 - `INPUT`: path to `.txt`/`.md`/`.epub`/`.pdf` file.
 - `--source-lang` / `--target-lang` override defaults from env.
+- `--content-profile` switches prompt policy (`general` or `textbook_examples`).
 - `--input-char-limit` lets you process only the first N characters for quick tests.
 - `--difficulty` overrides `CLAWLINGUA_CLOZE_DIFFICULTY`.
 - `--max-chars` overrides `CLAWLINGUA_CHUNK_MAX_CHARS` for this run.
+- `--cloze-min-chars` overrides `CLAWLINGUA_CLOZE_MIN_CHARS` for this run.
+- In `textbook_examples` profile, runs are rejected when env `CLOZE_MIN_CHARS > 120`
+  unless you explicitly provide `--cloze-min-chars`.
 - `--max-notes` imposes a global cap on number of notes.
 - `--save-intermediate` dumps intermediates under `CLAWLINGUA_OUTPUT_DIR/runs/<run_id>`.
 - `--continue-on-error` logs and skips individual failures instead of aborting.
@@ -315,6 +339,7 @@ Where:
 
 ```bash
 python -m clawlingua.cli prompt validate ./prompts/cloze_contextual.json
+python -m clawlingua.cli prompt validate ./prompts/cloze_textbook_examples.json
 ```
 
 Validates a prompt file against the expected JSON schema (see
