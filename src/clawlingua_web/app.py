@@ -17,8 +17,13 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import gradio as gr
+from dotenv import dotenv_values
 
-from clawlingua.config import load_config
+from clawlingua.config import (
+    load_config,
+    validate_base_config,
+    validate_runtime_config,
+)
 from clawlingua.pipeline.build_deck import BuildDeckOptions, run_build_deck
 from clawlingua.logger import setup_logging
 
@@ -40,6 +45,134 @@ def _load_app_config() -> Any:
     cfg = load_config(env_file=env_file)
     setup_logging(cfg.log_level, log_dir=cfg.log_dir)
     return cfg
+
+
+# Keys that the Config tab allows editing. These map directly to
+# CLAWLINGUA_* environment variables used by AppConfig.
+_EDITABLE_ENV_KEYS = [
+    # Defaults / language
+    "CLAWLINGUA_DEFAULT_SOURCE_LANG",
+    "CLAWLINGUA_DEFAULT_TARGET_LANG",
+    # LLM (primary)
+    "CLAWLINGUA_LLM_BASE_URL",
+    "CLAWLINGUA_LLM_API_KEY",
+    "CLAWLINGUA_LLM_MODEL",
+    "CLAWLINGUA_LLM_TIMEOUT_SECONDS",
+    "CLAWLINGUA_LLM_MAX_RETRIES",
+    "CLAWLINGUA_LLM_RETRY_BACKOFF_SECONDS",
+    "CLAWLINGUA_LLM_REQUEST_SLEEP_SECONDS",
+    "CLAWLINGUA_LLM_TEMPERATURE",
+    # Translation LLM
+    "CLAWLINGUA_TRANSLATE_LLM_BASE_URL",
+    "CLAWLINGUA_TRANSLATE_LLM_API_KEY",
+    "CLAWLINGUA_TRANSLATE_LLM_MODEL",
+    "CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE",
+    # Chunk & cloze
+    "CLAWLINGUA_CHUNK_MAX_CHARS",
+    "CLAWLINGUA_CHUNK_MIN_CHARS",
+    "CLAWLINGUA_CHUNK_OVERLAP_SENTENCES",
+    "CLAWLINGUA_CLOZE_MAX_SENTENCES",
+    "CLAWLINGUA_CLOZE_MIN_CHARS",
+    "CLAWLINGUA_CLOZE_MAX_PER_CHUNK",
+    "CLAWLINGUA_LLM_CHUNK_BATCH_SIZE",
+    "CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS",
+    "CLAWLINGUA_CONTENT_PROFILE",
+    "CLAWLINGUA_CLOZE_DIFFICULTY",
+    # Paths & defaults
+    "CLAWLINGUA_OUTPUT_DIR",
+    "CLAWLINGUA_EXPORT_DIR",
+    "CLAWLINGUA_LOG_DIR",
+    "CLAWLINGUA_DEFAULT_DECK_NAME",
+    # TTS (common voices)
+    "CLAWLINGUA_TTS_EDGE_EN_VOICES",
+    "CLAWLINGUA_TTS_EDGE_ZH_VOICES",
+    "CLAWLINGUA_TTS_EDGE_JA_VOICES",
+]
+
+
+def _load_env_view(cfg: Any, env_file: Optional[Path]) -> Dict[str, str]:
+    """Build a view of config values for the Config tab.
+
+    Preference order per key:
+    - If key is present in .env, use its string value
+    - Otherwise, fall back to AppConfig attribute when possible
+    - Otherwise, empty string
+    """
+
+    file_values: Dict[str, str] = {}
+    if env_file is not None and env_file.exists():
+        for k, v in dotenv_values(env_file).items():
+            if v is not None:
+                file_values[k] = str(v)
+
+    view: Dict[str, str] = {}
+    for key in _EDITABLE_ENV_KEYS:
+        if key in file_values:
+            view[key] = file_values[key]
+            continue
+        # Fallback: derive from cfg when possible.
+        attr_name = key.removeprefix("CLAWLINGUA_").lower()
+        if hasattr(cfg, attr_name):
+            value = getattr(cfg, attr_name)
+            view[key] = "" if value is None else str(value)
+        else:
+            view[key] = ""
+    return view
+
+
+def _save_env(updated: Dict[str, str]) -> str:
+    """Persist selected config values back to .env and validate.
+
+    Behavior:
+    - Only CLAWLINGUA_* keys in _EDITABLE_ENV_KEYS are modified.
+    - Other keys in existing .env are preserved as-is.
+    - Empty string means "remove from .env" so defaults apply.
+    - On validation failure, the original .env content is restored.
+    """
+
+    env_file = _resolve_env_file() or Path(".env").resolve()
+    original_text: Optional[str] = None
+    if env_file.exists():
+        original_text = env_file.read_text(encoding="utf-8")
+        current = {k: v for k, v in dotenv_values(env_file).items() if v is not None}
+    else:
+        current = {}
+
+    # Preserve non-editable keys
+    new_env: Dict[str, str] = {
+        k: str(v) for k, v in current.items() if k not in _EDITABLE_ENV_KEYS
+    }
+
+    # Apply edits
+    for key in _EDITABLE_ENV_KEYS:
+        val = updated.get(key)
+        if val is None:
+            continue
+        val_str = str(val).strip()
+        if val_str == "":
+            # Empty string => drop from .env so defaults apply
+            new_env.pop(key, None)
+        else:
+            new_env[key] = val_str
+
+    # Write new .env content (simple KEY=VALUE lines, no comments)
+    lines = [f"{k}={v}\n" for k, v in sorted(new_env.items())]
+    env_file.write_text("".join(lines), encoding="utf-8")
+
+    # Validate new config
+    try:
+        cfg = load_config(env_file=env_file)
+        validate_base_config(cfg)
+        validate_runtime_config(cfg)
+    except Exception as exc:  # pragma: no cover - defensive
+        # Roll back on failure
+        if original_text is not None:
+            env_file.write_text(original_text, encoding="utf-8")
+        else:
+            env_file.unlink(missing_ok=True)
+        return f"❌ Failed to save config: {exc}"
+
+    return "✅ Config saved and validated."
 
 
 def _run_single_build(
@@ -253,13 +386,161 @@ def build_interface() -> gr.Blocks:
             )
 
         with gr.Tab("Config"):
-            gr.Markdown(
-                """### Config (read-only placeholder)
+            gr.Markdown("### Config (.env editor)")
+            env_file = _resolve_env_file()
+            cfg_view = _load_env_view(cfg, env_file)
 
-                This tab is reserved for future work to edit `.env` values
-                directly from the browser. For now, please edit `.env`
-                manually or use `clawlingua config show/validate`.
-                """
+            with gr.Accordion("LLM (primary)", open=True):
+                llm_base_url = gr.Textbox(
+                    label="CLAWLINGUA_LLM_BASE_URL",
+                    value=cfg_view.get("CLAWLINGUA_LLM_BASE_URL", ""),
+                )
+                llm_api_key = gr.Textbox(
+                    label="CLAWLINGUA_LLM_API_KEY",
+                    value=cfg_view.get("CLAWLINGUA_LLM_API_KEY", ""),
+                    type="password",
+                )
+                llm_model = gr.Textbox(
+                    label="CLAWLINGUA_LLM_MODEL",
+                    value=cfg_view.get("CLAWLINGUA_LLM_MODEL", ""),
+                )
+                llm_timeout = gr.Textbox(
+                    label="CLAWLINGUA_LLM_TIMEOUT_SECONDS",
+                    value=cfg_view.get("CLAWLINGUA_LLM_TIMEOUT_SECONDS", "120"),
+                )
+                llm_temperature_env = gr.Textbox(
+                    label="CLAWLINGUA_LLM_TEMPERATURE",
+                    value=cfg_view.get("CLAWLINGUA_LLM_TEMPERATURE", "0.2"),
+                )
+
+            with gr.Accordion("Translation LLM", open=False):
+                translate_base_url = gr.Textbox(
+                    label="CLAWLINGUA_TRANSLATE_LLM_BASE_URL",
+                    value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_BASE_URL", ""),
+                )
+                translate_api_key = gr.Textbox(
+                    label="CLAWLINGUA_TRANSLATE_LLM_API_KEY",
+                    value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_API_KEY", ""),
+                    type="password",
+                )
+                translate_model = gr.Textbox(
+                    label="CLAWLINGUA_TRANSLATE_LLM_MODEL",
+                    value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_MODEL", ""),
+                )
+
+            with gr.Accordion("Chunk & Cloze", open=False):
+                chunk_max_chars_env = gr.Textbox(
+                    label="CLAWLINGUA_CHUNK_MAX_CHARS",
+                    value=cfg_view.get("CLAWLINGUA_CHUNK_MAX_CHARS", "1800"),
+                )
+                chunk_min_chars_env = gr.Textbox(
+                    label="CLAWLINGUA_CHUNK_MIN_CHARS",
+                    value=cfg_view.get("CLAWLINGUA_CHUNK_MIN_CHARS", "120"),
+                )
+                cloze_min_chars_env = gr.Textbox(
+                    label="CLAWLINGUA_CLOZE_MIN_CHARS",
+                    value=cfg_view.get("CLAWLINGUA_CLOZE_MIN_CHARS", "0"),
+                )
+                cloze_max_per_chunk_env = gr.Textbox(
+                    label="CLAWLINGUA_CLOZE_MAX_PER_CHUNK",
+                    value=cfg_view.get("CLAWLINGUA_CLOZE_MAX_PER_CHUNK", ""),
+                )
+                content_profile_env = gr.Textbox(
+                    label="CLAWLINGUA_CONTENT_PROFILE",
+                    value=cfg_view.get("CLAWLINGUA_CONTENT_PROFILE", "general"),
+                )
+                cloze_difficulty_env = gr.Textbox(
+                    label="CLAWLINGUA_CLOZE_DIFFICULTY",
+                    value=cfg_view.get("CLAWLINGUA_CLOZE_DIFFICULTY", "intermediate"),
+                )
+
+            with gr.Accordion("Paths & defaults", open=False):
+                output_dir_env = gr.Textbox(
+                    label="CLAWLINGUA_OUTPUT_DIR",
+                    value=cfg_view.get("CLAWLINGUA_OUTPUT_DIR", "./runs"),
+                )
+                export_dir_env = gr.Textbox(
+                    label="CLAWLINGUA_EXPORT_DIR",
+                    value=cfg_view.get("CLAWLINGUA_EXPORT_DIR", "./outputs"),
+                )
+                log_dir_env = gr.Textbox(
+                    label="CLAWLINGUA_LOG_DIR",
+                    value=cfg_view.get("CLAWLINGUA_LOG_DIR", "./logs"),
+                )
+                default_deck_name_env = gr.Textbox(
+                    label="CLAWLINGUA_DEFAULT_DECK_NAME",
+                    value=cfg_view.get("CLAWLINGUA_DEFAULT_DECK_NAME", cfg.default_deck_name),
+                )
+
+            save_config_btn = gr.Button("Save config")
+            save_config_status = gr.Markdown()
+
+            def _on_save_config(
+                llm_base_url_val,
+                llm_api_key_val,
+                llm_model_val,
+                llm_timeout_val,
+                llm_temperature_val,
+                translate_base_url_val,
+                translate_api_key_val,
+                translate_model_val,
+                chunk_max_chars_val,
+                chunk_min_chars_val,
+                cloze_min_chars_val,
+                cloze_max_per_chunk_val,
+                content_profile_val,
+                cloze_difficulty_val,
+                output_dir_val,
+                export_dir_val,
+                log_dir_val,
+                default_deck_name_val,
+            ):
+                updated = {
+                    "CLAWLINGUA_LLM_BASE_URL": llm_base_url_val or "",
+                    "CLAWLINGUA_LLM_API_KEY": llm_api_key_val or "",
+                    "CLAWLINGUA_LLM_MODEL": llm_model_val or "",
+                    "CLAWLINGUA_LLM_TIMEOUT_SECONDS": llm_timeout_val or "",
+                    "CLAWLINGUA_LLM_TEMPERATURE": llm_temperature_val or "",
+                    "CLAWLINGUA_TRANSLATE_LLM_BASE_URL": translate_base_url_val or "",
+                    "CLAWLINGUA_TRANSLATE_LLM_API_KEY": translate_api_key_val or "",
+                    "CLAWLINGUA_TRANSLATE_LLM_MODEL": translate_model_val or "",
+                    "CLAWLINGUA_CHUNK_MAX_CHARS": chunk_max_chars_val or "",
+                    "CLAWLINGUA_CHUNK_MIN_CHARS": chunk_min_chars_val or "",
+                    "CLAWLINGUA_CLOZE_MIN_CHARS": cloze_min_chars_val or "",
+                    "CLAWLINGUA_CLOZE_MAX_PER_CHUNK": cloze_max_per_chunk_val or "",
+                    "CLAWLINGUA_CONTENT_PROFILE": content_profile_val or "",
+                    "CLAWLINGUA_CLOZE_DIFFICULTY": cloze_difficulty_val or "",
+                    "CLAWLINGUA_OUTPUT_DIR": output_dir_val or "",
+                    "CLAWLINGUA_EXPORT_DIR": export_dir_val or "",
+                    "CLAWLINGUA_LOG_DIR": log_dir_val or "",
+                    "CLAWLINGUA_DEFAULT_DECK_NAME": default_deck_name_val or "",
+                }
+                msg = _save_env(updated)
+                return msg
+
+            save_config_btn.click(
+                _on_save_config,
+                inputs=[
+                    llm_base_url,
+                    llm_api_key,
+                    llm_model,
+                    llm_timeout,
+                    llm_temperature_env,
+                    translate_base_url,
+                    translate_api_key,
+                    translate_model,
+                    chunk_max_chars_env,
+                    chunk_min_chars_env,
+                    cloze_min_chars_env,
+                    cloze_max_per_chunk_env,
+                    content_profile_env,
+                    cloze_difficulty_env,
+                    output_dir_env,
+                    export_dir_env,
+                    log_dir_env,
+                    default_deck_name_env,
+                ],
+                outputs=[save_config_status],
             )
 
     return demo
