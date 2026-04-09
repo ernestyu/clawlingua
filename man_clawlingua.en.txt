@@ -1,0 +1,141 @@
+clawlingua(1) -- Build Anki cloze decks from local text/EPUB files
+
+SYNOPSIS
+    python -m clawlingua.cli COMMAND [OPTIONS]
+
+DESCRIPTION
+    ClawLingua converts real-world text (podcast transcripts, articles,
+    textbook examples) into Anki cloze decks (.apkg).
+
+    Input is a local .txt/.md/.epub file. Web/URL fetching should be
+    handled upstream (e.g. by clawfetch), producing Markdown or plain
+    text for ClawLingua.
+
+COMMANDS
+    init
+        Initialize runtime files.
+
+        - create .env from .env.example if missing
+        - verify prompts/templates exist:
+          ./prompts/cloze_contextual.json
+          ./prompts/cloze_textbook_examples.json
+          ./prompts/translate_rewrite.json
+          ./templates/anki_cloze_default.json
+
+    doctor
+        Check dependencies, config, prompts, LLM connectivity, TTS, and
+        output directory.
+
+        Usage:
+            python -m clawlingua.cli doctor [--env-file FILE]
+
+    build deck
+        Build an Anki .apkg from a local file.
+
+        Usage:
+            python -m clawlingua.cli build deck INPUT \
+              --source-lang CODE \
+              --target-lang CODE \
+              [--content-profile general|textbook_examples] \
+              [--input-char-limit N] \
+              [--env-file FILE] \
+              [--output PATH] \
+              [--deck-name NAME] \
+              [--max-chars N] \
+              [--cloze-min-chars N] \
+              [--max-notes N] \
+              [--temperature FLOAT] \
+              [--difficulty beginner|intermediate|advanced] \
+              [--save-intermediate/--no-save-intermediate] \
+              [--continue-on-error] \
+              [--debug]
+
+        INPUT
+            Path to .txt/.md/.epub file.
+
+        OPTIONS
+            --source-lang
+                Override source language (default from env).
+
+            --target-lang
+                Override target language (default from env).
+
+            --content-profile
+                Content profile. Supported values:
+                    general
+                        Generic contextual content.
+                    textbook_examples
+                        Textbook-style examples; uses
+                        prompts/cloze_textbook_examples.json and enforces
+                        a shorter CLOZE_MIN_CHARS.
+
+            --input-char-limit
+                Only process the first N characters of input. Useful for
+                quick test runs (e.g. --input-char-limit 4000).
+
+            --env-file
+                Path to .env file. If omitted, default resolution logic is used.
+
+            --output
+                Output .apkg path. Defaults to runs/<run_id>/output.apkg.
+
+            --deck-name
+                Override Anki deck name. Defaults to CLAWLINGUA_DEFAULT_DECK_NAME
+                or the input file stem.
+
+            --max-chars
+                Override CLAWLINGUA_CHUNK_MAX_CHARS for this run.
+
+            --cloze-min-chars
+                Override CLAWLINGUA_CLOZE_MIN_CHARS for this run.
+
+            --max-notes
+                Limit total number of exported notes.
+
+            --temperature
+                LLM temperature (overrides env).
+
+            --difficulty
+                Override CLAWLINGUA_CLOZE_DIFFICULTY. Supported values:
+                    beginner | intermediate | advanced.
+
+            --save-intermediate / --no-save-intermediate
+                Enable/disable dumping intermediate JSONL files under
+                CLAWLINGUA_OUTPUT_DIR/runs/<run_id>.
+
+            --continue-on-error
+                Continue on individual cloze/translation/TTS errors and
+                record them in errors.jsonl instead of aborting.
+
+            --debug
+                Re-raise internal exceptions with full traceback.
+
+    prompt validate
+        Validate a prompt JSON file against the expected schema.
+
+        Usage:
+            python -m clawlingua.cli prompt validate PATH
+
+    config show
+        Show merged runtime configuration as JSON.
+
+        Usage:
+            python -m clawlingua.cli config show [--env-file FILE]
+
+    config validate
+        Validate configuration without building a deck.
+
+        Usage:
+            python -m clawlingua.cli config validate [--env-file FILE]
+
+ENVIRONMENT
+    CLAWLINGUA_LLM_*             OpenAI-compatible LLM configuration
+    CLAWLINGUA_TRANSLATE_LLM_*   Optional small LLM for translation
+    CLAWLINGUA_CHUNK_*           Chunking controls
+    CLAWLINGUA_CLOZE_*           Cloze-level controls
+    CLAWLINGUA_CONTENT_PROFILE   Default content profile
+    CLAWLINGUA_TTS_*             TTS provider and voice lists
+    CLAWLINGUA_OUTPUT_DIR        Output directory for runs
+
+SEE ALSO
+    README.md, README_zh.md, ENV_EXAMPLE.md
