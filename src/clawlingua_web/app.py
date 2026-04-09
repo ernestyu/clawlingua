@@ -38,6 +38,8 @@ logger = logging.getLogger("clawlingua.web")
 
 _SUPPORTED_UI_LANGS = {"en", "zh"}
 _ENV_LINE_RE = re.compile(r"^\s*(CLAWLINGUA_[A-Z0-9_]+)\s*=\s*(.*)\s*$")
+_PROMPT_DEFAULTS_FILE = Path("./prompts/user_prompt_overrides.json")
+_PROMPT_DEFAULTS_VERSION = 1
 _ZH_I18N = {
     "UI language": "\u754c\u9762\u8bed\u8a00",
     "Run": "\u8fd0\u884c",
@@ -109,19 +111,24 @@ _ZH_I18N = {
     "Found models": "\u6a21\u578b\u5217\u8868",
     "No model ids found in `data`.": "`data` \u4e2d\u672a\u627e\u5230\u6a21\u578b id\u3002",
     "Connectivity OK": "\u8fde\u901a\u6027\u6b63\u5e38",
-    "### Prompt JSON editor": "### Prompt JSON \u7f16\u8f91\u5668",
+    "### Prompt template editor": "### Prompt \u6a21\u677f\u7f16\u8f91\u5668",
     "Prompt file": "Prompt \u6587\u4ef6",
-    "Prompt JSON": "Prompt JSON \u5185\u5bb9",
-    "Validate": "\u6821\u9a8c",
+    "Prompt template": "Prompt \u6a21\u677f",
     "Save": "\u4fdd\u5b58",
+    "Load default": "\u8f7d\u5165\u9ed8\u8ba4",
     "Prompt status": "Prompt \u72b6\u6001",
-    "Prompt JSON is empty.": "Prompt JSON \u4e3a\u7a7a\u3002",
-    "JSON parse error": "JSON \u89e3\u6790\u9519\u8bef",
+    "Prompt template is empty.": "Prompt \u6a21\u677f\u4e3a\u7a7a\u3002",
+    "Prompt defaults file missing.": "Prompt \u9ed8\u8ba4\u6a21\u677f\u6587\u4ef6\u4e0d\u5b58\u5728\u3002",
+    "Prompt defaults file invalid.": "Prompt \u9ed8\u8ba4\u6a21\u677f\u6587\u4ef6\u683c\u5f0f\u65e0\u6548\u3002",
+    "Unsupported prompt defaults version.": "Prompt \u9ed8\u8ba4\u6a21\u677f\u7248\u672c\u4e0d\u53d7\u652f\u6301\u3002",
+    "Default template not found.": "\u672a\u627e\u5230\u5f53\u524d\u63d0\u793a\u8bcd\u7684\u9ed8\u8ba4\u6a21\u677f\u3002",
+    "Prompt file JSON parse error": "Prompt \u6587\u4ef6 JSON \u89e3\u6790\u5931\u8d25",
     "Schema validation failed": "Schema \u6821\u9a8c\u5931\u8d25",
-    "Prompt valid.": "Prompt \u6821\u9a8c\u901a\u8fc7\u3002",
     "Failed to load prompt file": "\u52a0\u8f7d prompt \u6587\u4ef6\u5931\u8d25",
+    "Failed to save prompt file": "\u4fdd\u5b58 prompt \u6587\u4ef6\u5931\u8d25",
     "Not saved because validation failed.": "\u672a\u4fdd\u5b58\uff1a\u6821\u9a8c\u672a\u901a\u8fc7\u3002",
-    "Prompt saved.": "Prompt \u5df2\u4fdd\u5b58\u3002",
+    "Prompt template saved.": "Prompt \u6a21\u677f\u5df2\u4fdd\u5b58\u3002",
+    "Prompt template restored from default.": "\u5df2\u4ece\u9ed8\u8ba4\u6a21\u677f\u8fd8\u539f Prompt\u3002",
     "Backup created": "\u5df2\u521b\u5efa\u5907\u4efd",
 }
 
@@ -457,11 +464,14 @@ def _run_single_build_v2(
     temperature: float | None,
     save_intermediate: bool,
     continue_on_error: bool,
+    prompt_lang: str | None = None,
 ) -> Dict[str, Any]:
     if uploaded_file is None:
         return {"status": "error", "message": "No input file provided."}
 
     cfg = _load_app_config()
+    if prompt_lang:
+        cfg.prompt_lang = _normalize_ui_lang(prompt_lang)
     workspace_root = cfg.workspace_root
     tmp_dir = (workspace_root / "tmp").resolve()
     try:
@@ -661,14 +671,73 @@ def _prompt_choices(lang: str) -> list[tuple[str, str]]:
     ]
 
 
-def _load_prompt_text(prompt_key: str, prompt_files: dict[str, Path], *, lang: str) -> tuple[str, str]:
+def _prompt_defaults_path(cfg: Any) -> Path:
+    return cfg.resolve_path(_PROMPT_DEFAULTS_FILE)
+
+
+def _read_prompt_payload(
+    prompt_key: str,
+    prompt_files: dict[str, Path],
+    *,
+    lang: str,
+) -> tuple[Path | None, dict[str, Any] | None, str]:
     path = prompt_files.get(prompt_key)
     if path is None:
-        return "", f"❌ {_tr(lang, 'Failed to load prompt file', '加载 prompt 文件失败')}: `{prompt_key}`"
+        return None, None, f"❌ {_tr(lang, 'Failed to load prompt file', '加载 prompt 文件失败')}: `{prompt_key}`"
     try:
-        return path.read_text(encoding="utf-8"), ""
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return (
+            path,
+            None,
+            f"❌ {_tr(lang, 'Prompt file JSON parse error', 'Prompt 文件 JSON 解析失败')}: {exc.msg} (line {exc.lineno}, col {exc.colno})",
+        )
     except Exception as exc:
-        return "", f"❌ {_tr(lang, 'Failed to load prompt file', '加载 prompt 文件失败')}: `{exc}`"
+        return None, None, f"❌ {_tr(lang, 'Failed to load prompt file', '加载 prompt 文件失败')}: `{exc}`"
+    if not isinstance(payload, dict):
+        return (
+            path,
+            None,
+            f"❌ {_tr(lang, 'Prompt file JSON parse error', 'Prompt 文件 JSON 解析失败')}: root must be a JSON object.",
+        )
+    return path, payload, ""
+
+
+def _resolve_template_for_lang(value: Any, *, lang: str) -> str:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return ""
+
+    order = [lang, "zh", "en"]
+    seen: set[str] = set()
+    for key in order:
+        if key in seen:
+            continue
+        seen.add(key)
+        text = value.get(key)
+        if isinstance(text, str) and text.strip():
+            return text
+    for text in value.values():
+        if isinstance(text, str) and text.strip():
+            return text
+    return ""
+
+
+def _load_prompt_template(
+    prompt_key: str,
+    prompt_files: dict[str, Path],
+    *,
+    lang: str,
+) -> tuple[str, str]:
+    _path, payload, msg = _read_prompt_payload(prompt_key, prompt_files, lang=lang)
+    if payload is None:
+        return "", msg
+    ok, validation_msg = _validate_prompt_payload(payload, lang=lang)
+    if not ok:
+        return "", validation_msg
+    template = _resolve_template_for_lang(payload.get("user_prompt_template"), lang=lang)
+    return template, ""
 
 
 def _format_prompt_validation_error(exc: ValidationError) -> str:
@@ -683,19 +752,100 @@ def _format_prompt_validation_error(exc: ValidationError) -> str:
     return "\n".join(lines)
 
 
-def _validate_prompt_json(prompt_json: str, *, lang: str) -> tuple[bool, str]:
-    content = (prompt_json or "").strip()
-    if not content:
-        return False, f"❌ {_tr(lang, 'Prompt JSON is empty.', 'Prompt JSON 为空。')}"
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError as exc:
-        return False, f"❌ {_tr(lang, 'JSON parse error', 'JSON 解析错误')}: {exc.msg} (line {exc.lineno}, col {exc.colno})"
+def _validate_prompt_payload(payload: dict[str, Any], *, lang: str) -> tuple[bool, str]:
     try:
         PromptSpec.model_validate(payload)
     except ValidationError as exc:
         return False, f"❌ {_tr(lang, 'Schema validation failed', 'Schema 校验失败')}\n\n{_format_prompt_validation_error(exc)}"
-    return True, f"✅ {_tr(lang, 'Prompt valid.', 'Prompt 校验通过。')}"
+    return True, ""
+
+
+def _set_user_prompt_template(payload: dict[str, Any], *, lang: str, template: str) -> None:
+    current = payload.get("user_prompt_template")
+    mapping: dict[str, str] = {}
+    if isinstance(current, str):
+        text = current.strip()
+        if text:
+            mapping["en"] = text
+            mapping["zh"] = text
+    elif isinstance(current, dict):
+        for key, value in current.items():
+            if isinstance(value, str) and value.strip():
+                mapping[str(key)] = value
+
+    mapping[lang] = template
+    if "en" not in mapping and "zh" in mapping:
+        mapping["en"] = mapping["zh"]
+    if "zh" not in mapping and "en" in mapping:
+        mapping["zh"] = mapping["en"]
+    payload["user_prompt_template"] = mapping
+
+
+def _write_prompt_payload(path: Path, payload: dict[str, Any], *, lang: str) -> tuple[bool, str]:
+    ok, msg = _validate_prompt_payload(payload, lang=lang)
+    if not ok:
+        return False, f"{msg}\n\n⚠️ {_tr(lang, 'Not saved because validation failed.', '未保存：校验未通过。')}"
+    backup = path.with_suffix(path.suffix + ".bak")
+    try:
+        if path.exists():
+            shutil.copyfile(path, backup)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception as exc:
+        return False, f"❌ {_tr(lang, 'Failed to save prompt file', '保存 prompt 文件失败')}: `{exc}`"
+    return True, f"- file: `{path}`\n- {_tr(lang, 'Backup created', '已创建备份')}: `{backup}`"
+
+
+def _load_prompt_defaults(
+    defaults_path: Path,
+    *,
+    lang: str,
+) -> tuple[dict[str, Any] | None, str]:
+    if not defaults_path.exists():
+        return None, f"❌ {_tr(lang, 'Prompt defaults file missing.', 'Prompt 默认模板文件不存在。')}: `{defaults_path}`"
+    try:
+        payload = json.loads(defaults_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return (
+            None,
+            f"❌ {_tr(lang, 'Prompt defaults file invalid.', 'Prompt 默认模板文件格式无效。')}: {exc.msg} (line {exc.lineno}, col {exc.colno})",
+        )
+    except Exception as exc:
+        return None, f"❌ {_tr(lang, 'Prompt defaults file invalid.', 'Prompt 默认模板文件格式无效。')}: `{exc}`"
+    if not isinstance(payload, dict):
+        return None, f"❌ {_tr(lang, 'Prompt defaults file invalid.', 'Prompt 默认模板文件格式无效。')}"
+    # v1 structure:
+    # {
+    #   "version": 1,
+    #   "templates": { "prompt_key": {"en": "...", "zh": "..."} }
+    # }
+    if "version" in payload or "templates" in payload:
+        version_raw = payload.get("version", _PROMPT_DEFAULTS_VERSION)
+        try:
+            version = int(str(version_raw).strip())
+        except (TypeError, ValueError):
+            return None, f"❌ {_tr(lang, 'Prompt defaults file invalid.', 'Prompt 默认模板文件格式无效。')}"
+        if version != _PROMPT_DEFAULTS_VERSION:
+            return (
+                None,
+                f"❌ {_tr(lang, 'Unsupported prompt defaults version.', 'Prompt 默认模板版本不受支持。')}: `{version}`",
+            )
+        templates = payload.get("templates")
+        if not isinstance(templates, dict):
+            return None, f"❌ {_tr(lang, 'Prompt defaults file invalid.', 'Prompt 默认模板文件格式无效。')}"
+        return templates, ""
+
+    # Legacy structure (no version): { "prompt_key": {"en": "...", "zh": "..."} }
+    return payload, ""
+
+
+def _default_template_for_lang(
+    defaults_payload: dict[str, Any],
+    *,
+    prompt_key: str,
+    lang: str,
+) -> str:
+    entry = defaults_payload.get(prompt_key)
+    return _resolve_template_for_lang(entry, lang=lang)
 
 
 def build_interface() -> gr.Blocks:
@@ -710,9 +860,10 @@ def build_interface() -> gr.Blocks:
     env_file = _resolve_env_file()
     cfg_view = _load_env_view(cfg, env_file)
     prompt_files = _prompt_file_map(cfg)
+    prompt_defaults_file = _prompt_defaults_path(cfg)
     initial_ui_lang = _normalize_ui_lang(getattr(cfg, "prompt_lang", "en"))
     initial_prompt_key = "cloze_contextual" if "cloze_contextual" in prompt_files else next(iter(prompt_files))
-    initial_prompt_text, initial_prompt_status = _load_prompt_text(
+    initial_prompt_text, initial_prompt_status = _load_prompt_template(
         initial_prompt_key, prompt_files, lang=initial_ui_lang
     )
 
@@ -869,6 +1020,7 @@ def build_interface() -> gr.Blocks:
                     temperature=_to_optional_float(temperature_val),
                     save_intermediate=bool(save_inter_val),
                     continue_on_error=bool(continue_on_error_val),
+                    prompt_lang=lang,
                 )
                 if result.get("status") != "ok":
                     msg = result.get("message") or "Unknown error"
@@ -1249,51 +1401,75 @@ def build_interface() -> gr.Blocks:
             )
 
         with gr.Tab(_tr(initial_ui_lang, "Prompt", "提示词")) as prompt_tab:
-            prompt_heading = gr.Markdown(_tr(initial_ui_lang, "### Prompt JSON editor", "### Prompt JSON 编辑器"))
+            prompt_heading = gr.Markdown(_tr(initial_ui_lang, "### Prompt template editor", "### Prompt 模板编辑器"))
             prompt_file_selector = gr.Dropdown(
                 choices=_prompt_choices(initial_ui_lang),
                 value=initial_prompt_key,
                 label=_tr(initial_ui_lang, "Prompt file", "Prompt 文件"),
             )
             prompt_editor = gr.Textbox(
-                label=_tr(initial_ui_lang, "Prompt JSON", "Prompt JSON 内容"),
+                label=_tr(initial_ui_lang, "Prompt template", "Prompt 模板"),
                 value=initial_prompt_text,
                 lines=24,
             )
             with gr.Row():
-                prompt_validate_btn = gr.Button(_tr(initial_ui_lang, "Validate", "校验"))
                 prompt_save_btn = gr.Button(_tr(initial_ui_lang, "Save", "保存"))
+                prompt_load_default_btn = gr.Button(_tr(initial_ui_lang, "Load default", "载入默认"))
             prompt_status = gr.Markdown(
                 label=_tr(initial_ui_lang, "Prompt status", "Prompt 状态"),
                 value=initial_prompt_status,
             )
 
             def _on_prompt_file_change(prompt_key: str, ui_lang_val: str) -> tuple[str, str]:
-                return _load_prompt_text(prompt_key, prompt_files, lang=_normalize_ui_lang(ui_lang_val))
-
-            def _on_prompt_validate(prompt_json: str, ui_lang_val: str) -> str:
-                _ok, msg = _validate_prompt_json(prompt_json, lang=_normalize_ui_lang(ui_lang_val))
-                return msg
-
-            def _on_prompt_save(prompt_key: str, prompt_json: str, ui_lang_val: str) -> str:
                 lang = _normalize_ui_lang(ui_lang_val)
-                ok, msg = _validate_prompt_json(prompt_json, lang=lang)
+                return _load_prompt_template(prompt_key, prompt_files, lang=lang)
+
+            def _on_prompt_save(prompt_key: str, prompt_template: str, ui_lang_val: str) -> str:
+                lang = _normalize_ui_lang(ui_lang_val)
+                raw_template = prompt_template or ""
+                if not raw_template.strip():
+                    return f"❌ {_tr(lang, 'Prompt template is empty.', 'Prompt 模板为空。')}"
+                template = raw_template.rstrip()
+                path, payload, msg = _read_prompt_payload(prompt_key, prompt_files, lang=lang)
+                if payload is None or path is None:
+                    return msg
+                _set_user_prompt_template(payload, lang=lang, template=template)
+                ok, details = _write_prompt_payload(path, payload, lang=lang)
                 if not ok:
-                    return f"{msg}\n\n⚠️ {_tr(lang, 'Not saved because validation failed.', '未保存：校验未通过。')}"
-                target = prompt_files.get(prompt_key)
-                if target is None:
-                    return f"❌ {_tr(lang, 'Failed to load prompt file', '加载 prompt 文件失败')}: `{prompt_key}`"
-                backup = target.with_suffix(target.suffix + ".bak")
-                try:
-                    if target.exists():
-                        shutil.copyfile(target, backup)
-                    target.write_text((prompt_json or "").rstrip() + "\n", encoding="utf-8")
-                except Exception as exc:
-                    return f"❌ {_tr(lang, 'Not saved because validation failed.', '保存失败。')}: `{exc}`"
+                    return details
                 return (
-                    f"✅ {_tr(lang, 'Prompt saved.', 'Prompt 已保存。')}\n\n"
-                    f"- file: `{target}`\n"
-                    f"- {_tr(lang, 'Backup created', '已创建备份')}: `{backup}`"
+                    f"✅ {_tr(lang, 'Prompt template saved.', 'Prompt 模板已保存。')}\n\n"
+                    f"{details}"
+                )
+
+            def _on_prompt_load_default(
+                prompt_key: str,
+                current_template: str,
+                ui_lang_val: str,
+            ) -> tuple[str, str]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                defaults_payload, msg = _load_prompt_defaults(prompt_defaults_file, lang=lang)
+                if defaults_payload is None:
+                    return current_template, msg
+                default_template = _default_template_for_lang(
+                    defaults_payload,
+                    prompt_key=prompt_key,
+                    lang=lang,
+                )
+                if not default_template.strip():
+                    return current_template, f"❌ {_tr(lang, 'Default template not found.', '未找到当前提示词的默认模板。')}"
+                default_template = default_template.rstrip()
+
+                path, payload, load_msg = _read_prompt_payload(prompt_key, prompt_files, lang=lang)
+                if payload is None or path is None:
+                    return current_template, load_msg
+                _set_user_prompt_template(payload, lang=lang, template=default_template)
+                ok, details = _write_prompt_payload(path, payload, lang=lang)
+                if not ok:
+                    return current_template, details
+                return (
+                    default_template,
+                    f"✅ {_tr(lang, 'Prompt template restored from default.', '已从默认模板还原 Prompt。')}\n\n{details}",
                 )
 
             prompt_file_selector.change(
@@ -1301,21 +1477,27 @@ def build_interface() -> gr.Blocks:
                 inputs=[prompt_file_selector, ui_lang],
                 outputs=[prompt_editor, prompt_status],
             )
-            prompt_validate_btn.click(
-                _on_prompt_validate,
-                inputs=[prompt_editor, ui_lang],
-                outputs=[prompt_status],
-            )
             prompt_save_btn.click(
                 _on_prompt_save,
                 inputs=[prompt_file_selector, prompt_editor, ui_lang],
                 outputs=[prompt_status],
             )
+            prompt_load_default_btn.click(
+                _on_prompt_load_default,
+                inputs=[prompt_file_selector, prompt_editor, ui_lang],
+                outputs=[prompt_editor, prompt_status],
+            )
 
         def _on_ui_lang_change(lang_value: str, prompt_lang_current: str, prompt_key_current: str) -> tuple[Any, ...]:
             lang = _normalize_ui_lang(lang_value)
-            prompt_lang_next = (prompt_lang_current or "").strip() or lang
+            _ = prompt_lang_current
+            prompt_lang_next = lang
             prompt_key_next = prompt_key_current if prompt_key_current in prompt_files else initial_prompt_key
+            prompt_template_next, prompt_status_next = _load_prompt_template(
+                prompt_key_next,
+                prompt_files,
+                lang=lang,
+            )
             return (
                 gr.update(label=_tr(lang, "UI language", "界面语言")),
                 gr.update(value=_tr(lang, "# ClawLingua Web UI\nLocal deck builder for text learning.", "# ClawLingua Web UI\n本地化文本学习牌组生成器。")),
@@ -1368,12 +1550,12 @@ def build_interface() -> gr.Blocks:
                 gr.update(info=_tr(lang, "Directory for log files.", "日志目录。")),
                 gr.update(value=_tr(lang, "Load defaults from ENV_EXAMPLE.md", "从 ENV_EXAMPLE.md 载入默认值")),
                 gr.update(value=_tr(lang, "Save config", "保存配置")),
-                gr.update(value=_tr(lang, "### Prompt JSON editor", "### Prompt JSON 编辑器")),
+                gr.update(value=_tr(lang, "### Prompt template editor", "### Prompt 模板编辑器")),
                 gr.update(label=_tr(lang, "Prompt file", "Prompt 文件"), choices=_prompt_choices(lang), value=prompt_key_next),
-                gr.update(label=_tr(lang, "Prompt JSON", "Prompt JSON 内容")),
-                gr.update(value=_tr(lang, "Validate", "校验")),
+                gr.update(label=_tr(lang, "Prompt template", "Prompt 模板"), value=prompt_template_next),
                 gr.update(value=_tr(lang, "Save", "保存")),
-                gr.update(label=_tr(lang, "Prompt status", "Prompt 状态")),
+                gr.update(value=_tr(lang, "Load default", "载入默认")),
+                gr.update(label=_tr(lang, "Prompt status", "Prompt 状态"), value=prompt_status_next),
             )
 
         ui_lang.change(
@@ -1434,8 +1616,8 @@ def build_interface() -> gr.Blocks:
                 prompt_heading,
                 prompt_file_selector,
                 prompt_editor,
-                prompt_validate_btn,
                 prompt_save_btn,
+                prompt_load_default_btn,
                 prompt_status,
             ],
         )

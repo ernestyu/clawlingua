@@ -1,24 +1,28 @@
 {
-  "name": "translate_rewrite",
-  "version": "0.1.0",
-  "description": "Generate learning-oriented translation for Anki Translation field.",
-  "mode": "translate",
-  "system_prompt": "You are a language-learning translator. Output a JSON array only. Do not output explanations or code fences.",
-  "user_prompt_template": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\n\nTranslate ONLY the `text_original` below into the target language.\nNatural translation is preferred; light paraphrasing is allowed.\nDo NOT translate any surrounding context.\n\nYour output MUST be a JSON array. Each item MUST have this shape:\n{{\n  \"translation\": \"final translated text\"\n}}\n\nRequirements:\n1) Translate `text_original` only; do not expand into a long summary.\n2) Keep it natural and idiomatic in the target language.\n3) Do not add prefixes like \"Translation:\".\n4) You may use <b>...</b> for emphasis. Do NOT use Markdown **.\n5) If you cannot translate, return an empty array.\n\ntext_original:\n{text_original}\n\nThe following `chunk_text` is for disambiguation only; do NOT translate it as a whole:\n{chunk_text}",
-  "placeholders": [
-    "source_lang",
-    "target_lang",
-    "document_title",
-    "source_url",
-    "chunk_text",
-    "text_original"
-  ],
-  "output_format": {
-    "type": "json",
-    "schema_name": "translation_cards_v1"
-  },
-  "parser": {
-    "strip_code_fences": true,
-    "expect_json_array": true
-  }
+    "name":  "translate_rewrite",
+    "version":  "0.1.0",
+    "description":  "Generate learning-oriented translation for Anki Translation field.",
+    "mode":  "translate",
+    "system_prompt":  "You are a language-learning translator. Output a JSON array only. Do not output explanations or code fences.",
+    "user_prompt_template":  {
+                                 "en":  "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\n\nTranslate ONLY the `text_original` below into the target language.\nNatural translation is preferred; light paraphrasing is allowed.\nDo NOT translate any surrounding context.\n\nYour output MUST be a JSON array. Each item MUST have this shape:\n{{\n  \"translation\": \"final translated text\"\n}}\n\nRequirements:\n1) Translate `text_original` only; do not expand into a long summary.\n2) Keep it natural and idiomatic in the target language.\n3) Do not add prefixes like \"Translation:\".\n4) You may use \u003cb\u003e...\u003c/b\u003e for emphasis. Do NOT use Markdown **.\n5) If you cannot translate, return an empty array.\n\ntext_original:\n{text_original}\n\nThe following `chunk_text` is for disambiguation only; do NOT translate it as a whole:\n{chunk_text}",
+                                 "zh":  "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\n\n请仅将下面的 `text_original` 翻译为目标语言。\n优先自然表达；允许轻微意译。\n不要翻译任何上下文说明。\n\n输出必须是 JSON 数组。每个元素必须符合以下结构：\n{{\n  \"translation\": \"最终译文\"\n}}\n\n要求：\n1) 只翻译 `text_original`，不要扩展为长摘要。\n2) 译文需自然、地道。\n3) 不要添加如“Translation:”之类的前缀。\n4) 可以使用 \u003cb\u003e...\u003c/b\u003e 强调；不要使用 Markdown **。\n5) 如果无法翻译，返回空数组。\n\ntext_original:\n{text_original}\n\n下面的 `chunk_text` 仅用于消歧；不要整体翻译它：\n{chunk_text}"
+                             },
+    "placeholders":  [
+                         "source_lang",
+                         "target_lang",
+                         "document_title",
+                         "source_url",
+                         "chunk_text",
+                         "text_original"
+                     ],
+    "output_format":  {
+                          "type":  "json",
+                          "schema_name":  "translation_cards_v1"
+                      },
+    "parser":  {
+                   "strip_code_fences":  true,
+                   "expect_json_array":  true
+               }
 }
+
