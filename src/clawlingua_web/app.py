@@ -13,22 +13,117 @@ This will start a Gradio app bound to 127.0.0.1.
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
+import re
+import shutil
 from typing import Any, Dict, Optional
 
 import gradio as gr
+import httpx
 from dotenv import dotenv_values
-import logging
+from pydantic import ValidationError
 
 from clawlingua.config import (
     load_config,
     validate_base_config,
     validate_runtime_config,
 )
-from clawlingua.pipeline.build_deck import BuildDeckOptions, run_build_deck
 from clawlingua.logger import setup_logging
+from clawlingua.models.prompt_schema import PromptSpec
+from clawlingua.pipeline.build_deck import BuildDeckOptions, run_build_deck
 
 logger = logging.getLogger("clawlingua.web")
+
+_SUPPORTED_UI_LANGS = {"en", "zh"}
+_ENV_LINE_RE = re.compile(r"^\s*(CLAWLINGUA_[A-Z0-9_]+)\s*=\s*(.*)\s*$")
+_ZH_I18N = {
+    "UI language": "\u754c\u9762\u8bed\u8a00",
+    "Run": "\u8fd0\u884c",
+    "Config": "\u914d\u7f6e",
+    "Prompt": "\u63d0\u793a\u8bcd",
+    "Input file": "\u8f93\u5165\u6587\u4ef6",
+    "Deck title (optional)": "\u724c\u7ec4\u540d\u79f0\uff08\u53ef\u9009\uff09",
+    "Source language": "\u6e90\u8bed\u8a00",
+    "Target language": "\u76ee\u6807\u8bed\u8a00",
+    "Content profile": "\u5185\u5bb9\u7c7b\u578b",
+    "Difficulty": "\u96be\u5ea6",
+    "Max notes (0 = no limit)": "\u6700\u5927 note \u6570\uff080=\u4e0d\u9650\uff09",
+    "Maximum notes after dedupe. Empty/0 means no limit.": "\u53bb\u91cd\u540e\u6700\u591a\u751f\u6210\u591a\u5c11 note\u3002\u7a7a\u6216 0 \u8868\u793a\u4e0d\u9650\u5236\u3002",
+    "Input char limit": "\u8f93\u5165\u5b57\u7b26\u4e0a\u9650",
+    "Only process the first N chars of input. Empty means no limit.": "\u4ec5\u5904\u7406\u8f93\u5165\u524d N \u4e2a\u5b57\u7b26\u3002\u7559\u7a7a\u8868\u793a\u4e0d\u9650\u5236\u3002",
+    "Advanced": "\u9ad8\u7ea7\u53c2\u6570",
+    "Cloze min chars (override env)": "\u6700\u5c0f\u6316\u7a7a\u957f\u5ea6\uff08\u8986\u76d6 env\uff09",
+    "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.": "\u4ec5\u672c\u6b21\u8fd0\u884c\u8986\u76d6 CLAWLINGUA_CLOZE_MIN_CHARS\u3002",
+    "Chunk max chars (override env)": "chunk \u6700\u5927\u5b57\u7b26\uff08\u8986\u76d6 env\uff09",
+    "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.": "\u4ec5\u672c\u6b21\u8fd0\u884c\u8986\u76d6 CLAWLINGUA_CHUNK_MAX_CHARS\u3002",
+    "Temperature (override env)": "\u6e29\u5ea6\u53c2\u6570\uff08\u8986\u76d6 env\uff09",
+    "0 is more deterministic; higher values are more random.": "0 \u66f4\u786e\u5b9a\uff0c\u9ad8\u503c\u66f4\u968f\u673a\u3002",
+    "Save intermediate files": "\u4fdd\u5b58\u4e2d\u95f4\u6587\u4ef6",
+    "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.": "\u5c06\u4e2d\u95f4 JSONL/media \u5199\u5165 OUTPUT_DIR/<run_id>\u3002",
+    "Continue on error": "\u9047\u9519\u7ee7\u7eed",
+    "If enabled, continue processing after per-item failures.": "\u52fe\u9009\u540e\u9047\u5230\u5c40\u90e8\u9519\u8bef\u4ecd\u7ee7\u7eed\u5904\u7406\u540e\u7eed\u5185\u5bb9\u3002",
+    "Status": "\u72b6\u6001",
+    "Download .apkg": "\u4e0b\u8f7d .apkg",
+    "Error": "\u9519\u8bef",
+    "No input file provided.": "\u672a\u63d0\u4f9b\u8f93\u5165\u6587\u4ef6\u3002",
+    "Run complete": "\u8fd0\u884c\u5b8c\u6210",
+    "### Config (.env editor)": "### \u914d\u7f6e\uff08.env \u7f16\u8f91\u5668\uff09",
+    "LLM (primary)": "\u4e3b LLM",
+    "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).": "OpenAI \u517c\u5bb9\u63a5\u53e3\u57fa\u7840\u5730\u5740\uff08/chat/completions \u4e4b\u524d\u7684\u90e8\u5206\uff0c\u5982 .../v1\uff09\u3002",
+    "API key for primary LLM, when required.": "\u4e3b LLM \u7684 API Key\uff08\u5982\u9700\u8981\uff09\u3002",
+    "Model name for primary LLM.": "\u4e3b LLM \u7684\u6a21\u578b\u540d\u3002",
+    "Request timeout in seconds.": "\u8bf7\u6c42\u8d85\u65f6\uff08\u79d2\uff09\u3002",
+    "Default temperature for primary LLM.": "\u4e3b LLM \u9ed8\u8ba4\u6e29\u5ea6\u53c2\u6570\u3002",
+    "List models": "\u5217\u51fa\u6a21\u578b",
+    "Test": "\u6d4b\u8bd5\u8fde\u901a",
+    "Primary LLM status": "\u4e3b LLM \u72b6\u6001",
+    "Translation LLM": "\u7ffb\u8bd1 LLM",
+    "Optional base URL for translation model.": "\u7ffb\u8bd1\u6a21\u578b\u53ef\u9009\u57fa\u7840\u5730\u5740\u3002",
+    "API key for translation LLM, when required.": "\u7ffb\u8bd1 LLM \u7684 API Key\uff08\u5982\u9700\u8981\uff09\u3002",
+    "Model name for translation LLM.": "\u7ffb\u8bd1 LLM \u7684\u6a21\u578b\u540d\u3002",
+    "Default temperature for translation LLM.": "\u7ffb\u8bd1 LLM \u9ed8\u8ba4\u6e29\u5ea6\u53c2\u6570\u3002",
+    "List models (translate)": "\u5217\u51fa\u7ffb\u8bd1\u6a21\u578b",
+    "Test (translate)": "\u6d4b\u8bd5\u7ffb\u8bd1\u8fde\u901a",
+    "Translation LLM status": "\u7ffb\u8bd1 LLM \u72b6\u6001",
+    "Chunk & Cloze": "\u5207\u5757\u4e0e\u6316\u7a7a",
+    "Default max chars per chunk.": "\u9ed8\u8ba4\u6bcf\u4e2a chunk \u7684\u6700\u5927\u5b57\u7b26\u6570\u3002",
+    "Minimum chars required for cloze text.": "\u6316\u7a7a\u6587\u672c\u6700\u5c0f\u5b57\u7b26\u6570\u3002",
+    "Max cards per chunk after dedupe. Empty/0 means unlimited.": "\u53bb\u91cd\u540e\u6bcf\u4e2a chunk \u6700\u591a\u5361\u7247\u6570\u3002\u7a7a\u6216 0 \u8868\u793a\u4e0d\u9650\u5236\u3002",
+    "Prompt language for multi-lingual prompts (en/zh).": "\u591a\u8bed\u8a00 prompt \u9009\u62e9\uff08en/zh\uff09\u3002",
+    "Paths & defaults": "\u8def\u5f84\u4e0e\u9ed8\u8ba4\u503c",
+    "Directory for intermediate run data (JSONL, media).": "\u4e2d\u95f4\u8fd0\u884c\u6570\u636e\u76ee\u5f55\uff08JSONL\u3001media\uff09\u3002",
+    "Default directory for exported decks.": "\u9ed8\u8ba4\u724c\u7ec4\u5bfc\u51fa\u76ee\u5f55\u3002",
+    "Directory for log files.": "\u65e5\u5fd7\u76ee\u5f55\u3002",
+    "Load defaults from ENV_EXAMPLE.md": "\u4ece ENV_EXAMPLE.md \u8f7d\u5165\u9ed8\u8ba4\u503c",
+    "Save config": "\u4fdd\u5b58\u914d\u7f6e",
+    "Loaded defaults from ENV_EXAMPLE.md (not yet saved).": "\u5df2\u8f7d\u5165 ENV_EXAMPLE.md \u9ed8\u8ba4\u503c\uff08\u5c1a\u672a\u4fdd\u5b58\uff09\u3002",
+    "Failed to save config": "\u4fdd\u5b58\u914d\u7f6e\u5931\u8d25",
+    "Config saved and validated.": "\u914d\u7f6e\u5df2\u4fdd\u5b58\u5e76\u901a\u8fc7\u6821\u9a8c\u3002",
+    "Missing base URL.": "\u7f3a\u5c11 base URL\u3002",
+    "Request failed": "\u8bf7\u6c42\u5931\u8d25",
+    "HTTP error": "HTTP \u9519\u8bef",
+    "Response is not valid JSON.": "\u54cd\u5e94\u4e0d\u662f\u6709\u6548 JSON\u3002",
+    "Response JSON has no list field `data`.": "\u54cd\u5e94 JSON \u4e2d\u7f3a\u5c11\u5217\u8868\u5b57\u6bb5 `data`\u3002",
+    "Found models": "\u6a21\u578b\u5217\u8868",
+    "No model ids found in `data`.": "`data` \u4e2d\u672a\u627e\u5230\u6a21\u578b id\u3002",
+    "Connectivity OK": "\u8fde\u901a\u6027\u6b63\u5e38",
+    "### Prompt JSON editor": "### Prompt JSON \u7f16\u8f91\u5668",
+    "Prompt file": "Prompt \u6587\u4ef6",
+    "Prompt JSON": "Prompt JSON \u5185\u5bb9",
+    "Validate": "\u6821\u9a8c",
+    "Save": "\u4fdd\u5b58",
+    "Prompt status": "Prompt \u72b6\u6001",
+    "Prompt JSON is empty.": "Prompt JSON \u4e3a\u7a7a\u3002",
+    "JSON parse error": "JSON \u89e3\u6790\u9519\u8bef",
+    "Schema validation failed": "Schema \u6821\u9a8c\u5931\u8d25",
+    "Prompt valid.": "Prompt \u6821\u9a8c\u901a\u8fc7\u3002",
+    "Failed to load prompt file": "\u52a0\u8f7d prompt \u6587\u4ef6\u5931\u8d25",
+    "Not saved because validation failed.": "\u672a\u4fdd\u5b58\uff1a\u6821\u9a8c\u672a\u901a\u8fc7\u3002",
+    "Prompt saved.": "Prompt \u5df2\u4fdd\u5b58\u3002",
+    "Backup created": "\u5df2\u521b\u5efa\u5907\u4efd",
+}
 
 
 def _resolve_env_file() -> Optional[Path]:
@@ -48,6 +143,17 @@ def _load_app_config() -> Any:
     cfg = load_config(env_file=env_file)
     setup_logging(cfg.log_level, log_dir=cfg.log_dir)
     return cfg
+
+
+def _normalize_ui_lang(value: str | None) -> str:
+    lang = (value or "").strip().lower()
+    return lang if lang in _SUPPORTED_UI_LANGS else "en"
+
+
+def _tr(lang: str, en: str, zh: str) -> str:
+    if _normalize_ui_lang(lang) != "zh":
+        return en
+    return _ZH_I18N.get(en, en)
 
 
 # Keys that the Config tab allows editing. These map directly to
@@ -87,11 +193,28 @@ _EDITABLE_ENV_KEYS = [
     "CLAWLINGUA_EXPORT_DIR",
     "CLAWLINGUA_LOG_DIR",
     "CLAWLINGUA_DEFAULT_DECK_NAME",
-    # TTS (common voices)
-    "CLAWLINGUA_TTS_EDGE_EN_VOICES",
-    "CLAWLINGUA_TTS_EDGE_ZH_VOICES",
-    "CLAWLINGUA_TTS_EDGE_JA_VOICES",
+    # TTS voice slots
+    "CLAWLINGUA_TTS_EDGE_VOICE1",
+    "CLAWLINGUA_TTS_EDGE_VOICE2",
+    "CLAWLINGUA_TTS_EDGE_VOICE3",
+    "CLAWLINGUA_TTS_EDGE_VOICE4",
 ]
+
+
+def _read_env_example() -> Dict[str, str]:
+    env_example = Path("ENV_EXAMPLE.md").resolve()
+    if not env_example.exists():
+        return {}
+    defaults: Dict[str, str] = {}
+    for line in env_example.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = _ENV_LINE_RE.match(line)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2)
+        defaults[key] = value.strip()
+    return defaults
 
 
 def _load_env_view(cfg: Any, env_file: Optional[Path]) -> Dict[str, str]:
@@ -252,6 +375,329 @@ def _run_single_build(
     }
 
 
+def _safe_stem(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    return safe or "input"
+
+
+def _to_optional_int(value: Any, *, min_value: int | None = None) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        num = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    if min_value is not None and num < min_value:
+        return None
+    return num
+
+
+def _to_optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_timeout_seconds(value: Any, default: float = 20.0) -> float:
+    timeout = _to_optional_float(value)
+    if timeout is None or timeout <= 0:
+        return default
+    return timeout
+
+
+def _materialize_uploaded_file(uploaded_file: Any, tmp_dir: Path) -> Path:
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(uploaded_file, (str, Path)):
+        src = Path(uploaded_file)
+        if not src.exists():
+            raise ValueError(f"Uploaded file path does not exist: {src}")
+        dst = tmp_dir / f"{_safe_stem(src.stem)}{src.suffix}"
+        if src.resolve() != dst.resolve():
+            shutil.copyfile(src, dst)
+        return dst
+
+    if isinstance(uploaded_file, dict):
+        src_path = uploaded_file.get("path") or uploaded_file.get("name")
+        if src_path:
+            src = Path(str(src_path))
+            if src.exists():
+                dst = tmp_dir / f"{_safe_stem(src.stem)}{src.suffix}"
+                shutil.copyfile(src, dst)
+                return dst
+
+    name = getattr(uploaded_file, "name", "input.txt")
+    suffix = Path(str(name)).suffix
+    stem = Path(str(name)).stem
+    dst = tmp_dir / f"{_safe_stem(stem)}{suffix}"
+    if not hasattr(uploaded_file, "read"):
+        raise ValueError("Unsupported uploaded file payload.")
+    data = uploaded_file.read()
+    if isinstance(data, str):
+        dst.write_text(data, encoding="utf-8")
+    else:
+        dst.write_bytes(data)
+    return dst
+
+
+def _run_single_build_v2(
+    uploaded_file: Any,
+    deck_title: str,
+    source_lang: str,
+    target_lang: str,
+    content_profile: str,
+    difficulty: str,
+    max_notes: int | None,
+    input_char_limit: int | None,
+    cloze_min_chars: int | None,
+    chunk_max_chars: int | None,
+    temperature: float | None,
+    save_intermediate: bool,
+    continue_on_error: bool,
+) -> Dict[str, Any]:
+    if uploaded_file is None:
+        return {"status": "error", "message": "No input file provided."}
+
+    cfg = _load_app_config()
+    workspace_root = cfg.workspace_root
+    tmp_dir = (workspace_root / "tmp").resolve()
+    try:
+        local_input = _materialize_uploaded_file(uploaded_file, tmp_dir)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
+    options = BuildDeckOptions(
+        input_value=str(local_input),
+        source_lang=source_lang or None,
+        target_lang=target_lang or None,
+        content_profile=content_profile or None,
+        input_char_limit=input_char_limit,
+        deck_name=deck_title or None,
+        max_chars=chunk_max_chars,
+        cloze_min_chars=cloze_min_chars,
+        max_notes=max_notes,
+        temperature=temperature,
+        cloze_difficulty=difficulty or None,
+        save_intermediate=save_intermediate,
+        continue_on_error=continue_on_error,
+    )
+    try:
+        result = run_build_deck(cfg, options)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return {"status": "error", "message": str(exc)}
+
+    return {
+        "status": "ok",
+        "run_id": result.run_id,
+        "run_dir": str(result.run_dir),
+        "output_path": str(result.output_path),
+        "cards_count": result.cards_count,
+        "errors_count": result.errors_count,
+    }
+
+
+def _save_env_v2(updated: Dict[str, str], *, lang: str) -> str:
+    env_file = _resolve_env_file() or Path(".env").resolve()
+    original_text: Optional[str] = None
+    if env_file.exists():
+        original_text = env_file.read_text(encoding="utf-8")
+        current = {k: v for k, v in dotenv_values(env_file).items() if v is not None}
+    else:
+        current = {}
+
+    new_env: Dict[str, str] = {k: str(v) for k, v in current.items() if k not in _EDITABLE_ENV_KEYS}
+    for key in _EDITABLE_ENV_KEYS:
+        if key not in updated:
+            continue
+        val = str(updated.get(key, "")).strip()
+        if val:
+            new_env[key] = val
+        else:
+            new_env.pop(key, None)
+
+    env_file.write_text("".join(f"{k}={v}\n" for k, v in sorted(new_env.items())), encoding="utf-8")
+    try:
+        cfg = load_config(env_file=env_file)
+        validate_base_config(cfg)
+        validate_runtime_config(cfg)
+    except Exception as exc:
+        if original_text is not None:
+            env_file.write_text(original_text, encoding="utf-8")
+        else:
+            env_file.unlink(missing_ok=True)
+        return f"❌ {_tr(lang, 'Failed to save config', '保存配置失败')}: {exc}"
+    return f"✅ {_tr(lang, 'Config saved and validated.', '配置已保存并通过校验。')}"
+
+
+def _normalize_base_url(base_url: str) -> str:
+    value = (base_url or "").strip().rstrip("/")
+    if value.endswith("/chat/completions"):
+        value = value[: -len("/chat/completions")]
+    return value
+
+
+def _build_models_url(base_url: str) -> str:
+    root = _normalize_base_url(base_url)
+    if not root:
+        return ""
+    if root.endswith("/models"):
+        return root
+    return f"{root}/models"
+
+
+def _request_models(base_url: str, api_key: str, timeout_seconds: float) -> tuple[str, httpx.Response]:
+    endpoint = _build_models_url(base_url)
+    if not endpoint:
+        raise ValueError("missing base URL")
+    headers = {"Accept": "application/json"}
+    token = (api_key or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    with httpx.Client(timeout=timeout_seconds) as client:
+        response = client.get(endpoint, headers=headers)
+    return endpoint, response
+
+
+def _list_models_markdown(base_url: str, api_key: str, timeout_seconds: float, *, lang: str) -> str:
+    if not _normalize_base_url(base_url):
+        return f"⚠️ {_tr(lang, 'Missing base URL.', '缺少 base URL。')}"
+    try:
+        endpoint, response = _request_models(base_url, api_key, timeout_seconds)
+    except ValueError:
+        return f"⚠️ {_tr(lang, 'Missing base URL.', '缺少 base URL。')}"
+    except httpx.RequestError as exc:
+        return f"❌ {_tr(lang, 'Request failed', '请求失败')}: `{exc}`"
+    except Exception as exc:
+        return f"❌ {_tr(lang, 'Request failed', '请求失败')}: `{exc}`"
+
+    if response.status_code >= 400:
+        body = response.text[:500] if response.text else ""
+        return (
+            f"❌ {_tr(lang, 'HTTP error', 'HTTP 错误')}: **{response.status_code}**\n\n"
+            f"- endpoint: `{endpoint}`\n"
+            f"- body: `{body}`"
+        )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return f"❌ {_tr(lang, 'Response is not valid JSON.', '响应不是有效 JSON。')}"
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return (
+            f"⚠️ {_tr(lang, 'Response JSON has no list field `data`.', '响应 JSON 中缺少列表字段 `data`。')}\n\n"
+            f"- endpoint: `{endpoint}`"
+        )
+
+    model_ids: list[str] = []
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("id", "")).strip()
+        if not model_id or model_id in seen:
+            continue
+        model_ids.append(model_id)
+        seen.add(model_id)
+
+    if not model_ids:
+        return (
+            f"✅ {_tr(lang, 'Found models', '模型列表')}: **0**\n\n"
+            f"- endpoint: `{endpoint}`\n"
+            f"- status: `{response.status_code}`\n"
+            f"- {_tr(lang, 'No model ids found in `data`.', '`data` 中未找到模型 id。')}"
+        )
+
+    lines = [f"- `{model_id}`" for model_id in model_ids]
+    return (
+        f"✅ {_tr(lang, 'Found models', '模型列表')}: **{len(model_ids)}**\n\n"
+        f"- endpoint: `{endpoint}`\n"
+        f"- status: `{response.status_code}`\n\n"
+        f"{chr(10).join(lines)}"
+    )
+
+
+def _test_models_markdown(base_url: str, api_key: str, timeout_seconds: float, *, lang: str) -> str:
+    if not _normalize_base_url(base_url):
+        return f"⚠️ {_tr(lang, 'Missing base URL.', '缺少 base URL。')}"
+    try:
+        endpoint, response = _request_models(base_url, api_key, timeout_seconds)
+    except ValueError:
+        return f"⚠️ {_tr(lang, 'Missing base URL.', '缺少 base URL。')}"
+    except httpx.RequestError as exc:
+        return f"❌ {_tr(lang, 'Request failed', '请求失败')}: `{exc}`"
+    except Exception as exc:
+        return f"❌ {_tr(lang, 'Request failed', '请求失败')}: `{exc}`"
+    return (
+        f"✅ {_tr(lang, 'Connectivity OK', '连通性正常')}\n\n"
+        f"- endpoint: `{endpoint}`\n"
+        f"- status: `{response.status_code}`"
+    )
+
+
+def _prompt_file_map(cfg: Any) -> dict[str, Path]:
+    return {
+        "cloze_contextual": cfg.resolve_path(cfg.prompt_cloze),
+        "cloze_textbook_examples": cfg.resolve_path(cfg.prompt_cloze_textbook),
+        "translate_rewrite": cfg.resolve_path(cfg.prompt_translate),
+    }
+
+
+def _prompt_choices(lang: str) -> list[tuple[str, str]]:
+    if _normalize_ui_lang(lang) == "zh":
+        return [
+            ("上下文挖空 (cloze_contextual)", "cloze_contextual"),
+            ("教材例句模式 (cloze_textbook_examples)", "cloze_textbook_examples"),
+            ("翻译改写 (translate_rewrite)", "translate_rewrite"),
+        ]
+    return [
+        ("cloze_contextual", "cloze_contextual"),
+        ("cloze_textbook_examples", "cloze_textbook_examples"),
+        ("translate_rewrite", "translate_rewrite"),
+    ]
+
+
+def _load_prompt_text(prompt_key: str, prompt_files: dict[str, Path], *, lang: str) -> tuple[str, str]:
+    path = prompt_files.get(prompt_key)
+    if path is None:
+        return "", f"❌ {_tr(lang, 'Failed to load prompt file', '加载 prompt 文件失败')}: `{prompt_key}`"
+    try:
+        return path.read_text(encoding="utf-8"), ""
+    except Exception as exc:
+        return "", f"❌ {_tr(lang, 'Failed to load prompt file', '加载 prompt 文件失败')}: `{exc}`"
+
+
+def _format_prompt_validation_error(exc: ValidationError) -> str:
+    errors = exc.errors()
+    lines: list[str] = []
+    for err in errors[:5]:
+        loc = ".".join(str(piece) for piece in err.get("loc", []))
+        msg = str(err.get("msg", "invalid"))
+        lines.append(f"- `{loc}`: {msg}" if loc else f"- {msg}")
+    if len(errors) > 5:
+        lines.append(f"- ... ({len(errors) - 5} more)")
+    return "\n".join(lines)
+
+
+def _validate_prompt_json(prompt_json: str, *, lang: str) -> tuple[bool, str]:
+    content = (prompt_json or "").strip()
+    if not content:
+        return False, f"❌ {_tr(lang, 'Prompt JSON is empty.', 'Prompt JSON 为空。')}"
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        return False, f"❌ {_tr(lang, 'JSON parse error', 'JSON 解析错误')}: {exc.msg} (line {exc.lineno}, col {exc.colno})"
+    try:
+        PromptSpec.model_validate(payload)
+    except ValidationError as exc:
+        return False, f"❌ {_tr(lang, 'Schema validation failed', 'Schema 校验失败')}\n\n{_format_prompt_validation_error(exc)}"
+    return True, f"✅ {_tr(lang, 'Prompt valid.', 'Prompt 校验通过。')}"
+
+
 def build_interface() -> gr.Blocks:
     """Construct the Gradio Blocks interface.
 
@@ -261,49 +707,102 @@ def build_interface() -> gr.Blocks:
     """
 
     cfg = _load_app_config()
+    env_file = _resolve_env_file()
+    cfg_view = _load_env_view(cfg, env_file)
+    prompt_files = _prompt_file_map(cfg)
+    initial_ui_lang = _normalize_ui_lang(getattr(cfg, "prompt_lang", "en"))
+    initial_prompt_key = "cloze_contextual" if "cloze_contextual" in prompt_files else next(iter(prompt_files))
+    initial_prompt_text, initial_prompt_status = _load_prompt_text(
+        initial_prompt_key, prompt_files, lang=initial_ui_lang
+    )
 
     with gr.Blocks(title="ClawLingua Web UI") as demo:
-        gr.Markdown("# ClawLingua Web UI\nUpload a local file and build an Anki cloze deck.")
+        with gr.Row():
+            ui_lang = gr.Dropdown(
+                choices=[("English", "en"), ("中文", "zh")],
+                value=initial_ui_lang,
+                label=_tr(initial_ui_lang, "UI language", "界面语言"),
+                scale=1,
+            )
+        title_md = gr.Markdown(
+            _tr(
+                initial_ui_lang,
+                "# ClawLingua Web UI\nLocal deck builder for text learning.",
+                "# ClawLingua Web UI\n本地化文本学习牌组生成器。",
+            )
+        )
 
-        with gr.Tab("Run"):
+        with gr.Tab(_tr(initial_ui_lang, "Run", "运行")) as run_tab:
             with gr.Row():
-                input_file = gr.File(label="Input file (.txt/.md/.epub)", file_types=[".txt", ".md", ".markdown", ".epub"], file_count="single")
-                deck_title = gr.Textbox(label="Deck title (optional)")
+                input_file = gr.File(
+                    label=_tr(initial_ui_lang, "Input file", "输入文件"),
+                    file_types=[".txt", ".md", ".markdown", ".epub"],
+                    file_count="single",
+                )
+                deck_title = gr.Textbox(label=_tr(initial_ui_lang, "Deck title (optional)", "牌组名称（可选）"))
 
             with gr.Row():
                 source_lang = gr.Dropdown(
-                    choices=["en", "zh", "ja"],
+                    choices=["en", "zh", "ja", "de", "fr"],
                     value=cfg.default_source_lang,
-                    label="Source language",
+                    label=_tr(initial_ui_lang, "Source language", "源语言"),
                 )
                 target_lang = gr.Dropdown(
-                    choices=["zh", "en", "ja"],
+                    choices=["zh", "en", "ja", "de", "fr"],
                     value=cfg.default_target_lang,
-                    label="Target language",
+                    label=_tr(initial_ui_lang, "Target language", "目标语言"),
                 )
                 content_profile = gr.Dropdown(
                     choices=["general", "textbook_examples"],
                     value=cfg.content_profile,
-                    label="Content profile",
+                    label=_tr(initial_ui_lang, "Content profile", "内容类型"),
                 )
                 difficulty = gr.Dropdown(
                     choices=["beginner", "intermediate", "advanced"],
                     value=cfg.cloze_difficulty,
-                    label="Difficulty",
+                    label=_tr(initial_ui_lang, "Difficulty", "难度"),
                 )
 
             with gr.Row():
-                max_notes = gr.Number(label="Max notes (0 = no limit)", value=None, precision=0)
-                input_char_limit = gr.Number(label="Input char limit (for quick tests)", value=None, precision=0)
+                max_notes = gr.Number(
+                    label=_tr(initial_ui_lang, "Max notes (0 = no limit)", "最大 note 数（0=不限）"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Maximum notes after dedupe. Empty/0 means no limit.",
+                        "去重后最多生成多少 note。空或 0 表示不限制。",
+                    ),
+                    value=None,
+                    precision=0,
+                )
+                input_char_limit = gr.Number(
+                    label=_tr(initial_ui_lang, "Input char limit", "输入字符上限"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Only process the first N chars of input. Empty means no limit.",
+                        "仅处理输入前 N 个字符。留空表示不限制。",
+                    ),
+                    value=None,
+                    precision=0,
+                )
 
-            with gr.Accordion("Advanced", open=False):
+            with gr.Accordion(_tr(initial_ui_lang, "Advanced", "高级参数"), open=False) as run_advanced:
                 cloze_min_chars = gr.Number(
-                    label="Cloze min chars (override env)",
+                    label=_tr(initial_ui_lang, "Cloze min chars (override env)", "最小挖空长度（覆盖 env）"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.",
+                        "仅本次运行覆盖 CLAWLINGUA_CLOZE_MIN_CHARS。",
+                    ),
                     value=cfg.cloze_min_chars,
                     precision=0,
                 )
                 chunk_max_chars = gr.Number(
-                    label="Chunk max chars (override env)",
+                    label=_tr(initial_ui_lang, "Chunk max chars (override env)", "chunk 最大字符（覆盖 env）"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.",
+                        "仅本次运行覆盖 CLAWLINGUA_CHUNK_MAX_CHARS。",
+                    ),
                     value=cfg.chunk_max_chars,
                     precision=0,
                 )
@@ -312,21 +811,32 @@ def build_interface() -> gr.Blocks:
                     maximum=1.0,
                     value=cfg.llm_temperature,
                     step=0.05,
-                    label="LLM temperature (override env)",
+                    label=_tr(initial_ui_lang, "Temperature (override env)", "温度参数（覆盖 env）"),
+                    info=_tr(initial_ui_lang, "0 is more deterministic; higher values are more random.", "0 更确定，高值更随机。"),
                 )
                 save_intermediate = gr.Checkbox(
-                    label="Save intermediate files",
+                    label=_tr(initial_ui_lang, "Save intermediate files", "保存中间文件"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.",
+                        "将中间 JSONL/media 写入 OUTPUT_DIR/<run_id>。",
+                    ),
                     value=cfg.save_intermediate,
                 )
                 continue_on_error = gr.Checkbox(
-                    label="Continue on error",
+                    label=_tr(initial_ui_lang, "Continue on error", "遇错继续"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "If enabled, continue processing after per-item failures.",
+                        "勾选后遇到局部错误仍继续处理后续内容。",
+                    ),
                     value=False,
                 )
 
-            run_button = gr.Button("Run")
+            run_button = gr.Button(_tr(initial_ui_lang, "Run", "开始运行"))
 
-            status = gr.Markdown(label="Status")
-            output_file = gr.File(label="Download .apkg", interactive=False)
+            run_status = gr.Markdown(label=_tr(initial_ui_lang, "Status", "状态"))
+            output_file = gr.File(label=_tr(initial_ui_lang, "Download .apkg", "下载 .apkg"), interactive=False)
 
             def _on_run(
                 file_obj,
@@ -342,31 +852,33 @@ def build_interface() -> gr.Blocks:
                 temperature_val,
                 save_inter_val,
                 continue_on_error_val,
+                ui_lang_val,
             ):
-                result = _run_single_build(
+                lang = _normalize_ui_lang(ui_lang_val)
+                result = _run_single_build_v2(
                     uploaded_file=file_obj,
                     deck_title=deck_title_val or "",
                     source_lang=src,
                     target_lang=tgt,
                     content_profile=profile,
                     difficulty=diff,
-                    max_notes=int(max_notes_val) if max_notes_val and max_notes_val > 0 else None,
-                    input_char_limit=int(input_limit_val) if input_limit_val and input_limit_val > 0 else None,
-                    cloze_min_chars=int(cloze_min_val) if cloze_min_val and cloze_min_val >= 0 else None,
-                    chunk_max_chars=int(chunk_max_val) if chunk_max_val and chunk_max_val > 0 else None,
-                    temperature=float(temperature_val) if temperature_val is not None else None,
+                    max_notes=_to_optional_int(max_notes_val, min_value=1),
+                    input_char_limit=_to_optional_int(input_limit_val, min_value=1),
+                    cloze_min_chars=_to_optional_int(cloze_min_val, min_value=0),
+                    chunk_max_chars=_to_optional_int(chunk_max_val, min_value=1),
+                    temperature=_to_optional_float(temperature_val),
                     save_intermediate=bool(save_inter_val),
                     continue_on_error=bool(continue_on_error_val),
                 )
                 if result.get("status") != "ok":
                     msg = result.get("message") or "Unknown error"
-                    return f"❌ Error: {msg}", None
+                    return f"❌ {_tr(lang, 'Error', '错误')}: {msg}", None
 
                 run_id = result["run_id"]
                 cards = result["cards_count"]
                 errors = result["errors_count"]
                 out_path = result["output_path"]
-                status_md = f"✅ Run complete\n\n- run_id: `{run_id}`\n- cards: **{cards}**\n- errors: **{errors}**\n- output: `{out_path}`"
+                status_md = f"✅ {_tr(lang, 'Run complete', '运行完成')}\n\n- run_id: `{run_id}`\n- cards: **{cards}**\n- errors: **{errors}**\n- output: `{out_path}`"
                 return status_md, out_path
 
             run_button.click(
@@ -385,57 +897,82 @@ def build_interface() -> gr.Blocks:
                     temperature,
                     save_intermediate,
                     continue_on_error,
+                    ui_lang,
                 ],
-                outputs=[status, output_file],
+                outputs=[run_status, output_file],
             )
 
-        with gr.Tab("Config"):
-            gr.Markdown("### Config (.env editor)")
-            env_file = _resolve_env_file()
-            cfg_view = _load_env_view(cfg, env_file)
+        with gr.Tab(_tr(initial_ui_lang, "Config", "配置")) as config_tab:
+            config_heading = gr.Markdown(_tr(initial_ui_lang, "### Config (.env editor)", "### 配置（.env 编辑器）"))
 
-            with gr.Accordion("LLM (primary)", open=True):
+            with gr.Accordion(_tr(initial_ui_lang, "LLM (primary)", "主 LLM"), open=True) as llm_accordion:
                 llm_base_url = gr.Textbox(
                     label="CLAWLINGUA_LLM_BASE_URL",
                     value=cfg_view.get("CLAWLINGUA_LLM_BASE_URL", ""),
+                    info=_tr(
+                        initial_ui_lang,
+                        "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).",
+                        "OpenAI 兼容接口基础地址（/chat/completions 之前的部分，如 .../v1）。",
+                    ),
                 )
                 llm_api_key = gr.Textbox(
                     label="CLAWLINGUA_LLM_API_KEY",
                     value=cfg_view.get("CLAWLINGUA_LLM_API_KEY", ""),
                     type="password",
+                    info=_tr(initial_ui_lang, "API key for primary LLM, when required.", "主 LLM 的 API Key（如需要）。"),
                 )
                 llm_model = gr.Textbox(
                     label="CLAWLINGUA_LLM_MODEL",
                     value=cfg_view.get("CLAWLINGUA_LLM_MODEL", ""),
+                    info=_tr(initial_ui_lang, "Model name for primary LLM.", "主 LLM 的模型名。"),
                 )
                 llm_timeout = gr.Textbox(
                     label="CLAWLINGUA_LLM_TIMEOUT_SECONDS",
                     value=cfg_view.get("CLAWLINGUA_LLM_TIMEOUT_SECONDS", "120"),
+                    info=_tr(initial_ui_lang, "Request timeout in seconds.", "请求超时（秒）。"),
                 )
                 llm_temperature_env = gr.Textbox(
                     label="CLAWLINGUA_LLM_TEMPERATURE",
                     value=cfg_view.get("CLAWLINGUA_LLM_TEMPERATURE", "0.2"),
+                    info=_tr(initial_ui_lang, "Default temperature for primary LLM.", "主 LLM 默认温度参数。"),
                 )
+                with gr.Row():
+                    llm_list_models_btn = gr.Button(_tr(initial_ui_lang, "List models", "列出模型"))
+                    llm_test_btn = gr.Button(_tr(initial_ui_lang, "Test", "测试连通"))
+                llm_status = gr.Markdown(label=_tr(initial_ui_lang, "Primary LLM status", "主 LLM 状态"))
 
-            with gr.Accordion("Translation LLM", open=False):
+            with gr.Accordion(_tr(initial_ui_lang, "Translation LLM", "翻译 LLM"), open=False) as translate_accordion:
                 translate_base_url = gr.Textbox(
                     label="CLAWLINGUA_TRANSLATE_LLM_BASE_URL",
                     value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_BASE_URL", ""),
+                    info=_tr(initial_ui_lang, "Optional base URL for translation model.", "翻译模型可选基础地址。"),
                 )
                 translate_api_key = gr.Textbox(
                     label="CLAWLINGUA_TRANSLATE_LLM_API_KEY",
                     value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_API_KEY", ""),
                     type="password",
+                    info=_tr(initial_ui_lang, "API key for translation LLM, when required.", "翻译 LLM 的 API Key（如需要）。"),
                 )
                 translate_model = gr.Textbox(
                     label="CLAWLINGUA_TRANSLATE_LLM_MODEL",
                     value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_MODEL", ""),
+                    info=_tr(initial_ui_lang, "Model name for translation LLM.", "翻译 LLM 的模型名。"),
                 )
+                translate_temperature = gr.Textbox(
+                    label="CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE",
+                    value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE", ""),
+                    info=_tr(initial_ui_lang, "Default temperature for translation LLM.", "翻译 LLM 默认温度参数。"),
+                )
+                with gr.Row():
+                    translate_list_models_btn = gr.Button(_tr(initial_ui_lang, "List models (translate)", "列出翻译模型"))
+                    translate_test_btn = gr.Button(_tr(initial_ui_lang, "Test (translate)", "测试翻译连通"))
+                translate_status = gr.Markdown(label=_tr(initial_ui_lang, "Translation LLM status", "翻译 LLM 状态"))
 
-            with gr.Accordion("Chunk & Cloze", open=False):
+            with gr.Accordion(_tr(initial_ui_lang, "Chunk & Cloze", "切块与挖空"), open=False) as chunk_accordion:
                 chunk_max_chars_env = gr.Textbox(
                     label="CLAWLINGUA_CHUNK_MAX_CHARS",
                     value=cfg_view.get("CLAWLINGUA_CHUNK_MAX_CHARS", "1800"),
+                    info=_tr(initial_ui_lang, "Default max chars per chunk.", "默认每个 chunk 的最大字符数。"),
                 )
                 chunk_min_chars_env = gr.Textbox(
                     label="CLAWLINGUA_CHUNK_MIN_CHARS",
@@ -444,10 +981,16 @@ def build_interface() -> gr.Blocks:
                 cloze_min_chars_env = gr.Textbox(
                     label="CLAWLINGUA_CLOZE_MIN_CHARS",
                     value=cfg_view.get("CLAWLINGUA_CLOZE_MIN_CHARS", "0"),
+                    info=_tr(initial_ui_lang, "Minimum chars required for cloze text.", "挖空文本最小字符数。"),
                 )
                 cloze_max_per_chunk_env = gr.Textbox(
                     label="CLAWLINGUA_CLOZE_MAX_PER_CHUNK",
                     value=cfg_view.get("CLAWLINGUA_CLOZE_MAX_PER_CHUNK", ""),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Max cards per chunk after dedupe. Empty/0 means unlimited.",
+                        "去重后每个 chunk 最多卡片数。空或 0 表示不限制。",
+                    ),
                 )
                 content_profile_env = gr.Textbox(
                     label="CLAWLINGUA_CONTENT_PROFILE",
@@ -460,21 +1003,24 @@ def build_interface() -> gr.Blocks:
                 prompt_lang_env = gr.Textbox(
                     label="CLAWLINGUA_PROMPT_LANG",
                     value=cfg_view.get("CLAWLINGUA_PROMPT_LANG", "zh"),
-                    info="Prompt language for multi-lingual prompts (en|zh).",
+                    info=_tr(initial_ui_lang, "Prompt language for multi-lingual prompts (en/zh).", "多语言 prompt 选择（en/zh）。"),
                 )
 
-            with gr.Accordion("Paths & defaults", open=False):
+            with gr.Accordion(_tr(initial_ui_lang, "Paths & defaults", "路径与默认值"), open=False) as paths_accordion:
                 output_dir_env = gr.Textbox(
                     label="CLAWLINGUA_OUTPUT_DIR",
                     value=cfg_view.get("CLAWLINGUA_OUTPUT_DIR", "./runs"),
+                    info=_tr(initial_ui_lang, "Directory for intermediate run data (JSONL, media).", "中间运行数据目录（JSONL、media）。"),
                 )
                 export_dir_env = gr.Textbox(
                     label="CLAWLINGUA_EXPORT_DIR",
                     value=cfg_view.get("CLAWLINGUA_EXPORT_DIR", "./outputs"),
+                    info=_tr(initial_ui_lang, "Default directory for exported decks.", "默认牌组导出目录。"),
                 )
                 log_dir_env = gr.Textbox(
                     label="CLAWLINGUA_LOG_DIR",
                     value=cfg_view.get("CLAWLINGUA_LOG_DIR", "./logs"),
+                    info=_tr(initial_ui_lang, "Directory for log files.", "日志目录。"),
                 )
                 default_deck_name_env = gr.Textbox(
                     label="CLAWLINGUA_DEFAULT_DECK_NAME",
@@ -482,42 +1028,125 @@ def build_interface() -> gr.Blocks:
                 )
 
             with gr.Row():
-                load_defaults_btn = gr.Button("Load defaults from ENV_EXAMPLE.md")
-                save_config_btn = gr.Button("Save config")
+                load_defaults_btn = gr.Button(_tr(initial_ui_lang, "Load defaults from ENV_EXAMPLE.md", "从 ENV_EXAMPLE.md 载入默认值"))
+                save_config_btn = gr.Button(_tr(initial_ui_lang, "Save config", "保存配置"))
             save_config_status = gr.Markdown()
 
-            def _on_load_defaults():
+            def _on_list_models(base_url: str, api_key: str, timeout_raw: Any, ui_lang_val: str) -> str:
+                return _list_models_markdown(
+                    base_url=base_url,
+                    api_key=api_key,
+                    timeout_seconds=_to_timeout_seconds(timeout_raw),
+                    lang=_normalize_ui_lang(ui_lang_val),
+                )
+
+            def _on_test_models(base_url: str, api_key: str, timeout_raw: Any, ui_lang_val: str) -> str:
+                return _test_models_markdown(
+                    base_url=base_url,
+                    api_key=api_key,
+                    timeout_seconds=_to_timeout_seconds(timeout_raw),
+                    lang=_normalize_ui_lang(ui_lang_val),
+                )
+
+            llm_list_models_btn.click(
+                _on_list_models,
+                inputs=[llm_base_url, llm_api_key, llm_timeout, ui_lang],
+                outputs=[llm_status],
+            )
+            llm_test_btn.click(
+                _on_test_models,
+                inputs=[llm_base_url, llm_api_key, llm_timeout, ui_lang],
+                outputs=[llm_status],
+            )
+            translate_list_models_btn.click(
+                _on_list_models,
+                inputs=[translate_base_url, translate_api_key, llm_timeout, ui_lang],
+                outputs=[translate_status],
+            )
+            translate_test_btn.click(
+                _on_test_models,
+                inputs=[translate_base_url, translate_api_key, llm_timeout, ui_lang],
+                outputs=[translate_status],
+            )
+
+            def _on_load_defaults(
+                llm_base_url_val: str,
+                llm_api_key_val: str,
+                llm_model_val: str,
+                llm_timeout_val: str,
+                llm_temperature_val: str,
+                translate_base_url_val: str,
+                translate_api_key_val: str,
+                translate_model_val: str,
+                translate_temperature_val: str,
+                chunk_max_chars_val: str,
+                chunk_min_chars_val: str,
+                cloze_min_chars_val: str,
+                cloze_max_per_chunk_val: str,
+                content_profile_val: str,
+                cloze_difficulty_val: str,
+                prompt_lang_val: str,
+                output_dir_val: str,
+                export_dir_val: str,
+                log_dir_val: str,
+                default_deck_name_val: str,
+                ui_lang_val: str,
+            ) -> tuple[str, ...]:
                 defaults = _read_env_example()
+                lang = _normalize_ui_lang(ui_lang_val)
 
                 def dv(key: str, current: str) -> str:
                     return defaults.get(key, current or "")
 
                 return (
-                    dv("CLAWLINGUA_LLM_BASE_URL", llm_base_url.value),
-                    dv("CLAWLINGUA_LLM_API_KEY", llm_api_key.value),
-                    dv("CLAWLINGUA_LLM_MODEL", llm_model.value),
-                    dv("CLAWLINGUA_LLM_TIMEOUT_SECONDS", llm_timeout.value),
-                    dv("CLAWLINGUA_LLM_TEMPERATURE", llm_temperature_env.value),
-                    dv("CLAWLINGUA_TRANSLATE_LLM_BASE_URL", translate_base_url.value),
-                    dv("CLAWLINGUA_TRANSLATE_LLM_API_KEY", translate_api_key.value),
-                    dv("CLAWLINGUA_TRANSLATE_LLM_MODEL", translate_model.value),
-                    dv("CLAWLINGUA_CHUNK_MAX_CHARS", chunk_max_chars_env.value),
-                    dv("CLAWLINGUA_CHUNK_MIN_CHARS", chunk_min_chars_env.value),
-                    dv("CLAWLINGUA_CLOZE_MIN_CHARS", cloze_min_chars_env.value),
-                    dv("CLAWLINGUA_CLOZE_MAX_PER_CHUNK", cloze_max_per_chunk_env.value),
-                    dv("CLAWLINGUA_CONTENT_PROFILE", content_profile_env.value),
-                    dv("CLAWLINGUA_CLOZE_DIFFICULTY", cloze_difficulty_env.value),
-                    dv("CLAWLINGUA_PROMPT_LANG", prompt_lang_env.value),
-                    dv("CLAWLINGUA_OUTPUT_DIR", output_dir_env.value),
-                    dv("CLAWLINGUA_EXPORT_DIR", export_dir_env.value),
-                    dv("CLAWLINGUA_LOG_DIR", log_dir_env.value),
-                    dv("CLAWLINGUA_DEFAULT_DECK_NAME", default_deck_name_env.value),
-                    "Loaded defaults from ENV_EXAMPLE.md (not yet saved).",
+                    dv("CLAWLINGUA_LLM_BASE_URL", llm_base_url_val),
+                    dv("CLAWLINGUA_LLM_API_KEY", llm_api_key_val),
+                    dv("CLAWLINGUA_LLM_MODEL", llm_model_val),
+                    dv("CLAWLINGUA_LLM_TIMEOUT_SECONDS", llm_timeout_val),
+                    dv("CLAWLINGUA_LLM_TEMPERATURE", llm_temperature_val),
+                    dv("CLAWLINGUA_TRANSLATE_LLM_BASE_URL", translate_base_url_val),
+                    dv("CLAWLINGUA_TRANSLATE_LLM_API_KEY", translate_api_key_val),
+                    dv("CLAWLINGUA_TRANSLATE_LLM_MODEL", translate_model_val),
+                    dv("CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE", translate_temperature_val),
+                    dv("CLAWLINGUA_CHUNK_MAX_CHARS", chunk_max_chars_val),
+                    dv("CLAWLINGUA_CHUNK_MIN_CHARS", chunk_min_chars_val),
+                    dv("CLAWLINGUA_CLOZE_MIN_CHARS", cloze_min_chars_val),
+                    dv("CLAWLINGUA_CLOZE_MAX_PER_CHUNK", cloze_max_per_chunk_val),
+                    dv("CLAWLINGUA_CONTENT_PROFILE", content_profile_val),
+                    dv("CLAWLINGUA_CLOZE_DIFFICULTY", cloze_difficulty_val),
+                    dv("CLAWLINGUA_PROMPT_LANG", prompt_lang_val),
+                    dv("CLAWLINGUA_OUTPUT_DIR", output_dir_val),
+                    dv("CLAWLINGUA_EXPORT_DIR", export_dir_val),
+                    dv("CLAWLINGUA_LOG_DIR", log_dir_val),
+                    dv("CLAWLINGUA_DEFAULT_DECK_NAME", default_deck_name_val),
+                    f"✅ {_tr(lang, 'Loaded defaults from ENV_EXAMPLE.md (not yet saved).', '已载入 ENV_EXAMPLE.md 默认值（尚未保存）。')}",
                 )
 
             load_defaults_btn.click(
                 _on_load_defaults,
-                inputs=[],
+                inputs=[
+                    llm_base_url,
+                    llm_api_key,
+                    llm_model,
+                    llm_timeout,
+                    llm_temperature_env,
+                    translate_base_url,
+                    translate_api_key,
+                    translate_model,
+                    translate_temperature,
+                    chunk_max_chars_env,
+                    chunk_min_chars_env,
+                    cloze_min_chars_env,
+                    cloze_max_per_chunk_env,
+                    content_profile_env,
+                    cloze_difficulty_env,
+                    prompt_lang_env,
+                    output_dir_env,
+                    export_dir_env,
+                    log_dir_env,
+                    default_deck_name_env,
+                    ui_lang,
+                ],
                 outputs=[
                     llm_base_url,
                     llm_api_key,
@@ -527,6 +1156,7 @@ def build_interface() -> gr.Blocks:
                     translate_base_url,
                     translate_api_key,
                     translate_model,
+                    translate_temperature,
                     chunk_max_chars_env,
                     chunk_min_chars_env,
                     cloze_min_chars_env,
@@ -551,6 +1181,7 @@ def build_interface() -> gr.Blocks:
                 translate_base_url_val,
                 translate_api_key_val,
                 translate_model_val,
+                translate_temperature_val,
                 chunk_max_chars_val,
                 chunk_min_chars_val,
                 cloze_min_chars_val,
@@ -562,6 +1193,7 @@ def build_interface() -> gr.Blocks:
                 export_dir_val,
                 log_dir_val,
                 default_deck_name_val,
+                ui_lang_val,
             ):
                 updated = {
                     "CLAWLINGUA_LLM_BASE_URL": llm_base_url_val or "",
@@ -572,6 +1204,7 @@ def build_interface() -> gr.Blocks:
                     "CLAWLINGUA_TRANSLATE_LLM_BASE_URL": translate_base_url_val or "",
                     "CLAWLINGUA_TRANSLATE_LLM_API_KEY": translate_api_key_val or "",
                     "CLAWLINGUA_TRANSLATE_LLM_MODEL": translate_model_val or "",
+                    "CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE": translate_temperature_val or "",
                     "CLAWLINGUA_CHUNK_MAX_CHARS": chunk_max_chars_val or "",
                     "CLAWLINGUA_CHUNK_MIN_CHARS": chunk_min_chars_val or "",
                     "CLAWLINGUA_CLOZE_MIN_CHARS": cloze_min_chars_val or "",
@@ -584,7 +1217,7 @@ def build_interface() -> gr.Blocks:
                     "CLAWLINGUA_LOG_DIR": log_dir_val or "",
                     "CLAWLINGUA_DEFAULT_DECK_NAME": default_deck_name_val or "",
                 }
-                msg = _save_env(updated)
+                msg = _save_env_v2(updated, lang=_normalize_ui_lang(ui_lang_val))
                 return msg
 
             save_config_btn.click(
@@ -598,6 +1231,7 @@ def build_interface() -> gr.Blocks:
                     translate_base_url,
                     translate_api_key,
                     translate_model,
+                    translate_temperature,
                     chunk_max_chars_env,
                     chunk_min_chars_env,
                     cloze_min_chars_env,
@@ -609,9 +1243,202 @@ def build_interface() -> gr.Blocks:
                     export_dir_env,
                     log_dir_env,
                     default_deck_name_env,
+                    ui_lang,
                 ],
                 outputs=[save_config_status],
             )
+
+        with gr.Tab(_tr(initial_ui_lang, "Prompt", "提示词")) as prompt_tab:
+            prompt_heading = gr.Markdown(_tr(initial_ui_lang, "### Prompt JSON editor", "### Prompt JSON 编辑器"))
+            prompt_file_selector = gr.Dropdown(
+                choices=_prompt_choices(initial_ui_lang),
+                value=initial_prompt_key,
+                label=_tr(initial_ui_lang, "Prompt file", "Prompt 文件"),
+            )
+            prompt_editor = gr.Textbox(
+                label=_tr(initial_ui_lang, "Prompt JSON", "Prompt JSON 内容"),
+                value=initial_prompt_text,
+                lines=24,
+            )
+            with gr.Row():
+                prompt_validate_btn = gr.Button(_tr(initial_ui_lang, "Validate", "校验"))
+                prompt_save_btn = gr.Button(_tr(initial_ui_lang, "Save", "保存"))
+            prompt_status = gr.Markdown(
+                label=_tr(initial_ui_lang, "Prompt status", "Prompt 状态"),
+                value=initial_prompt_status,
+            )
+
+            def _on_prompt_file_change(prompt_key: str, ui_lang_val: str) -> tuple[str, str]:
+                return _load_prompt_text(prompt_key, prompt_files, lang=_normalize_ui_lang(ui_lang_val))
+
+            def _on_prompt_validate(prompt_json: str, ui_lang_val: str) -> str:
+                _ok, msg = _validate_prompt_json(prompt_json, lang=_normalize_ui_lang(ui_lang_val))
+                return msg
+
+            def _on_prompt_save(prompt_key: str, prompt_json: str, ui_lang_val: str) -> str:
+                lang = _normalize_ui_lang(ui_lang_val)
+                ok, msg = _validate_prompt_json(prompt_json, lang=lang)
+                if not ok:
+                    return f"{msg}\n\n⚠️ {_tr(lang, 'Not saved because validation failed.', '未保存：校验未通过。')}"
+                target = prompt_files.get(prompt_key)
+                if target is None:
+                    return f"❌ {_tr(lang, 'Failed to load prompt file', '加载 prompt 文件失败')}: `{prompt_key}`"
+                backup = target.with_suffix(target.suffix + ".bak")
+                try:
+                    if target.exists():
+                        shutil.copyfile(target, backup)
+                    target.write_text((prompt_json or "").rstrip() + "\n", encoding="utf-8")
+                except Exception as exc:
+                    return f"❌ {_tr(lang, 'Not saved because validation failed.', '保存失败。')}: `{exc}`"
+                return (
+                    f"✅ {_tr(lang, 'Prompt saved.', 'Prompt 已保存。')}\n\n"
+                    f"- file: `{target}`\n"
+                    f"- {_tr(lang, 'Backup created', '已创建备份')}: `{backup}`"
+                )
+
+            prompt_file_selector.change(
+                _on_prompt_file_change,
+                inputs=[prompt_file_selector, ui_lang],
+                outputs=[prompt_editor, prompt_status],
+            )
+            prompt_validate_btn.click(
+                _on_prompt_validate,
+                inputs=[prompt_editor, ui_lang],
+                outputs=[prompt_status],
+            )
+            prompt_save_btn.click(
+                _on_prompt_save,
+                inputs=[prompt_file_selector, prompt_editor, ui_lang],
+                outputs=[prompt_status],
+            )
+
+        def _on_ui_lang_change(lang_value: str, prompt_lang_current: str, prompt_key_current: str) -> tuple[Any, ...]:
+            lang = _normalize_ui_lang(lang_value)
+            prompt_lang_next = (prompt_lang_current or "").strip() or lang
+            prompt_key_next = prompt_key_current if prompt_key_current in prompt_files else initial_prompt_key
+            return (
+                gr.update(label=_tr(lang, "UI language", "界面语言")),
+                gr.update(value=_tr(lang, "# ClawLingua Web UI\nLocal deck builder for text learning.", "# ClawLingua Web UI\n本地化文本学习牌组生成器。")),
+                gr.update(label=_tr(lang, "Run", "运行")),
+                gr.update(label=_tr(lang, "Config", "配置")),
+                gr.update(label=_tr(lang, "Prompt", "提示词")),
+                gr.update(label=_tr(lang, "Input file", "输入文件")),
+                gr.update(label=_tr(lang, "Deck title (optional)", "牌组名称（可选）")),
+                gr.update(label=_tr(lang, "Source language", "源语言")),
+                gr.update(label=_tr(lang, "Target language", "目标语言")),
+                gr.update(label=_tr(lang, "Content profile", "内容类型")),
+                gr.update(label=_tr(lang, "Difficulty", "难度")),
+                gr.update(label=_tr(lang, "Max notes (0 = no limit)", "最大 note 数（0=不限）"), info=_tr(lang, "Maximum notes after dedupe. Empty/0 means no limit.", "去重后最多生成多少 note。空或 0 表示不限制。")),
+                gr.update(label=_tr(lang, "Input char limit", "输入字符上限"), info=_tr(lang, "Only process the first N chars of input. Empty means no limit.", "仅处理输入前 N 个字符。留空表示不限制。")),
+                gr.update(label=_tr(lang, "Advanced", "高级参数")),
+                gr.update(label=_tr(lang, "Cloze min chars (override env)", "最小挖空长度（覆盖 env）"), info=_tr(lang, "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.", "仅本次运行覆盖 CLAWLINGUA_CLOZE_MIN_CHARS。")),
+                gr.update(label=_tr(lang, "Chunk max chars (override env)", "chunk 最大字符（覆盖 env）"), info=_tr(lang, "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.", "仅本次运行覆盖 CLAWLINGUA_CHUNK_MAX_CHARS。")),
+                gr.update(label=_tr(lang, "Temperature (override env)", "温度参数（覆盖 env）"), info=_tr(lang, "0 is more deterministic; higher values are more random.", "0 更确定，高值更随机。")),
+                gr.update(label=_tr(lang, "Save intermediate files", "保存中间文件"), info=_tr(lang, "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.", "将中间 JSONL/media 写入 OUTPUT_DIR/<run_id>。")),
+                gr.update(label=_tr(lang, "Continue on error", "遇错继续"), info=_tr(lang, "If enabled, continue processing after per-item failures.", "勾选后遇到局部错误仍继续处理后续内容。")),
+                gr.update(value=_tr(lang, "Run", "开始运行")),
+                gr.update(label=_tr(lang, "Status", "状态")),
+                gr.update(label=_tr(lang, "Download .apkg", "下载 .apkg")),
+                gr.update(value=_tr(lang, "### Config (.env editor)", "### 配置（.env 编辑器）")),
+                gr.update(label=_tr(lang, "LLM (primary)", "主 LLM")),
+                gr.update(info=_tr(lang, "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).", "OpenAI 兼容接口基础地址（/chat/completions 之前的部分，如 .../v1）。")),
+                gr.update(info=_tr(lang, "API key for primary LLM, when required.", "主 LLM 的 API Key（如需要）。")),
+                gr.update(info=_tr(lang, "Model name for primary LLM.", "主 LLM 的模型名。")),
+                gr.update(info=_tr(lang, "Request timeout in seconds.", "请求超时（秒）。")),
+                gr.update(info=_tr(lang, "Default temperature for primary LLM.", "主 LLM 默认温度参数。")),
+                gr.update(value=_tr(lang, "List models", "列出模型")),
+                gr.update(value=_tr(lang, "Test", "测试连通")),
+                gr.update(label=_tr(lang, "Primary LLM status", "主 LLM 状态")),
+                gr.update(label=_tr(lang, "Translation LLM", "翻译 LLM")),
+                gr.update(info=_tr(lang, "Optional base URL for translation model.", "翻译模型可选基础地址。")),
+                gr.update(info=_tr(lang, "API key for translation LLM, when required.", "翻译 LLM 的 API Key（如需要）。")),
+                gr.update(info=_tr(lang, "Model name for translation LLM.", "翻译 LLM 的模型名。")),
+                gr.update(info=_tr(lang, "Default temperature for translation LLM.", "翻译 LLM 默认温度参数。")),
+                gr.update(value=_tr(lang, "List models (translate)", "列出翻译模型")),
+                gr.update(value=_tr(lang, "Test (translate)", "测试翻译连通")),
+                gr.update(label=_tr(lang, "Translation LLM status", "翻译 LLM 状态")),
+                gr.update(label=_tr(lang, "Chunk & Cloze", "切块与挖空")),
+                gr.update(info=_tr(lang, "Default max chars per chunk.", "默认每个 chunk 的最大字符数。")),
+                gr.update(info=_tr(lang, "Minimum chars required for cloze text.", "挖空文本最小字符数。")),
+                gr.update(info=_tr(lang, "Max cards per chunk after dedupe. Empty/0 means unlimited.", "去重后每个 chunk 最多卡片数。空或 0 表示不限制。")),
+                gr.update(label="CLAWLINGUA_PROMPT_LANG", info=_tr(lang, "Prompt language for multi-lingual prompts (en/zh).", "多语言 prompt 选择（en/zh）。"), value=prompt_lang_next),
+                gr.update(label=_tr(lang, "Paths & defaults", "路径与默认值")),
+                gr.update(info=_tr(lang, "Directory for intermediate run data (JSONL, media).", "中间运行数据目录（JSONL、media）。")),
+                gr.update(info=_tr(lang, "Default directory for exported decks.", "默认牌组导出目录。")),
+                gr.update(info=_tr(lang, "Directory for log files.", "日志目录。")),
+                gr.update(value=_tr(lang, "Load defaults from ENV_EXAMPLE.md", "从 ENV_EXAMPLE.md 载入默认值")),
+                gr.update(value=_tr(lang, "Save config", "保存配置")),
+                gr.update(value=_tr(lang, "### Prompt JSON editor", "### Prompt JSON 编辑器")),
+                gr.update(label=_tr(lang, "Prompt file", "Prompt 文件"), choices=_prompt_choices(lang), value=prompt_key_next),
+                gr.update(label=_tr(lang, "Prompt JSON", "Prompt JSON 内容")),
+                gr.update(value=_tr(lang, "Validate", "校验")),
+                gr.update(value=_tr(lang, "Save", "保存")),
+                gr.update(label=_tr(lang, "Prompt status", "Prompt 状态")),
+            )
+
+        ui_lang.change(
+            _on_ui_lang_change,
+            inputs=[ui_lang, prompt_lang_env, prompt_file_selector],
+            outputs=[
+                ui_lang,
+                title_md,
+                run_tab,
+                config_tab,
+                prompt_tab,
+                input_file,
+                deck_title,
+                source_lang,
+                target_lang,
+                content_profile,
+                difficulty,
+                max_notes,
+                input_char_limit,
+                run_advanced,
+                cloze_min_chars,
+                chunk_max_chars,
+                temperature,
+                save_intermediate,
+                continue_on_error,
+                run_button,
+                run_status,
+                output_file,
+                config_heading,
+                llm_accordion,
+                llm_base_url,
+                llm_api_key,
+                llm_model,
+                llm_timeout,
+                llm_temperature_env,
+                llm_list_models_btn,
+                llm_test_btn,
+                llm_status,
+                translate_accordion,
+                translate_base_url,
+                translate_api_key,
+                translate_model,
+                translate_temperature,
+                translate_list_models_btn,
+                translate_test_btn,
+                translate_status,
+                chunk_accordion,
+                chunk_max_chars_env,
+                cloze_min_chars_env,
+                cloze_max_per_chunk_env,
+                prompt_lang_env,
+                paths_accordion,
+                output_dir_env,
+                export_dir_env,
+                log_dir_env,
+                load_defaults_btn,
+                save_config_btn,
+                prompt_heading,
+                prompt_file_selector,
+                prompt_editor,
+                prompt_validate_btn,
+                prompt_save_btn,
+                prompt_status,
+            ],
+        )
 
     return demo
 
