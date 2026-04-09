@@ -68,6 +68,10 @@ class AppConfig(BaseModel):
     # LLM chunk-level batch size; 1 means per-chunk requests.
     llm_chunk_batch_size: int = 1
 
+    # Prompt language: en|zh. Used when prompts provide multi-lingual
+    # variants (e.g. system_prompt/user_prompt_template as {"en": ..., "zh": ...}).
+    prompt_lang: str = "zh"
+
     # Translation LLM (small LLM) settings; fallback to main LLM when empty.
     translate_llm_base_url: str | None = None
     translate_llm_api_key: str | None = None
@@ -274,8 +278,10 @@ def load_config(
         "llm_chunk_batch_size": _env_value(
             merged.get("CLAWLINGUA_LLM_CHUNK_BATCH_SIZE"), 1
         ),
-        "translate_llm_base_url": _env_value(
-            merged.get("CLAWLINGUA_TRANSLATE_LLM_BASE_URL"), None
+        "prompt_lang": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_LANG"), "zh"
+        ),
+        "translate_llm_base_url": _env_value(            merged.get("CLAWLINGUA_TRANSLATE_LLM_BASE_URL"), None
         ),
         "translate_llm_api_key": _env_value(
             merged.get("CLAWLINGUA_TRANSLATE_LLM_API_KEY"), None

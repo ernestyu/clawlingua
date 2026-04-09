@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -22,8 +22,11 @@ class PromptSpec(BaseModel):
     version: str
     description: str
     mode: Literal["cloze", "translate"]
-    system_prompt: str
-    user_prompt_template: str
+    # system_prompt/user_prompt_template 支持两种形式：
+    # - 旧格式：纯字符串
+    # - 新格式：{"en": "...", "zh": "..."}
+    system_prompt: Union[str, dict[str, str]]
+    user_prompt_template: Union[str, dict[str, str]]
     placeholders: list[str] = Field(default_factory=list)
     output_format: PromptOutputFormatSpec
     parser: PromptParserSpec = Field(default_factory=PromptParserSpec)

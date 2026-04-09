@@ -279,6 +279,11 @@ def build_deck(
         "--difficulty",
         help="Cloze difficulty override: beginner|intermediate|advanced (overrides env).",
     ),
+    prompt_lang: str | None = typer.Option(
+        None,
+        "--prompt-lang",
+        help="Prompt language for multi-lingual prompts (en|zh). Overrides CLAWLINGUA_PROMPT_LANG.",
+    ),
     save_intermediate: bool | None = typer.Option(None, "--save-intermediate/--no-save-intermediate"),
     continue_on_error: bool = typer.Option(False, "--continue-on-error"),
     verbose: bool = typer.Option(False, "--verbose"),
@@ -312,6 +317,10 @@ def build_deck(
                 next_steps=[f"Use one of: {allowed}"],
                 exit_code=ExitCode.ARGUMENT_ERROR,
             )
+
+        # Prompt language override: CLI > env
+        if prompt_lang:
+            cfg.prompt_lang = prompt_lang.strip().lower()
 
         result = run_build_deck(
             cfg,

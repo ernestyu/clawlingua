@@ -12,7 +12,48 @@ from ..models.prompt_schema import PromptSpec
 from ..utils.jsonx import load_json
 
 
-def load_prompt(path: Path) -> PromptSpec:
+def _resolve_lang_map(value: dict[str, str], lang: str, default_lang: str = "zh") -> str:
+    """Resolve a language-keyed prompt field.
+
+    - Prefer ``value[lang]`` when present and non-empty
+    - Fallback to ``value[default_lang]``
+    - Otherwise, fallback to the first non-empty value
+    """
+
+    if not value:
+        return ""
+    if lang in value and str(value[lang]).strip():
+        return str(value[lang]).strip()
+    if default_lang in value and str(value[default_lang]).strip():
+        return str(value[default_lang]).strip()
+    for v in value.values():
+        if str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def _apply_prompt_lang(spec: PromptSpec, prompt_lang: str) -> PromptSpec:
+    """Return a copy of PromptSpec with language-resolved prompt fields.
+
+    This keeps the underlying PromptSpec model flexible (accepting either
+    strings or {"en": ..., "zh": ...}) while exposing only concrete
+    strings to downstream code.
+    """
+
+    lang = (prompt_lang or "zh").strip().lower()
+    data = spec.model_dump()
+    system_prompt = data.get("system_prompt")
+    user_prompt_template = data.get("user_prompt_template")
+
+    if isinstance(system_prompt, dict):
+        data["system_prompt"] = _resolve_lang_map(system_prompt, lang)
+    if isinstance(user_prompt_template, dict):
+        data["user_prompt_template"] = _resolve_lang_map(user_prompt_template, lang)
+
+    return PromptSpec.model_validate(data)
+
+
+def load_prompt(path: Path, *, prompt_lang: str | None = None) -> PromptSpec:
     if not path.exists():
         raise build_error(
             error_code="PROMPT_NOT_FOUND",
@@ -23,7 +64,10 @@ def load_prompt(path: Path) -> PromptSpec:
         )
     try:
         data = load_json(path)
-        return PromptSpec.model_validate(data)
+        spec = PromptSpec.model_validate(data)
+        if prompt_lang:
+            spec = _apply_prompt_lang(spec, prompt_lang)
+        return spec
     except ValidationError as exc:
         raise build_error(
             error_code="PROMPT_SCHEMA_INVALID",
@@ -35,7 +79,7 @@ def load_prompt(path: Path) -> PromptSpec:
             ],
             exit_code=ExitCode.SCHEMA_ERROR,
         ) from exc
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - defensive
         raise build_error(
             error_code="PROMPT_LOAD_FAILED",
             cause="Prompt 文件读取失败。",
@@ -43,4 +87,3 @@ def load_prompt(path: Path) -> PromptSpec:
             next_steps=["检查 JSON 格式是否有效"],
             exit_code=ExitCode.SCHEMA_ERROR,
         ) from exc
-

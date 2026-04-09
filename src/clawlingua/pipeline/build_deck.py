@@ -241,8 +241,8 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     run_ctx = create_run_context(cfg, name="build_deck")
     template = load_anki_template(cfg.resolve_path(cfg.anki_template))
     cloze_prompt_path = cfg.prompt_cloze_textbook if content_profile == "textbook_examples" else cfg.prompt_cloze
-    cloze_prompt = load_prompt(cfg.resolve_path(cloze_prompt_path))
-    translate_prompt = load_prompt(cfg.resolve_path(cfg.prompt_translate))
+    cloze_prompt = load_prompt(cfg.resolve_path(cloze_prompt_path), prompt_lang=cfg.prompt_lang)
+    translate_prompt = load_prompt(cfg.resolve_path(cfg.prompt_translate), prompt_lang=cfg.prompt_lang)
 
     document = _build_document(cfg, run_ctx.run_id, options)
     logger.info('ingest complete | title="%s"', document.title or "")

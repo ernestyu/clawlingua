@@ -81,6 +81,7 @@ _EDITABLE_ENV_KEYS = [
     "CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS",
     "CLAWLINGUA_CONTENT_PROFILE",
     "CLAWLINGUA_CLOZE_DIFFICULTY",
+    "CLAWLINGUA_PROMPT_LANG",
     # Paths & defaults
     "CLAWLINGUA_OUTPUT_DIR",
     "CLAWLINGUA_EXPORT_DIR",
@@ -456,6 +457,11 @@ def build_interface() -> gr.Blocks:
                     label="CLAWLINGUA_CLOZE_DIFFICULTY",
                     value=cfg_view.get("CLAWLINGUA_CLOZE_DIFFICULTY", "intermediate"),
                 )
+                prompt_lang_env = gr.Textbox(
+                    label="CLAWLINGUA_PROMPT_LANG",
+                    value=cfg_view.get("CLAWLINGUA_PROMPT_LANG", "zh"),
+                    info="Prompt language for multi-lingual prompts (en|zh).",
+                )
 
             with gr.Accordion("Paths & defaults", open=False):
                 output_dir_env = gr.Textbox(
@@ -493,6 +499,7 @@ def build_interface() -> gr.Blocks:
                 cloze_max_per_chunk_val,
                 content_profile_val,
                 cloze_difficulty_val,
+                prompt_lang_val,
                 output_dir_val,
                 export_dir_val,
                 log_dir_val,
@@ -513,6 +520,7 @@ def build_interface() -> gr.Blocks:
                     "CLAWLINGUA_CLOZE_MAX_PER_CHUNK": cloze_max_per_chunk_val or "",
                     "CLAWLINGUA_CONTENT_PROFILE": content_profile_val or "",
                     "CLAWLINGUA_CLOZE_DIFFICULTY": cloze_difficulty_val or "",
+                    "CLAWLINGUA_PROMPT_LANG": prompt_lang_val or "",
                     "CLAWLINGUA_OUTPUT_DIR": output_dir_val or "",
                     "CLAWLINGUA_EXPORT_DIR": export_dir_val or "",
                     "CLAWLINGUA_LOG_DIR": log_dir_val or "",
@@ -538,6 +546,7 @@ def build_interface() -> gr.Blocks:
                     cloze_max_per_chunk_env,
                     content_profile_env,
                     cloze_difficulty_env,
+                    prompt_lang_env,
                     output_dir_env,
                     export_dir_env,
                     log_dir_env,
