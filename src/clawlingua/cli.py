@@ -31,7 +31,7 @@ app = typer.Typer(
     name="clawlingua",
     add_completion=False,
     no_args_is_help=True,
-    help="Build Anki cloze decks from local text files.",
+    help="Build Anki cloze decks from local text/EPUB files.",
 )
 build_app = typer.Typer(no_args_is_help=True, help="Build commands.")
 prompt_app = typer.Typer(no_args_is_help=True, help="Prompt file commands.")
@@ -246,9 +246,14 @@ def doctor(
 
 @build_app.command("deck", help=BUILD_DECK_HELP)
 def build_deck(
-    input_value: str = typer.Argument(..., help="Path to .txt/.md input."),
+    input_value: str = typer.Argument(..., help="Path to .txt/.md/.epub input."),
     source_lang: str | None = typer.Option(None, "--source-lang", help="Source language code."),
     target_lang: str | None = typer.Option(None, "--target-lang", help="Target language code."),
+    input_char_limit: int | None = typer.Option(
+        None,
+        "--input-char-limit",
+        help="Only process the first N characters of input (for quick testing).",
+    ),
     env_file: Path | None = typer.Option(None, "--env-file", help="Path to .env file."),
     output: Path | None = typer.Option(None, "--output", help="Output .apkg path."),
     deck_name: str | None = typer.Option(None, "--deck-name", help="Deck name override."),
@@ -268,6 +273,14 @@ def build_deck(
     def _impl() -> None:
         cfg = load_config(env_file=env_file)
         setup_logging(cfg.log_level if not verbose else "DEBUG")
+        if input_char_limit is not None and input_char_limit <= 0:
+            raise build_error(
+                error_code="ARG_INPUT_CHAR_LIMIT_INVALID",
+                cause="input-char-limit value is invalid.",
+                detail=f"input_char_limit={input_char_limit}",
+                next_steps=["Use a positive integer, e.g. --input-char-limit 4000"],
+                exit_code=ExitCode.ARGUMENT_ERROR,
+            )
 
         result = run_build_deck(
             cfg,
@@ -275,6 +288,7 @@ def build_deck(
                 input_value=input_value,
                 source_lang=source_lang,
                 target_lang=target_lang,
+                input_char_limit=input_char_limit,
                 output=output,
                 deck_name=deck_name,
                 max_chars=max_chars,

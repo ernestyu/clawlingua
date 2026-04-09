@@ -5,7 +5,7 @@ into Anki cloze decks (`.apkg`) for language learning.
 
 It:
 
-- ingests content from local `.txt`/`.md` files
+- ingests content from local `.txt`/`.md`/`.epub` files
 - cleans and chunks the text into context blocks
 - uses an OpenAI-compatible LLM to generate contextual cloze sentences
 - uses a separate (usually cheaper) LLM for translations
@@ -85,6 +85,8 @@ This controls pre-LLM line filtering:
 
 - lines with very few words (for example one-word interjections) are dropped;
 - set `CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS=0` to disable this filter.
+- `.md` input is converted to plain text before filtering.
+- `.epub` input is unpacked and chapter HTML is converted to plain text before filtering.
 
 ### 2.3 Chunking
 
@@ -283,6 +285,7 @@ Core command:
 python -m clawlingua.cli build deck INPUT \
   --source-lang en \
   --target-lang zh \
+  --input-char-limit 4000 \
   --env-file .env \
   --output deck.apkg \
   --deck-name "My Cloze Deck" \
@@ -297,8 +300,9 @@ python -m clawlingua.cli build deck INPUT \
 
 Where:
 
-- `INPUT`: path to `.txt`/`.md` file.
+- `INPUT`: path to `.txt`/`.md`/`.epub` file.
 - `--source-lang` / `--target-lang` override defaults from env.
+- `--input-char-limit` lets you process only the first N characters for quick tests.
 - `--difficulty` overrides `CLAWLINGUA_CLOZE_DIFFICULTY`.
 - `--max-chars` overrides `CLAWLINGUA_CHUNK_MAX_CHARS` for this run.
 - `--max-notes` imposes a global cap on number of notes.

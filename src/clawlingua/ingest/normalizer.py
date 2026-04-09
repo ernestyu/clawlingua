@@ -35,6 +35,12 @@ _MD_BLOCKQUOTE_RE = re.compile(r"^\s{0,3}>\s?", re.MULTILINE)
 _MD_LIST_MARK_RE = re.compile(r"^\s{0,3}(?:[*+-]|\d+\.)\s+", re.MULTILINE)
 _MD_HRULE_RE = re.compile(r"^\s{0,3}(?:[-*_]\s*){3,}$", re.MULTILINE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_HTML_BLOCK_TAG_RE = re.compile(
+    r"</?(?:p|div|h[1-6]|li|section|article|br|tr|td|th|blockquote|ul|ol|hr|pre)[^>]*>",
+    re.IGNORECASE,
+)
+_HTML_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>[\s\S]*?</\1>", re.IGNORECASE)
+_HTML_COMMENT_RE = re.compile(r"<!--[\s\S]*?-->", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,16 @@ def strip_markdown_to_text(text: str) -> str:
     value = _MD_HRULE_RE.sub("\n", value)
     value = value.replace("**", "").replace("__", "").replace("~~", "")
     value = re.sub(r"(?<!\w)[*_](?!\s)", "", value)
+    value = _HTML_TAG_RE.sub("", value)
+    value = unescape(value)
+    return normalize_paragraph_text(value)
+
+
+def strip_html_to_text(text: str) -> str:
+    value = text.replace("\r\n", "\n").replace("\r", "\n")
+    value = _HTML_COMMENT_RE.sub("\n", value)
+    value = _HTML_SCRIPT_STYLE_RE.sub("\n", value)
+    value = _HTML_BLOCK_TAG_RE.sub("\n", value)
     value = _HTML_TAG_RE.sub("", value)
     value = unescape(value)
     return normalize_paragraph_text(value)

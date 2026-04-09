@@ -13,6 +13,7 @@ from ..chunking.splitter import split_into_chunks
 from ..config import AppConfig, validate_base_config, validate_runtime_config
 from ..errors import ClawLinguaError, build_error
 from ..exit_codes import ExitCode
+from ..ingest.epub_reader import read_epub_file
 from ..ingest.file_reader import read_text_file
 from ..ingest.normalizer import NormalizeOptions, normalize_text, strip_markdown_to_text
 from ..llm.client import OpenAICompatibleClient
@@ -41,6 +42,7 @@ class BuildDeckOptions:
     input_value: str
     source_lang: str | None = None
     target_lang: str | None = None
+    input_char_limit: int | None = None
     output: Path | None = None
     deck_name: str | None = None
     max_chars: int | None = None
@@ -119,10 +121,20 @@ def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> D
     file_path = Path(options.input_value)
     if not file_path.is_absolute():
         file_path = (cfg.workspace_root / file_path).resolve()
-    raw_text = read_text_file(file_path)
-    if file_path.suffix.lower() in {".md", ".markdown"}:
-        raw_text = strip_markdown_to_text(raw_text)
-    title = file_path.stem
+    suffix = file_path.suffix.lower()
+    if suffix == ".epub":
+        epub_result = read_epub_file(file_path)
+        raw_text = epub_result.text
+        title = epub_result.title or file_path.stem
+    else:
+        raw_text = read_text_file(file_path)
+        if suffix in {".md", ".markdown"}:
+            raw_text = strip_markdown_to_text(raw_text)
+        title = file_path.stem
+
+    if options.input_char_limit and options.input_char_limit > 0:
+        raw_text = raw_text[: options.input_char_limit]
+
     source_url = None
     cleaned_markdown = None
     options.input_value = str(file_path)
