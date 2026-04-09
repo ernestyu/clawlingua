@@ -75,7 +75,7 @@ clawlingua(1) -- 从本地文本/EPUB 构建 Anki 填空牌组
                 指定 .env 文件路径；省略时使用默认查找逻辑。
 
             --output
-                输出 .apkg 路径。默认 runs/<run_id>/output.apkg。
+                输出 .apkg 路径。默认 outputs/<run_id>/output.apkg。
 
             --deck-name
                 覆盖默认的牌组名称。默认值为
@@ -134,6 +134,7 @@ clawlingua(1) -- 从本地文本/EPUB 构建 Anki 填空牌组
     CLAWLINGUA_CONTENT_PROFILE   默认内容策略
     CLAWLINGUA_TTS_*             TTS 提供方与 voice 列表
     CLAWLINGUA_OUTPUT_DIR        输出目录
+    CLAWLINGUA_LOG_DIR           日志目录
 
 参见
     README.md, README_zh.md, ENV_EXAMPLE.md

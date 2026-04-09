@@ -104,7 +104,7 @@ def doctor(
 ) -> None:
     def _impl() -> None:
         cfg = load_config(env_file=env_file)
-        setup_logging(cfg.log_level)
+        setup_logging(cfg.log_level, log_dir=cfg.log_dir)
 
         checks: list[tuple[str, bool, str]] = []
 
@@ -286,7 +286,7 @@ def build_deck(
 ) -> None:
     def _impl() -> None:
         cfg = load_config(env_file=env_file)
-        setup_logging(cfg.log_level if not verbose else "DEBUG")
+        setup_logging(cfg.log_level if not verbose else "DEBUG", log_dir=cfg.log_dir)
         if input_char_limit is not None and input_char_limit <= 0:
             raise build_error(
                 error_code="ARG_INPUT_CHAR_LIMIT_INVALID",

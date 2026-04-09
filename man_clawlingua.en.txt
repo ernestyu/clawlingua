@@ -77,7 +77,7 @@ COMMANDS
                 Path to .env file. If omitted, default resolution logic is used.
 
             --output
-                Output .apkg path. Defaults to runs/<run_id>/output.apkg.
+                Output .apkg path. Defaults to outputs/<run_id>/output.apkg.
 
             --deck-name
                 Override Anki deck name. Defaults to CLAWLINGUA_DEFAULT_DECK_NAME
@@ -136,6 +136,7 @@ ENVIRONMENT
     CLAWLINGUA_CONTENT_PROFILE   Default content profile
     CLAWLINGUA_TTS_*             TTS provider and voice lists
     CLAWLINGUA_OUTPUT_DIR        Output directory for runs
+    CLAWLINGUA_LOG_DIR           Directory for log files
 
 SEE ALSO
     README.md, README_zh.md, ENV_EXAMPLE.md

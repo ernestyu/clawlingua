@@ -162,7 +162,8 @@ CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
-CLAWLINGUA_OUTPUT_DIR=./runs
+CLAWLINGUA_OUTPUT_DIR=./outputs
+CLAWLINGUA_LOG_DIR=./logs
 CLAWLINGUA_LOG_LEVEL=INFO
 CLAWLINGUA_SAVE_INTERMEDIATE=true
 CLAWLINGUA_DEFAULT_DECK_NAME=ClawLingua Default Deck
@@ -330,7 +331,7 @@ Where:
 - In `textbook_examples` profile, runs are rejected when env `CLOZE_MIN_CHARS > 120`
   unless you explicitly provide `--cloze-min-chars`.
 - `--max-notes` imposes a global cap on number of notes.
-- `--save-intermediate` dumps intermediates under `CLAWLINGUA_OUTPUT_DIR/runs/<run_id>`.
+- `--save-intermediate` dumps intermediates under `CLAWLINGUA_OUTPUT_DIR/<run_id>`.
 - `--continue-on-error` logs and skips individual failures instead of aborting.
 - `--debug` makes `_run_guard` re-raise exceptions with tracebacks.
 - By default, deck name uses the input file name (without extension); `--deck-name` overrides it.
