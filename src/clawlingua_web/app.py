@@ -485,68 +485,88 @@ def build_interface() -> gr.Blocks:
                 load_defaults_btn = gr.Button("Load defaults from ENV_EXAMPLE.md")
                 save_config_btn = gr.Button("Save config")
             save_config_status = gr.Markdown()
-@@
+
+            def _on_load_defaults():
+                defaults = _read_env_example()
+
+                def dv(key: str, current: str) -> str:
+                    return defaults.get(key, current or "")
+
+                return (
+                    dv("CLAWLINGUA_LLM_BASE_URL", llm_base_url.value),
+                    dv("CLAWLINGUA_LLM_API_KEY", llm_api_key.value),
+                    dv("CLAWLINGUA_LLM_MODEL", llm_model.value),
+                    dv("CLAWLINGUA_LLM_TIMEOUT_SECONDS", llm_timeout.value),
+                    dv("CLAWLINGUA_LLM_TEMPERATURE", llm_temperature_env.value),
+                    dv("CLAWLINGUA_TRANSLATE_LLM_BASE_URL", translate_base_url.value),
+                    dv("CLAWLINGUA_TRANSLATE_LLM_API_KEY", translate_api_key.value),
+                    dv("CLAWLINGUA_TRANSLATE_LLM_MODEL", translate_model.value),
+                    dv("CLAWLINGUA_CHUNK_MAX_CHARS", chunk_max_chars_env.value),
+                    dv("CLAWLINGUA_CHUNK_MIN_CHARS", chunk_min_chars_env.value),
+                    dv("CLAWLINGUA_CLOZE_MIN_CHARS", cloze_min_chars_env.value),
+                    dv("CLAWLINGUA_CLOZE_MAX_PER_CHUNK", cloze_max_per_chunk_env.value),
+                    dv("CLAWLINGUA_CONTENT_PROFILE", content_profile_env.value),
+                    dv("CLAWLINGUA_CLOZE_DIFFICULTY", cloze_difficulty_env.value),
+                    dv("CLAWLINGUA_PROMPT_LANG", prompt_lang_env.value),
+                    dv("CLAWLINGUA_OUTPUT_DIR", output_dir_env.value),
+                    dv("CLAWLINGUA_EXPORT_DIR", export_dir_env.value),
+                    dv("CLAWLINGUA_LOG_DIR", log_dir_env.value),
+                    dv("CLAWLINGUA_DEFAULT_DECK_NAME", default_deck_name_env.value),
+                    "Loaded defaults from ENV_EXAMPLE.md (not yet saved).",
+                )
+
+            load_defaults_btn.click(
+                _on_load_defaults,
+                inputs=[],
+                outputs=[
+                    llm_base_url,
+                    llm_api_key,
+                    llm_model,
+                    llm_timeout,
+                    llm_temperature_env,
+                    translate_base_url,
+                    translate_api_key,
+                    translate_model,
+                    chunk_max_chars_env,
+                    chunk_min_chars_env,
+                    cloze_min_chars_env,
+                    cloze_max_per_chunk_env,
+                    content_profile_env,
+                    cloze_difficulty_env,
+                    prompt_lang_env,
+                    output_dir_env,
+                    export_dir_env,
+                    log_dir_env,
+                    default_deck_name_env,
+                    save_config_status,
+                ],
+            )
+
             save_config_btn.click(
                 _on_save_config,
-@@
+                inputs=[
+                    llm_base_url,
+                    llm_api_key,
+                    llm_model,
+                    llm_timeout,
+                    llm_temperature_env,
+                    translate_base_url,
+                    translate_api_key,
+                    translate_model,
+                    chunk_max_chars_env,
+                    chunk_min_chars_env,
+                    cloze_min_chars_env,
+                    cloze_max_per_chunk_env,
+                    content_profile_env,
+                    cloze_difficulty_env,
+                    prompt_lang_env,
+                    output_dir_env,
+                    export_dir_env,
+                    log_dir_env,
+                    default_deck_name_env,
+                ],
                 outputs=[save_config_status],
             )
-+
-+            def _on_load_defaults():
-+                defaults = _read_env_example()
-+
-+                def dv(key: str, current: str) -> str:
-+                    return defaults.get(key, current or "")
-+
-+                return (
-+                    dv("CLAWLINGUA_LLM_BASE_URL", llm_base_url.value),
-+                    dv("CLAWLINGUA_LLM_API_KEY", llm_api_key.value),
-+                    dv("CLAWLINGUA_LLM_MODEL", llm_model.value),
-+                    dv("CLAWLINGUA_LLM_TIMEOUT_SECONDS", llm_timeout.value),
-+                    dv("CLAWLINGUA_LLM_TEMPERATURE", llm_temperature_env.value),
-+                    dv("CLAWLINGUA_TRANSLATE_LLM_BASE_URL", translate_base_url.value),
-+                    dv("CLAWLINGUA_TRANSLATE_LLM_API_KEY", translate_api_key.value),
-+                    dv("CLAWLINGUA_TRANSLATE_LLM_MODEL", translate_model.value),
-+                    dv("CLAWLINGUA_CHUNK_MAX_CHARS", chunk_max_chars_env.value),
-+                    dv("CLAWLINGUA_CHUNK_MIN_CHARS", chunk_min_chars_env.value),
-+                    dv("CLAWLINGUA_CLOZE_MIN_CHARS", cloze_min_chars_env.value),
-+                    dv("CLAWLINGUA_CLOZE_MAX_PER_CHUNK", cloze_max_per_chunk_env.value),
-+                    dv("CLAWLINGUA_CONTENT_PROFILE", content_profile_env.value),
-+                    dv("CLAWLINGUA_CLOZE_DIFFICULTY", cloze_difficulty_env.value),
-+                    dv("CLAWLINGUA_PROMPT_LANG", prompt_lang_env.value),
-+                    dv("CLAWLINGUA_OUTPUT_DIR", output_dir_env.value),
-+                    dv("CLAWLINGUA_EXPORT_DIR", export_dir_env.value),
-+                    dv("CLAWLINGUA_LOG_DIR", log_dir_env.value),
-+                    dv("CLAWLINGUA_DEFAULT_DECK_NAME", default_deck_name_env.value),
-+                    "Loaded defaults from ENV_EXAMPLE.md (not yet saved).",
-+                )
-+
-+            load_defaults_btn.click(
-+                _on_load_defaults,
-+                inputs=[],
-+                outputs=[
-+                    llm_base_url,
-+                    llm_api_key,
-+                    llm_model,
-+                    llm_timeout,
-+                    llm_temperature_env,
-+                    translate_base_url,
-+                    translate_api_key,
-+                    translate_model,
-+                    chunk_max_chars_env,
-+                    chunk_min_chars_env,
-+                    cloze_min_chars_env,
-+                    cloze_max_per_chunk_env,
-+                    content_profile_env,
-+                    cloze_difficulty_env,
-+                    prompt_lang_env,
-+                    output_dir_env,
-+                    export_dir_env,
-+                    log_dir_env,
-+                    default_deck_name_env,
-+                    save_config_status,
-+                ],
-+            )
 
             def _on_save_config(
                 llm_base_url_val,
