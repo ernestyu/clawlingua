@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional
 
 import gradio as gr
 from dotenv import dotenv_values
+import logging
 
 from clawlingua.config import (
     load_config,
@@ -26,6 +27,8 @@ from clawlingua.config import (
 )
 from clawlingua.pipeline.build_deck import BuildDeckOptions, run_build_deck
 from clawlingua.logger import setup_logging
+
+logger = logging.getLogger("clawlingua.web")
 
 
 def _resolve_env_file() -> Optional[Path]:
@@ -547,10 +550,17 @@ def build_interface() -> gr.Blocks:
 
 
 def launch(*, server_port: int = 7860) -> None:
-    """Launch the Gradio app bound to 127.0.0.1."""
+    """Launch the Gradio app bound to 127.0.0.1.
 
+    Logging is configured via the shared `setup_logging` function when
+    loading the application config. Web-specific events are logged under
+    the `clawlingua.web` logger.
+    """
+
+    logger.info("starting ClawLingua web UI | port=%d", server_port)
     demo = build_interface()
     demo.queue().launch(server_name="127.0.0.1", server_port=server_port)
+    logger.info("ClawLingua web UI stopped")
 
 
 if __name__ == "__main__":  # pragma: no cover
