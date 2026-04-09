@@ -5,7 +5,7 @@ into Anki cloze decks (`.apkg`) for language learning.
 
 It:
 
-- ingests content from a URL or local `.txt`/`.md` file
+- ingests content from local `.txt`/`.md` files
 - cleans and chunks the text into context blocks
 - uses an OpenAI-compatible LLM to generate contextual cloze sentences
 - uses a separate (usually cheaper) LLM for translations
@@ -75,15 +75,16 @@ CLAWLINGUA_LLM_TEMPERATURE=0.2
 The cloze LLM is responsible for generating contextual cloze sentences.
 It expects an **OpenAI-compatible** `/chat/completions` endpoint.
 
-### 2.2 HTTP / fetch
+### 2.2 Ingest cleaning
 
 ```env
-CLAWLINGUA_HTTP_TIMEOUT_SECONDS=30
-CLAWLINGUA_HTTP_USER_AGENT=ClawLingua/0.1
-CLAWLINGUA_HTTP_VERIFY_SSL=true
+CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS=3
 ```
 
-Used for URL fetching and doctor checks.
+This controls pre-LLM line filtering:
+
+- lines with very few words (for example one-word interjections) are dropped;
+- set `CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS=0` to disable this filter.
 
 ### 2.3 Chunking
 
@@ -280,7 +281,6 @@ Core command:
 
 ```bash
 python -m clawlingua.cli build deck INPUT \
-  --input-type auto|url|file \
   --source-lang en \
   --target-lang zh \
   --env-file .env \
@@ -297,11 +297,7 @@ python -m clawlingua.cli build deck INPUT \
 
 Where:
 
-- `INPUT`: URL or path to `.txt`/`.md` file.
-- `--input-type`:
-  - `auto`: infer from string
-  - `url`: treat as URL
-  - `file`: treat as local file
+- `INPUT`: path to `.txt`/`.md` file.
 - `--source-lang` / `--target-lang` override defaults from env.
 - `--difficulty` overrides `CLAWLINGUA_CLOZE_DIFFICULTY`.
 - `--max-chars` overrides `CLAWLINGUA_CHUNK_MAX_CHARS` for this run.
@@ -340,7 +336,7 @@ has at least the following fields:
   and optional translations in parentheses.
 - **Original**: the original sentence(s) without cloze markers or HTML.
 - **Translation**: target-language translation of `Original`.
-- **Note**: metadata (source title, URL, chunk id, target phrases).
+- **Note**: metadata (source title, chunk id, target phrases).
 - **Audio**: `edge_tts`-generated audio for `Original` (via `[sound:xxx.mp3]`).
 
 The exact Anki field mapping is defined in the JSON template; you can customize

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
 
 from ..anki.deck_exporter import export_apkg
 from ..anki.media_manager import MediaManager
@@ -15,9 +14,7 @@ from ..config import AppConfig, validate_base_config, validate_runtime_config
 from ..errors import ClawLinguaError, build_error
 from ..exit_codes import ExitCode
 from ..ingest.file_reader import read_text_file
-from ..ingest.main_content import extract_main_content
-from ..ingest.normalizer import NormalizeOptions, normalize_text
-from ..ingest.url_fetcher import fetch_url
+from ..ingest.normalizer import NormalizeOptions, normalize_text, strip_markdown_to_text
 from ..llm.client import OpenAICompatibleClient
 from ..llm.cloze_generator import (
     generate_cloze_candidates_for_batch,
@@ -42,7 +39,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BuildDeckOptions:
     input_value: str
-    input_type: str = "auto"
     source_lang: str | None = None
     target_lang: str | None = None
     output: Path | None = None
@@ -63,17 +59,6 @@ class BuildDeckResult:
     output_path: Path
     cards_count: int
     errors_count: int
-
-
-def _is_url(value: str) -> bool:
-    parsed = urlparse(value)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
-
-
-def _detect_input_type(raw_input_type: str, input_value: str) -> str:
-    if raw_input_type in {"url", "file"}:
-        return raw_input_type
-    return "url" if _is_url(input_value) else "file"
 
 
 def _build_note(
@@ -128,31 +113,19 @@ def _save_intermediate(
 
 
 def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> DocumentRecord:
-    source_type = _detect_input_type(options.input_type, options.input_value)
     source_lang = options.source_lang or cfg.default_source_lang
     target_lang = options.target_lang or cfg.default_target_lang
 
-    if source_type == "url":
-        fetched = fetch_url(
-            options.input_value,
-            timeout_seconds=cfg.http_timeout_seconds,
-            user_agent=cfg.http_user_agent,
-            verify_ssl=cfg.http_verify_ssl,
-        )
-        extracted = extract_main_content(fetched.html)
-        raw_text = extracted.text
-        title = extracted.title
-        source_url = fetched.final_url
-        cleaned_markdown = extracted.markdown
-    else:
-        file_path = Path(options.input_value)
-        if not file_path.is_absolute():
-            file_path = (cfg.workspace_root / file_path).resolve()
-        raw_text = read_text_file(file_path)
-        title = file_path.stem
-        source_url = None
-        cleaned_markdown = None
-        options.input_value = str(file_path)
+    file_path = Path(options.input_value)
+    if not file_path.is_absolute():
+        file_path = (cfg.workspace_root / file_path).resolve()
+    raw_text = read_text_file(file_path)
+    if file_path.suffix.lower() in {".md", ".markdown"}:
+        raw_text = strip_markdown_to_text(raw_text)
+    title = file_path.stem
+    source_url = None
+    cleaned_markdown = None
+    options.input_value = str(file_path)
 
     cleaned = normalize_text(
         raw_text,
@@ -171,7 +144,7 @@ def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> D
 
     return DocumentRecord(
         run_id=run_id,
-        source_type=source_type,  # type: ignore[arg-type]
+        source_type="file",
         source_value=options.input_value,
         source_lang=source_lang,
         target_lang=target_lang,

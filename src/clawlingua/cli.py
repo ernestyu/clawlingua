@@ -31,7 +31,7 @@ app = typer.Typer(
     name="clawlingua",
     add_completion=False,
     no_args_is_help=True,
-    help="Build Anki cloze decks from URL or text files.",
+    help="Build Anki cloze decks from local text files.",
 )
 build_app = typer.Typer(no_args_is_help=True, help="Build commands.")
 prompt_app = typer.Typer(no_args_is_help=True, help="Prompt file commands.")
@@ -246,8 +246,7 @@ def doctor(
 
 @build_app.command("deck", help=BUILD_DECK_HELP)
 def build_deck(
-    input_value: str = typer.Argument(..., help="URL or path to .txt/.md input."),
-    input_type: str = typer.Option("auto", "--input-type", help="auto|url|file"),
+    input_value: str = typer.Argument(..., help="Path to .txt/.md input."),
     source_lang: str | None = typer.Option(None, "--source-lang", help="Source language code."),
     target_lang: str | None = typer.Option(None, "--target-lang", help="Target language code."),
     env_file: Path | None = typer.Option(None, "--env-file", help="Path to .env file."),
@@ -270,20 +269,10 @@ def build_deck(
         cfg = load_config(env_file=env_file)
         setup_logging(cfg.log_level if not verbose else "DEBUG")
 
-        if input_type not in {"auto", "url", "file"}:
-            raise build_error(
-                error_code="ARG_INPUT_TYPE_INVALID",
-                cause="input-type value is invalid.",
-                detail=f"input_type={input_type}",
-                next_steps=["Use one of: auto, url, file"],
-                exit_code=ExitCode.ARGUMENT_ERROR,
-            )
-
         result = run_build_deck(
             cfg,
             BuildDeckOptions(
                 input_value=input_value,
-                input_type=input_type,
                 source_lang=source_lang,
                 target_lang=target_lang,
                 output=output,

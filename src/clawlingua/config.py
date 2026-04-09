@@ -47,9 +47,6 @@ class AppConfig(BaseModel):
     llm_request_sleep_seconds: float = 0.0
     llm_temperature: float = 0.2
 
-    http_timeout_seconds: int = 30
-    http_user_agent: str = "ClawLingua/0.1"
-    http_verify_ssl: bool = True
     # 0 disables short-line filtering.
     ingest_short_line_max_words: int = Field(default=3, ge=0)
 
@@ -236,9 +233,6 @@ def load_config(
             merged.get("CLAWLINGUA_LLM_REQUEST_SLEEP_SECONDS"), 0.0
         ),
         "llm_temperature": _env_value(merged.get("CLAWLINGUA_LLM_TEMPERATURE"), 0.2),
-        "http_timeout_seconds": _env_value(merged.get("CLAWLINGUA_HTTP_TIMEOUT_SECONDS"), 30),
-        "http_user_agent": _env_value(merged.get("CLAWLINGUA_HTTP_USER_AGENT"), "ClawLingua/0.1"),
-        "http_verify_ssl": _env_value(merged.get("CLAWLINGUA_HTTP_VERIFY_SSL"), True),
         "ingest_short_line_max_words": _env_value(
             merged.get("CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS"), 3
         ),

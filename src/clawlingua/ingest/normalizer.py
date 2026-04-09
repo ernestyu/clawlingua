@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from html import unescape
 
 from ..utils.text import normalize_paragraph_text
 
@@ -24,6 +25,16 @@ _SPEAKER_WITH_TIMESTAMP_RE = re.compile(
 )
 _TIMESTAMP_HEADING_RE = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?(?:\s*[-:]\s*.*)?$")
 _WORD_RE = re.compile(r"[A-Za-z0-9']+")
+_MD_FENCE_RE = re.compile(r"```[\s\S]*?```", re.MULTILINE)
+_MD_INLINE_CODE_RE = re.compile(r"`([^`]*)`")
+_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]+\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_MD_AUTOLINK_RE = re.compile(r"<(https?://[^>]+)>", re.IGNORECASE)
+_MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*", re.MULTILINE)
+_MD_BLOCKQUOTE_RE = re.compile(r"^\s{0,3}>\s?", re.MULTILINE)
+_MD_LIST_MARK_RE = re.compile(r"^\s{0,3}(?:[*+-]|\d+\.)\s+", re.MULTILINE)
+_MD_HRULE_RE = re.compile(r"^\s{0,3}(?:[-*_]\s*){3,}$", re.MULTILINE)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 @dataclass(frozen=True)
@@ -64,6 +75,24 @@ def _is_low_value_short_utterance(
     if not words:
         return False
     return len(words) <= max(1, max_words)
+
+
+def strip_markdown_to_text(text: str) -> str:
+    value = text.replace("\r\n", "\n").replace("\r", "\n")
+    value = _MD_FENCE_RE.sub("\n", value)
+    value = _MD_IMAGE_RE.sub(r"\1", value)
+    value = _MD_LINK_RE.sub(r"\1", value)
+    value = _MD_AUTOLINK_RE.sub(r"\1", value)
+    value = _MD_INLINE_CODE_RE.sub(r"\1", value)
+    value = _MD_HEADING_RE.sub("", value)
+    value = _MD_BLOCKQUOTE_RE.sub("", value)
+    value = _MD_LIST_MARK_RE.sub("", value)
+    value = _MD_HRULE_RE.sub("\n", value)
+    value = value.replace("**", "").replace("__", "").replace("~~", "")
+    value = re.sub(r"(?<!\w)[*_](?!\s)", "", value)
+    value = _HTML_TAG_RE.sub("", value)
+    value = unescape(value)
+    return normalize_paragraph_text(value)
 
 
 def normalize_text(text: str, *, options: NormalizeOptions | None = None) -> str:
