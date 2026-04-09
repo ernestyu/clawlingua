@@ -542,32 +542,6 @@ def build_interface() -> gr.Blocks:
                 ],
             )
 
-            save_config_btn.click(
-                _on_save_config,
-                inputs=[
-                    llm_base_url,
-                    llm_api_key,
-                    llm_model,
-                    llm_timeout,
-                    llm_temperature_env,
-                    translate_base_url,
-                    translate_api_key,
-                    translate_model,
-                    chunk_max_chars_env,
-                    chunk_min_chars_env,
-                    cloze_min_chars_env,
-                    cloze_max_per_chunk_env,
-                    content_profile_env,
-                    cloze_difficulty_env,
-                    prompt_lang_env,
-                    output_dir_env,
-                    export_dir_env,
-                    log_dir_env,
-                    default_deck_name_env,
-                ],
-                outputs=[save_config_status],
-            )
-
             def _on_save_config(
                 llm_base_url_val,
                 llm_api_key_val,
