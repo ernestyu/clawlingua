@@ -207,6 +207,13 @@ def doctor(
                 ),
             )
         )
+        checks.append(
+            (
+                "ingest:cleaning",
+                True,
+                f"short_line_max_words={cfg.ingest_short_line_max_words}",
+            )
+        )
 
         # TTS voice checks: empty means audio is disabled for this run.
         voices = cfg.get_source_voices(cfg.default_source_lang)

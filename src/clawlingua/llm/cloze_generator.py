@@ -21,6 +21,8 @@ def generate_cloze_candidates_for_chunk(
     chunk: ChunkRecord,
     temperature: float | None = None,
 ) -> list[dict]:
+    max_per_chunk = client.config.cloze_max_per_chunk
+    effective_max_per_chunk = max_per_chunk if max_per_chunk and max_per_chunk > 0 else 4
     placeholders = {
         "source_lang": document.source_lang,
         "target_lang": document.target_lang,
@@ -30,6 +32,8 @@ def generate_cloze_candidates_for_chunk(
         "chunk_text": chunk.source_text,
         "difficulty": client.config.cloze_difficulty,
         "cloze_max_sentences": str(client.config.cloze_max_sentences),
+        "cloze_min_chars": str(client.config.cloze_min_chars),
+        "cloze_max_per_chunk": str(effective_max_per_chunk),
     }
     user_prompt = _render(prompt.user_prompt_template, placeholders)
     content = client.chat(
@@ -75,6 +79,8 @@ def generate_cloze_candidates_for_batch(
         chunk_blocks.append(f"chunk_id={chunk.chunk_id}\nchunk_text=\n{chunk.source_text}")
     merged_chunk_text = "\n\n".join(chunk_blocks)
 
+    max_per_chunk = client.config.cloze_max_per_chunk
+    effective_max_per_chunk = max_per_chunk if max_per_chunk and max_per_chunk > 0 else 4
     placeholders = {
         "source_lang": document.source_lang,
         "target_lang": document.target_lang,
@@ -83,6 +89,8 @@ def generate_cloze_candidates_for_batch(
         "chunk_text": merged_chunk_text,
         "difficulty": client.config.cloze_difficulty,
         "cloze_max_sentences": str(client.config.cloze_max_sentences),
+        "cloze_min_chars": str(client.config.cloze_min_chars),
+        "cloze_max_per_chunk": str(effective_max_per_chunk),
     }
     user_prompt = _render(prompt.user_prompt_template, placeholders)
     content = client.chat(
@@ -112,4 +120,3 @@ def generate_cloze_candidates_for_batch(
             }
         )
     return candidates
-

@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "description": "Generate learning-oriented translation for Anki Translation field.",
   "mode": "translate",
-  "system_prompt": "你是语言学习翻译器。只输出 JSON 数组，不要输出解释和代码块标记。",
-  "user_prompt_template": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\n\n请仅翻译下面这条 text_original，并可做适度意译。必须只针对 text_original，不要翻译额外上下文。\n输出必须是 JSON 数组，每项格式为：\n{{\n  \"translation\": \"最终翻译文本\"\n}}\n\n要求：\n1) 只翻译 text_original，不要扩写为整段摘要。\n2) 允许适度意译，保证自然可读。\n3) 不要添加“翻译：”等前缀。\n4) 可以使用 <b>...</b>，不允许 Markdown **。\n5) 无法翻译时返回空数组。\n\ntext_original:\n{text_original}\n\n以下 chunk_text 仅供术语消歧，不要整段翻译：\n{chunk_text}",
+  "system_prompt": "You are a language-learning translator. Output a JSON array only. Do not output explanations or code fences.",
+  "user_prompt_template": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\n\nTranslate ONLY the `text_original` below into the target language.\nNatural translation is preferred; light paraphrasing is allowed.\nDo NOT translate any surrounding context.\n\nYour output MUST be a JSON array. Each item MUST have this shape:\n{{\n  \"translation\": \"final translated text\"\n}}\n\nRequirements:\n1) Translate `text_original` only; do not expand into a long summary.\n2) Keep it natural and idiomatic in the target language.\n3) Do not add prefixes like \"Translation:\".\n4) You may use <b>...</b> for emphasis. Do NOT use Markdown **.\n5) If you cannot translate, return an empty array.\n\ntext_original:\n{text_original}\n\nThe following `chunk_text` is for disambiguation only; do NOT translate it as a whole:\n{chunk_text}",
   "placeholders": [
     "source_lang",
     "target_lang",

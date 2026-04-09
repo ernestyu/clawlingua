@@ -1,19 +1,19 @@
 {
-  "model_name": "ClawLingua Cloze",
-  "deck_name": "ClawLingua Default Deck",
-  "fields": [
-    "Text",
-    "Original",
-    "Translation",
-    "Note",
-    "Audio"
-  ],
-  "card_templates": [
-    {
-      "name": "Card 1",
-      "qfmt": "<!-- 正面内容模板 -->\n<h1 class=\"R\">LOOK AND TYPE</h1>\n\n<!-- 母语表达文本 -->\n<p>{{cloze:Text}}</p>",
-      "afmt": "<!-- 正面内容模板 -->\n<h1 class=\"R\">LOOK AND TYPE</h1>\n\n<!-- 母语表达文本 -->\n<p>{{cloze:Text}}</p>\n<hr>\n<div style=\"margin:10px;\">{{Translation}}</div>\n<hr>\n<div style=\"margin:10px;\">{{Note}}</div>\n\n<div style=\"text-align: center\">{{Audio}}</div>"
-    }
-  ],
-  "css": "/* Edited by Ernest on 10 July 2025 */\n\n.card {\n  font-family: times;\n  font-size: 20 px;\n  text-align: left;  /* 这里修改：从 center 改为 justify */\n  text-justify: inter-word; /* 新增：这能让英文单词间的间距更自然 */\n  color: black;\n  line-height: normal;\n  \n  /* 强烈建议加上下面这三行，防止电脑全屏时文字拉得太长难以阅读 */\n  max-width: 700px;     /* 限制最大宽度 */\n  margin: 0 auto;       /* 让整个卡片在屏幕中间 */\n  padding: 0 15px;      /* 防止文字紧贴手机屏幕边缘 */\n}\n\n.note-field {\n  font-size: 16px;\n  color: #666;\n  font-style: italic;\n  background-color: #f5f5f5;\n  padding: 10px;\n  margin-top: 20px;\n  border-left: 3px solid #ccc;\n  text-align: left;\n}\n\n.paraphrase {\n  font-style: italic;       /* 斜体 */\n  font-size: 18px;\n  color: #888888;            /* 浅灰色，你也可以根据需要调浅或深 */\n}\n\nh1 {\n  font-family: times;\n  font-size: 15px;\n  font-weight: 600;\n  letter-spacing: 5px;\n  text-align: center;\n  height: 35px;\n  line-height: 35px;\n  padding: 1px 0px 0px 0px;\n  border: 0px solid #b7d5eb;\n  border-radius:30px;\n}\n\n/* Color and background settings for different categories */\n.R { color: #b7d5eb; background-color: #338eca }\n.S { color: #c1e7b8; background-color: #56a844 }\n.D { color: #f7c4b8; background-color: #ec6c4f }\n\n/* Background color and line-height settings for parts of speech */\n.POSR { background-color: #338eca; line-height: 30px;}\n.POSS { background-color: #56a844; line-height: 30px; }\n.POSD { background-color: #ec6c4f; line-height: 30px; }\n\n/* Styling for horizontal lines */\n\nhr {\n  height: 2px;\n  border-radius:3px;\n  width:40%;\n  display:inline-block;\n  border:0px solid #ffffff;\n}"
+    "model_name": "ClawLingua Cloze",
+    "deck_name": "ClawLingua Default Deck",
+    "fields": [
+        "Text",
+        "Original",
+        "Translation",
+        "Note",
+        "Audio"
+    ],
+    "card_templates": [
+        {
+            "name": "Card 1",
+            "qfmt": "<!-- 正面内容模板 -->\n<h1 class=\"R\">LOOK AND TYPE</h1>\n\n<!-- 母语表达文本 -->\n<p>{{cloze:Text}}</p>",
+            "afmt": "<!-- 正面内容模板 -->\n<h1 class=\"R\">LOOK AND TYPE</h1>\n\n<!-- 母语表达文本 -->\n<p>{{cloze:Text}}</p>\n<hr>\n<div style=\"margin:10px;\">{{Translation}}</div>\n<hr>\n\n<div style=\"text-align: center\">{{Audio}}</div>"
+        }
+    ],
+    "css": "/* Edited by Ernest on 10 July 2025 */\n\n.card {\n  font-family: times;\n  font-size: 20 px;\n  text-align: left;  /* 这里修改：从 center 改为 justify */\n  text-justify: inter-word; /* 新增：这能让英文单词间的间距更自然 */\n  color: black;\n  line-height: normal;\n  \n  /* 强烈建议加上下面这三行，防止电脑全屏时文字拉得太长难以阅读 */\n  max-width: 700px;     /* 限制最大宽度 */\n  margin: 0 auto;       /* 让整个卡片在屏幕中间 */\n  padding: 0 15px;      /* 防止文字紧贴手机屏幕边缘 */\n}\n\n.note-field {\n  font-size: 16px;\n  color: #666;\n  font-style: italic;\n  background-color: #f5f5f5;\n  padding: 10px;\n  margin-top: 20px;\n  border-left: 3px solid #ccc;\n  text-align: left;\n}\n\n.paraphrase {\n  font-style: italic;       /* 斜体 */\n  font-size: 18px;\n  color: #888888;            /* 浅灰色，你也可以根据需要调浅或深 */\n}\n\nh1 {\n  font-family: times;\n  font-size: 15px;\n  font-weight: 600;\n  letter-spacing: 5px;\n  text-align: center;\n  height: 35px;\n  line-height: 35px;\n  padding: 1px 0px 0px 0px;\n  border: 0px solid #b7d5eb;\n  border-radius:30px;\n}\n\n/* Color and background settings for different categories */\n.R { color: #b7d5eb; background-color: #338eca }\n.S { color: #c1e7b8; background-color: #56a844 }\n.D { color: #f7c4b8; background-color: #ec6c4f }\n\n/* Background color and line-height settings for parts of speech */\n.POSR { background-color: #338eca; line-height: 30px;}\n.POSS { background-color: #56a844; line-height: 30px; }\n.POSD { background-color: #ec6c4f; line-height: 30px; }\n\n/* Styling for horizontal lines */\n\nhr {\n  height: 2px;\n  border-radius:3px;\n  width:40%;\n  display:inline-block;\n  border:0px solid #ffffff;\n}"
 }

@@ -50,6 +50,8 @@ class AppConfig(BaseModel):
     http_timeout_seconds: int = 30
     http_user_agent: str = "ClawLingua/0.1"
     http_verify_ssl: bool = True
+    # 0 disables short-line filtering.
+    ingest_short_line_max_words: int = Field(default=3, ge=0)
 
     chunk_max_chars: int = 1800
     # chunk_max_sentences was removed; chunking 閻滈浜掔€涙顑侀弫棰佽礋娑撲紮绱濋悽鍗炲綖鐎涙劘绔熼悾宀冭拫閸掑浄绱?    # Do not use per-chunk sentence count caps; chunking is char-count-first.
@@ -179,6 +181,7 @@ def _normalize_env_aliases(data: dict[str, Any]) -> None:
         ("CLAWLINGUA_DEFAULT_CLOZE_PROMPT", "CLAWLINGUA_PROMPT_CLOZE"),
         ("CLAWLINGUA_DEFAULT_TRANSLATE_PROMPT", "CLAWLINGUA_PROMPT_TRANSLATE"),
         ("CLAWLINGUA_DEFAULT_ANKI_TEMPLATE", "CLAWLINGUA_ANKI_TEMPLATE"),
+        ("CLAWLINGUA_INGEST_SHORT_UTTERANCE_MAX_WORDS", "CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS"),
     ]
     for old_key, new_key in alias_pairs:
         if old_key in data and new_key not in data:
@@ -236,6 +239,9 @@ def load_config(
         "http_timeout_seconds": _env_value(merged.get("CLAWLINGUA_HTTP_TIMEOUT_SECONDS"), 30),
         "http_user_agent": _env_value(merged.get("CLAWLINGUA_HTTP_USER_AGENT"), "ClawLingua/0.1"),
         "http_verify_ssl": _env_value(merged.get("CLAWLINGUA_HTTP_VERIFY_SSL"), True),
+        "ingest_short_line_max_words": _env_value(
+            merged.get("CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS"), 3
+        ),
         "chunk_max_chars": _env_value(merged.get("CLAWLINGUA_CHUNK_MAX_CHARS"), 1800),
         "chunk_min_chars": _env_value(merged.get("CLAWLINGUA_CHUNK_MIN_CHARS"), 120),
         "chunk_overlap_sentences": _env_value(

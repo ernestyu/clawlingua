@@ -16,7 +16,7 @@ from ..errors import ClawLinguaError, build_error
 from ..exit_codes import ExitCode
 from ..ingest.file_reader import read_text_file
 from ..ingest.main_content import extract_main_content
-from ..ingest.normalizer import normalize_text
+from ..ingest.normalizer import NormalizeOptions, normalize_text
 from ..ingest.url_fetcher import fetch_url
 from ..llm.client import OpenAICompatibleClient
 from ..llm.cloze_generator import (
@@ -154,7 +154,12 @@ def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> D
         cleaned_markdown = None
         options.input_value = str(file_path)
 
-    cleaned = normalize_text(raw_text)
+    cleaned = normalize_text(
+        raw_text,
+        options=NormalizeOptions(
+            short_line_max_words=cfg.ingest_short_line_max_words,
+        ),
+    )
     if not cleaned:
         raise build_error(
             error_code="INPUT_EMPTY_TEXT",
