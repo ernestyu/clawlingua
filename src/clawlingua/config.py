@@ -17,9 +17,17 @@ from .constants import (
     DEFAULT_LOG_DIR,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_PROMPT_CLOZE,
+    DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED,
+    DEFAULT_PROMPT_CLOZE_PROSE_BEGINNER,
+    DEFAULT_PROMPT_CLOZE_PROSE_INTERMEDIATE,
     DEFAULT_PROMPT_CLOZE_TEXTBOOK,
+    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED,
+    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER,
+    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE,
     DEFAULT_PROMPT_TRANSLATE,
     SUPPORTED_CONTENT_PROFILES,
+    SUPPORTED_LEARNING_MODES,
+    SUPPORTED_MATERIAL_PROFILES,
 )
 from .errors import build_error
 from .exit_codes import ExitCode
@@ -31,6 +39,15 @@ _VOICE_SLOT_ENV_KEYS = (
     "CLAWLINGUA_TTS_EDGE_VOICE3",
     "CLAWLINGUA_TTS_EDGE_VOICE4",
 )
+
+
+def _normalize_profile(value: str | None) -> str:
+    profile = (value or "").strip().lower()
+    if not profile:
+        return "prose_article"
+    if profile == "general":
+        return "prose_article"
+    return profile
 
 
 class AppConfig(BaseModel):
@@ -55,7 +72,7 @@ class AppConfig(BaseModel):
     ingest_short_line_max_words: int = Field(default=3, ge=0)
 
     chunk_max_chars: int = 1800
-    # chunk_max_sentences was removed; chunking 閻滈浜掔€涙顑侀弫棰佽礋娑撲紮绱濋悽鍗炲綖鐎涙劘绔熼悾宀冭拫閸掑浄绱?    # Do not use per-chunk sentence count caps; chunking is char-count-first.
+    # Do not use per-chunk sentence count caps; chunking is char-count-first.
     chunk_min_chars: int = 120
     chunk_overlap_sentences: int = 1
 
@@ -68,8 +85,7 @@ class AppConfig(BaseModel):
     # LLM chunk-level batch size; 1 means per-chunk requests.
     llm_chunk_batch_size: int = 1
 
-    # Prompt language: en|zh. Used when prompts provide multi-lingual
-    # variants (e.g. system_prompt/user_prompt_template as {"en": ..., "zh": ...}).
+    # Prompt language: en|zh.
     prompt_lang: str = "zh"
 
     # Translation LLM (small LLM) settings; fallback to main LLM when empty.
@@ -80,11 +96,29 @@ class AppConfig(BaseModel):
     # Number of originals translated in one LLM request.
     translate_batch_size: int = 4
 
+    # Legacy cloze prompt paths (still supported).
     prompt_cloze: Path = DEFAULT_PROMPT_CLOZE
     prompt_cloze_textbook: Path = DEFAULT_PROMPT_CLOZE_TEXTBOOK
+
+    # V2 prompt family paths (material profile + difficulty variant).
+    prompt_cloze_prose_beginner: Path = DEFAULT_PROMPT_CLOZE_PROSE_BEGINNER
+    prompt_cloze_prose_intermediate: Path = DEFAULT_PROMPT_CLOZE_PROSE_INTERMEDIATE
+    prompt_cloze_prose_advanced: Path = DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED
+    prompt_cloze_transcript_beginner: Path = DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER
+    prompt_cloze_transcript_intermediate: Path = DEFAULT_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE
+    prompt_cloze_transcript_advanced: Path = DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED
+
     prompt_translate: Path = DEFAULT_PROMPT_TRANSLATE
     anki_template: Path = DEFAULT_ANKI_TEMPLATE
+
+    # Legacy field. Kept for backward compatibility.
     content_profile: str = "general"
+    # New V2 fields.
+    material_profile: str = "prose_article"
+    learning_mode: str = "expression_mining"
+
+    # Allow export of empty deck (0 cards) instead of hard-failing the run.
+    allow_empty_deck: bool = True
 
     output_dir: Path = DEFAULT_OUTPUT_DIR
     export_dir: Path = DEFAULT_EXPORT_DIR
@@ -110,6 +144,8 @@ class AppConfig(BaseModel):
         "tts_provider",
         "cloze_difficulty",
         "content_profile",
+        "material_profile",
+        "learning_mode",
         mode="before",
     )
     @classmethod
@@ -135,10 +171,56 @@ class AppConfig(BaseModel):
             raise ValueError(f"content_profile must be one of: {allowed}")
         return value
 
+    @field_validator("material_profile")
+    @classmethod
+    def _validate_material_profile(cls, v: str) -> str:
+        value = _normalize_profile(v)
+        if value not in SUPPORTED_MATERIAL_PROFILES:
+            allowed = ", ".join(sorted(SUPPORTED_MATERIAL_PROFILES))
+            raise ValueError(f"material_profile must be one of: {allowed}")
+        return value
+
+    @field_validator("learning_mode")
+    @classmethod
+    def _validate_learning_mode(cls, v: str) -> str:
+        value = (v or "expression_mining").strip().lower()
+        if value not in SUPPORTED_LEARNING_MODES:
+            allowed = ", ".join(sorted(SUPPORTED_LEARNING_MODES))
+            raise ValueError(f"learning_mode must be one of: {allowed}")
+        return value
+
     def resolve_path(self, value: Path) -> Path:
         if value.is_absolute():
             return value
         return (self.workspace_root / value).resolve()
+
+    def resolve_cloze_prompt_path(
+        self,
+        *,
+        material_profile: str | None = None,
+        difficulty: str | None = None,
+    ) -> Path:
+        profile = _normalize_profile(material_profile or self.material_profile)
+        diff = (difficulty or self.cloze_difficulty or "intermediate").strip().lower()
+        if diff not in {"beginner", "intermediate", "advanced"}:
+            diff = "intermediate"
+
+        if profile == "textbook_examples":
+            return self.prompt_cloze_textbook
+        if profile == "transcript_dialogue":
+            return {
+                "beginner": self.prompt_cloze_transcript_beginner,
+                "intermediate": self.prompt_cloze_transcript_intermediate,
+                "advanced": self.prompt_cloze_transcript_advanced,
+            }[diff]
+        if profile == "prose_article":
+            return {
+                "beginner": self.prompt_cloze_prose_beginner,
+                "intermediate": self.prompt_cloze_prose_intermediate,
+                "advanced": self.prompt_cloze_prose_advanced,
+            }[diff]
+        # Fallback for unexpected/legacy values.
+        return self.prompt_cloze
 
     def get_source_voices(self, source_lang: str) -> list[str]:
         if self.tts_edge_voices:
@@ -236,91 +318,83 @@ def load_config(
     voice_slots = _parse_voice_slots(merged)
     voice_map = _parse_legacy_voice_map(merged)
 
+    raw_profile = _env_value(
+        merged.get("CLAWLINGUA_MATERIAL_PROFILE"),
+        _env_value(merged.get("CLAWLINGUA_CONTENT_PROFILE"), "prose_article"),
+    )
+    normalized_profile = _normalize_profile(str(raw_profile))
+
     payload: dict[str, Any] = {
         "workspace_root": root,
-        "default_source_lang": _env_value(
-            merged.get("CLAWLINGUA_DEFAULT_SOURCE_LANG"), "en"
-        ),
-        "default_target_lang": _env_value(
-            merged.get("CLAWLINGUA_DEFAULT_TARGET_LANG"), "zh"
-        ),
+        "default_source_lang": _env_value(merged.get("CLAWLINGUA_DEFAULT_SOURCE_LANG"), "en"),
+        "default_target_lang": _env_value(merged.get("CLAWLINGUA_DEFAULT_TARGET_LANG"), "zh"),
         "llm_provider": _env_value(merged.get("CLAWLINGUA_LLM_PROVIDER"), "openai_compatible"),
         "llm_base_url": _env_value(merged.get("CLAWLINGUA_LLM_BASE_URL"), "http://127.0.0.1:8000/v1"),
         "llm_api_key": _env_value(merged.get("CLAWLINGUA_LLM_API_KEY"), ""),
         "llm_model": _env_value(merged.get("CLAWLINGUA_LLM_MODEL"), ""),
         "llm_timeout_seconds": _env_value(merged.get("CLAWLINGUA_LLM_TIMEOUT_SECONDS"), 120),
         "llm_max_retries": _env_value(merged.get("CLAWLINGUA_LLM_MAX_RETRIES"), 3),
-        "llm_retry_backoff_seconds": _env_value(
-            merged.get("CLAWLINGUA_LLM_RETRY_BACKOFF_SECONDS"), 2.0
-        ),
-        "llm_request_sleep_seconds": _env_value(
-            merged.get("CLAWLINGUA_LLM_REQUEST_SLEEP_SECONDS"), 0.0
-        ),
+        "llm_retry_backoff_seconds": _env_value(merged.get("CLAWLINGUA_LLM_RETRY_BACKOFF_SECONDS"), 2.0),
+        "llm_request_sleep_seconds": _env_value(merged.get("CLAWLINGUA_LLM_REQUEST_SLEEP_SECONDS"), 0.0),
         "llm_temperature": _env_value(merged.get("CLAWLINGUA_LLM_TEMPERATURE"), 0.2),
-        "ingest_short_line_max_words": _env_value(
-            merged.get("CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS"), 3
-        ),
+        "ingest_short_line_max_words": _env_value(merged.get("CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS"), 3),
         "chunk_max_chars": _env_value(merged.get("CLAWLINGUA_CHUNK_MAX_CHARS"), 1800),
         "chunk_min_chars": _env_value(merged.get("CLAWLINGUA_CHUNK_MIN_CHARS"), 120),
-        "chunk_overlap_sentences": _env_value(
-            merged.get("CLAWLINGUA_CHUNK_OVERLAP_SENTENCES"), 1
-        ),
-        "cloze_max_sentences": _env_value(
-            merged.get("CLAWLINGUA_CLOZE_MAX_SENTENCES"), 3
-        ),
-        "cloze_min_chars": _env_value(
-            merged.get("CLAWLINGUA_CLOZE_MIN_CHARS"), 0
-        ),
-        "cloze_difficulty": _env_value(
-            merged.get("CLAWLINGUA_CLOZE_DIFFICULTY"), "intermediate"
-        ),
-        "cloze_max_per_chunk": _env_value(
-            merged.get("CLAWLINGUA_CLOZE_MAX_PER_CHUNK"), None
-        ),
-        "llm_chunk_batch_size": _env_value(
-            merged.get("CLAWLINGUA_LLM_CHUNK_BATCH_SIZE"), 1
-        ),
-        "prompt_lang": _env_value(
-            merged.get("CLAWLINGUA_PROMPT_LANG"), "zh"
-        ),
-        "translate_llm_base_url": _env_value(            merged.get("CLAWLINGUA_TRANSLATE_LLM_BASE_URL"), None
-        ),
-        "translate_llm_api_key": _env_value(
-            merged.get("CLAWLINGUA_TRANSLATE_LLM_API_KEY"), None
-        ),
-        "translate_llm_model": _env_value(
-            merged.get("CLAWLINGUA_TRANSLATE_LLM_MODEL"), None
-        ),
-        "translate_llm_temperature": _env_value(
-            merged.get("CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE"), None
-        ),
-        "translate_batch_size": _env_value(
-            merged.get("CLAWLINGUA_TRANSLATE_BATCH_SIZE"), 4
-        ),
+        "chunk_overlap_sentences": _env_value(merged.get("CLAWLINGUA_CHUNK_OVERLAP_SENTENCES"), 1),
+        "cloze_max_sentences": _env_value(merged.get("CLAWLINGUA_CLOZE_MAX_SENTENCES"), 3),
+        "cloze_min_chars": _env_value(merged.get("CLAWLINGUA_CLOZE_MIN_CHARS"), 0),
+        "cloze_difficulty": _env_value(merged.get("CLAWLINGUA_CLOZE_DIFFICULTY"), "intermediate"),
+        "cloze_max_per_chunk": _env_value(merged.get("CLAWLINGUA_CLOZE_MAX_PER_CHUNK"), None),
+        "llm_chunk_batch_size": _env_value(merged.get("CLAWLINGUA_LLM_CHUNK_BATCH_SIZE"), 1),
+        "prompt_lang": _env_value(merged.get("CLAWLINGUA_PROMPT_LANG"), "zh"),
+        "translate_llm_base_url": _env_value(merged.get("CLAWLINGUA_TRANSLATE_LLM_BASE_URL"), None),
+        "translate_llm_api_key": _env_value(merged.get("CLAWLINGUA_TRANSLATE_LLM_API_KEY"), None),
+        "translate_llm_model": _env_value(merged.get("CLAWLINGUA_TRANSLATE_LLM_MODEL"), None),
+        "translate_llm_temperature": _env_value(merged.get("CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE"), None),
+        "translate_batch_size": _env_value(merged.get("CLAWLINGUA_TRANSLATE_BATCH_SIZE"), 4),
+        # Legacy prompt paths.
         "prompt_cloze": _env_value(merged.get("CLAWLINGUA_PROMPT_CLOZE"), DEFAULT_PROMPT_CLOZE),
-        "prompt_cloze_textbook": _env_value(
-            merged.get("CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK"),
-            DEFAULT_PROMPT_CLOZE_TEXTBOOK,
+        "prompt_cloze_textbook": _env_value(merged.get("CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK"), DEFAULT_PROMPT_CLOZE_TEXTBOOK),
+        # V2 prompt family paths.
+        "prompt_cloze_prose_beginner": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_BEGINNER"),
+            DEFAULT_PROMPT_CLOZE_PROSE_BEGINNER,
         ),
-        "prompt_translate": _env_value(
-            merged.get("CLAWLINGUA_PROMPT_TRANSLATE"), DEFAULT_PROMPT_TRANSLATE
+        "prompt_cloze_prose_intermediate": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_INTERMEDIATE"),
+            DEFAULT_PROMPT_CLOZE_PROSE_INTERMEDIATE,
         ),
+        "prompt_cloze_prose_advanced": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_ADVANCED"),
+            DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED,
+        ),
+        "prompt_cloze_transcript_beginner": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_BEGINNER"),
+            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER,
+        ),
+        "prompt_cloze_transcript_intermediate": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE"),
+            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE,
+        ),
+        "prompt_cloze_transcript_advanced": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_ADVANCED"),
+            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED,
+        ),
+        "prompt_translate": _env_value(merged.get("CLAWLINGUA_PROMPT_TRANSLATE"), DEFAULT_PROMPT_TRANSLATE),
         "anki_template": _env_value(merged.get("CLAWLINGUA_ANKI_TEMPLATE"), DEFAULT_ANKI_TEMPLATE),
-        "content_profile": _env_value(
-            merged.get("CLAWLINGUA_CONTENT_PROFILE"), "general"
-        ),
+        # Legacy + V2 profiles.
+        "content_profile": _env_value(merged.get("CLAWLINGUA_CONTENT_PROFILE"), normalized_profile),
+        "material_profile": normalized_profile,
+        "learning_mode": _env_value(merged.get("CLAWLINGUA_LEARNING_MODE"), "expression_mining"),
+        "allow_empty_deck": _env_value(merged.get("CLAWLINGUA_ALLOW_EMPTY_DECK"), True),
         "output_dir": _env_value(merged.get("CLAWLINGUA_OUTPUT_DIR"), DEFAULT_OUTPUT_DIR),
         "export_dir": _env_value(merged.get("CLAWLINGUA_EXPORT_DIR"), DEFAULT_EXPORT_DIR),
         "log_dir": _env_value(merged.get("CLAWLINGUA_LOG_DIR"), DEFAULT_LOG_DIR),
         "log_level": _env_value(merged.get("CLAWLINGUA_LOG_LEVEL"), "INFO"),
         "save_intermediate": _env_value(merged.get("CLAWLINGUA_SAVE_INTERMEDIATE"), True),
-        "default_deck_name": _env_value(
-            merged.get("CLAWLINGUA_DEFAULT_DECK_NAME"), DEFAULT_DECK_NAME
-        ),
+        "default_deck_name": _env_value(merged.get("CLAWLINGUA_DEFAULT_DECK_NAME"), DEFAULT_DECK_NAME),
         "tts_provider": _env_value(merged.get("CLAWLINGUA_TTS_PROVIDER"), "edge_tts"),
-        "tts_output_format": _env_value(
-            merged.get("CLAWLINGUA_TTS_OUTPUT_FORMAT"), "mp3"
-        ),
+        "tts_output_format": _env_value(merged.get("CLAWLINGUA_TTS_OUTPUT_FORMAT"), "mp3"),
         "tts_rate": _env_value(merged.get("CLAWLINGUA_TTS_RATE"), "+0%"),
         "tts_volume": _env_value(merged.get("CLAWLINGUA_TTS_VOLUME"), "+0%"),
         "tts_random_seed": _env_value(merged.get("CLAWLINGUA_TTS_RANDOM_SEED"), None),
@@ -338,6 +412,12 @@ def validate_base_config(cfg: AppConfig) -> None:
     required_paths = [
         ("CLAWLINGUA_PROMPT_CLOZE", cfg.resolve_path(cfg.prompt_cloze)),
         ("CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK", cfg.resolve_path(cfg.prompt_cloze_textbook)),
+        ("CLAWLINGUA_PROMPT_CLOZE_PROSE_BEGINNER", cfg.resolve_path(cfg.prompt_cloze_prose_beginner)),
+        ("CLAWLINGUA_PROMPT_CLOZE_PROSE_INTERMEDIATE", cfg.resolve_path(cfg.prompt_cloze_prose_intermediate)),
+        ("CLAWLINGUA_PROMPT_CLOZE_PROSE_ADVANCED", cfg.resolve_path(cfg.prompt_cloze_prose_advanced)),
+        ("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_BEGINNER", cfg.resolve_path(cfg.prompt_cloze_transcript_beginner)),
+        ("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE", cfg.resolve_path(cfg.prompt_cloze_transcript_intermediate)),
+        ("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_ADVANCED", cfg.resolve_path(cfg.prompt_cloze_transcript_advanced)),
         ("CLAWLINGUA_PROMPT_TRANSLATE", cfg.resolve_path(cfg.prompt_translate)),
         ("CLAWLINGUA_ANKI_TEMPLATE", cfg.resolve_path(cfg.anki_template)),
     ]

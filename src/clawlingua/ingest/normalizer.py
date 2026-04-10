@@ -46,6 +46,7 @@ _HTML_COMMENT_RE = re.compile(r"<!--[\s\S]*?-->", re.MULTILINE)
 @dataclass(frozen=True)
 class NormalizeOptions:
     short_line_max_words: int = 3
+    material_profile: str = "prose_article"
 
 
 def _is_noise_line(line: str) -> bool:
@@ -83,6 +84,24 @@ def _is_low_value_short_utterance(
     return len(words) <= max(1, max_words)
 
 
+_INLINE_TIMESTAMP_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
+_SPEAKER_PREFIX_RE = re.compile(r"^[A-Z][A-Za-z'.-]*(?:\s+[A-Z][A-Za-z'.-]*){0,6}\s*:\s*")
+_FILLER_ONLY_RE = re.compile(
+    r"^(?:uh+|um+|erm+|hmm+|yeah+|yep+|nope+|right+|okay+|ok+|mm+)\.?!?$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_transcript_line(line: str) -> str:
+    value = line.strip()
+    if not value:
+        return ""
+    value = _SPEAKER_PREFIX_RE.sub("", value)
+    value = _INLINE_TIMESTAMP_RE.sub("", value)
+    value = re.sub(r"\s{2,}", " ", value).strip(" -\t")
+    return value.strip()
+
+
 def strip_markdown_to_text(text: str) -> str:
     value = text.replace("\r\n", "\n").replace("\r", "\n")
     value = _MD_FENCE_RE.sub("\n", value)
@@ -117,13 +136,23 @@ def normalize_text(text: str, *, options: NormalizeOptions | None = None) -> str
     raw_lines = [line.strip() for line in text.splitlines()]
 
     lines: list[str] = []
+    profile = (cfg.material_profile or "prose_article").strip().lower()
+    if profile == "general":
+        profile = "prose_article"
+
     for line in raw_lines:
+        if profile == "transcript_dialogue":
+            line = _normalize_transcript_line(line)
+            if not line:
+                continue
+            if _FILLER_ONLY_RE.match(line):
+                continue
         if _is_noise_line(line):
             continue
         # Always remove obvious transcript/meta lines to keep only learnable prose.
         if _is_transcript_meta_line(line):
             continue
-        if cfg.short_line_max_words > 0 and _is_low_value_short_utterance(
+        if profile != "transcript_dialogue" and cfg.short_line_max_words > 0 and _is_low_value_short_utterance(
             line,
             max_words=cfg.short_line_max_words,
         ):

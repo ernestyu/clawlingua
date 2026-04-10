@@ -30,6 +30,7 @@ def generate_cloze_candidates_for_chunk(
         "source_url": document.source_url or "",
         "chunk_id": chunk.chunk_id,
         "chunk_text": chunk.source_text,
+        "learning_mode": getattr(client.config, "learning_mode", "expression_mining"),
         "difficulty": client.config.cloze_difficulty,
         "cloze_max_sentences": str(client.config.cloze_max_sentences),
         "cloze_min_chars": str(client.config.cloze_min_chars),
@@ -53,15 +54,17 @@ def generate_cloze_candidates_for_chunk(
         target_phrases = item.get("target_phrases") or []
         note_hint = item.get("note_hint") or item.get("note") or ""
         chunk_id = item.get("chunk_id") or chunk.chunk_id
-        candidates.append(
-            {
-                "chunk_id": str(chunk_id).strip(),
-                "text": str(text).strip(),
-                "original": str(original).strip(),
-                "target_phrases": [str(x).strip() for x in target_phrases if str(x).strip()],
-                "note_hint": str(note_hint).strip(),
-            }
-        )
+        candidate = {
+            "chunk_id": str(chunk_id).strip(),
+            "text": str(text).strip(),
+            "original": str(original).strip(),
+            "target_phrases": [str(x).strip() for x in target_phrases if str(x).strip()],
+            "note_hint": str(note_hint).strip(),
+        }
+        for key in ("selection_reason", "phrase_types", "learning_value_score"):
+            if key in item:
+                candidate[key] = item[key]
+        candidates.append(candidate)
     return candidates
 
 
@@ -87,6 +90,7 @@ def generate_cloze_candidates_for_batch(
         "document_title": document.title or "",
         "source_url": document.source_url or "",
         "chunk_text": merged_chunk_text,
+        "learning_mode": getattr(client.config, "learning_mode", "expression_mining"),
         "difficulty": client.config.cloze_difficulty,
         "cloze_max_sentences": str(client.config.cloze_max_sentences),
         "cloze_min_chars": str(client.config.cloze_min_chars),
@@ -110,13 +114,15 @@ def generate_cloze_candidates_for_batch(
         target_phrases = item.get("target_phrases") or []
         note_hint = item.get("note_hint") or item.get("note") or ""
         chunk_id = item.get("chunk_id") or ""
-        candidates.append(
-            {
-                "chunk_id": str(chunk_id).strip(),
-                "text": str(text).strip(),
-                "original": str(original).strip(),
-                "target_phrases": [str(x).strip() for x in target_phrases if str(x).strip()],
-                "note_hint": str(note_hint).strip(),
-            }
-        )
+        candidate = {
+            "chunk_id": str(chunk_id).strip(),
+            "text": str(text).strip(),
+            "original": str(original).strip(),
+            "target_phrases": [str(x).strip() for x in target_phrases if str(x).strip()],
+            "note_hint": str(note_hint).strip(),
+        }
+        for key in ("selection_reason", "phrase_types", "learning_value_score"):
+            if key in item:
+                candidate[key] = item[key]
+        candidates.append(candidate)
     return candidates

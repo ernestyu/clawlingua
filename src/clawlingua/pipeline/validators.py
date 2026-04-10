@@ -7,12 +7,12 @@ from collections.abc import Iterable
 
 from ..utils.text import count_sentences, normalize_for_dedupe
 
-# 双大括号形式 {{c1::...}}
+# {{c1::...}} format
 _CLOZE_MARK_RE = re.compile(r"\{\{c\d+::")
-# 单大括号形式 {c1::...}
+# {c1::...} format
 _CLOZE_MARK_SINGLE_RE = re.compile(r"\{c\d+::")
 _CLOZE_BLOCK_RE = re.compile(r"\{\{c(\d+)::(.*?)\}\}")
-# 目标样式：{{cN::<b>phrase</b>}}(提示)
+# target style: {{cN::<b>phrase</b>}}(hint)
 _CLOZE_STYLE_RE = re.compile(r"\{\{c\d+::\s*<b>.*?</b>\s*\}\}\s*\([^)]+\)")
 
 _TOKEN_RE = re.compile(r"[a-zA-Z']+")
@@ -101,20 +101,31 @@ _PHRASAL_PARTICLES = {
     "across",
 }
 
+_ADVANCED_LOW_VALUE_RE = re.compile(
+    r"\b(?:think if|this data or that data|good thing|bad thing|some things?)\b",
+    re.IGNORECASE,
+)
+
+
+def classify_rejection_reason(reason: str) -> str:
+    text = str(reason or "")
+    if ":" not in text:
+        return "unknown"
+    return text.split(":", 1)[0].strip().lower() or "unknown"
+
+
+def _reject(category: str, message: str) -> tuple[bool, str]:
+    return False, f"{category}:{message}"
+
 
 def _normalize_single_cloze(text: str) -> str:
-    """将 {c1::...} 规范化为 {{c1::...}} 形式，避免出现 {c1::{{c1::...}}} 套娃。
-
-    这里用一个简单规则：
-    - 匹配 {cN::...}，将外层大括号替换为双大括号。
-    """
+    """Normalize {c1::...} into {{c1::...}}."""
     pattern = re.compile(r"\{(c\d+::[^}]*)\}")
     return pattern.sub(r"{{\1}}", text)
 
 
 def _reindex_cloze_numbers(text: str) -> str:
-    """将 cloze 编号按出现顺序重排为 c1/c2/c3...。"""
-
+    """Reindex cloze numbers by appearance order to c1/c2/c3..."""
     counter = {"n": 0}
 
     def _repl(match: re.Match[str]) -> str:
@@ -185,37 +196,48 @@ def _passes_difficulty(phrases: Iterable[str], *, difficulty: str) -> bool:
 
     diff = (difficulty or "intermediate").strip().lower()
     if diff == "beginner":
-        # 初级难度放宽，但仍过滤明显空洞短语。
+        # Beginner: allow simple phrases but still filter obvious low-value filler.
         return max_score >= -0.5
     if diff == "advanced":
-        # 高级难度更严格：不能全是常见/空洞表达。
+        # Advanced: avoid all-basic expression sets.
         return max_score >= 1.0 and avg_score >= 0.2 and min_score > -2.0
     # intermediate
     return max_score >= 0.0 and avg_score >= -0.2
 
 
 def _auto_inject_cloze(text: str, target_phrases: list[str]) -> str:
-    """如果 text 中没有 cloze 标记，但有 target_phrases，尝试自动注入一个 cloze。
-
-    策略：
-    - 取第一个在 text 中出现的非空 target_phrase；
-    - 将其首次出现替换为 {{c1::phrase}}；
-    - 若没有任何 phrase 出现在 text 中，则原样返回。
-    """
+    """Inject a fallback cloze for the first matching target phrase."""
     if not target_phrases:
         return text
-    lowered_text = text
     for raw in target_phrases:
         phrase = str(raw).strip()
         if not phrase:
             continue
-        idx = lowered_text.find(phrase)
+        idx = text.find(phrase)
         if idx == -1:
             continue
-        # 简单替换第一个匹配位置，遵循 {{c1::<b>...</b>}}(提示) 形态。
-        injected = f"{{{{c1::<b>{phrase}</b>}}}}(提示)"
-        return lowered_text.replace(phrase, injected, 1)
+        injected = f"{{{{c1::<b>{phrase}</b>}}}}(hint)"
+        return text.replace(phrase, injected, 1)
     return text
+
+
+def _passes_material_profile(
+    *,
+    material_profile: str,
+    text: str,
+    original: str,
+) -> tuple[bool, str]:
+    profile = (material_profile or "prose_article").strip().lower()
+    if profile == "transcript_dialogue":
+        if len(original) < 20:
+            return _reject("context", "transcript candidate context is too short")
+        # transcript cards should stay concise and conversational
+        if count_sentences(text) > 3:
+            return _reject("difficulty", "transcript candidate has too many sentences")
+    elif profile == "prose_article":
+        if len(original) < 28:
+            return _reject("context", "prose candidate context is too short")
+    return True, ""
 
 
 def validate_text_candidate(
@@ -224,6 +246,7 @@ def validate_text_candidate(
     max_sentences: int,
     min_chars: int = 0,
     difficulty: str = "intermediate",
+    material_profile: str = "prose_article",
 ) -> tuple[bool, str]:
     text = str(item.get("text", "")).strip()
     original = str(item.get("original", "")).strip()
@@ -231,60 +254,71 @@ def validate_text_candidate(
     target_phrases = [str(x).strip() for x in target_phrases_raw if str(x).strip()]
 
     if not text:
-        return False, "text 为空"
+        return _reject("format", "text is empty")
     if not original:
-        return False, "original 为空"
+        return _reject("format", "original is empty")
     if min_chars and len(text) < min_chars:
-        return False, f"text 字符数不足 {min_chars}"
+        return _reject("format", f"text chars < {min_chars}")
     if _CLOZE_MARK_RE.search(original) or _CLOZE_MARK_SINGLE_RE.search(original):
-        return False, "original 不应包含 cloze 标记"
+        return _reject("format", "original contains cloze marker")
     if "<" in original and ">" in original:
-        return False, "original 不应包含 HTML 标记"
+        return _reject("format", "original contains html tags")
 
     has_double = bool(_CLOZE_MARK_RE.search(text))
     has_single = bool(_CLOZE_MARK_SINGLE_RE.search(text))
 
-    # 如果已有单大括号 cloze，但没有双大括号，先规范化为双大括号
+    # Normalize single-brace cloze markers.
     if has_single and not has_double:
         text = _normalize_single_cloze(text)
         item["text"] = text
         has_double = bool(_CLOZE_MARK_RE.search(text))
 
-    # 如果完全没有任何 cloze 标记，但有 target_phrases，则自动注入一个
+    # Fallback auto-injection when target phrases exist but cloze markers missing.
     if not has_double and not has_single and target_phrases:
         text = _auto_inject_cloze(text, target_phrases)
         item["text"] = text
         has_double = bool(_CLOZE_MARK_RE.search(text))
 
     if not has_double:
-        return False, "text 缺少 cloze 标记"
+        return _reject("format", "missing cloze marker")
 
-    # 统一重编号，避免同一条 text 中多个 c1 的情况。
+    # Reindex c1/c2/c3 by order.
     text = _reindex_cloze_numbers(text)
     item["text"] = text
 
-    # 样式约束：至少一个 cloze 满足 {{cN::<b>...</b>}}(提示)
     if not _CLOZE_STYLE_RE.search(text):
-        return False, "cloze 样式不符合 {{cN::<b>...</b>}}(提示)"
+        return _reject("format", "cloze style must be {{cN::<b>...</b>}}(hint)")
 
-    # 追加严格性：每个 cloze 块都应带 <b>。
     cloze_phrases = _extract_cloze_phrases(text)
     if not cloze_phrases:
-        return False, "无法解析 cloze 短语"
+        return _reject("format", "unable to parse cloze phrases")
     if "<b>" not in text.lower() or "</b>" not in text.lower():
-        return False, "cloze 缺少 <b>...</b> 标记"
+        return _reject("format", "cloze text missing <b>...</b> emphasis")
+
     normalized_cloze_phrases = [normalize_for_dedupe(p) for p in cloze_phrases]
     if len(set(normalized_cloze_phrases)) < len(normalized_cloze_phrases):
-        return False, "同一条 text 中重复挖空同一短语"
+        return _reject("quality", "duplicate cloze phrases in one candidate")
 
     if count_sentences(text) > max_sentences:
-        return False, f"text 超过 {max_sentences} 句"
+        return _reject("format", f"text exceeds {max_sentences} sentences")
     if not isinstance(target_phrases_raw, list) or len(target_phrases) < 1:
-        return False, "target_phrases 不足"
+        return _reject("format", "target_phrases is empty or invalid")
+
+    profile_ok, profile_reason = _passes_material_profile(
+        material_profile=material_profile,
+        text=text,
+        original=original,
+    )
+    if not profile_ok:
+        return profile_ok, profile_reason
+
+    # Advanced-only low-value blacklist.
+    if (difficulty or "").strip().lower() == "advanced" and _ADVANCED_LOW_VALUE_RE.search(text):
+        return _reject("quality", "advanced candidate contains low-value expression")
 
     phrases_for_difficulty = target_phrases or cloze_phrases
     if not _passes_difficulty(phrases_for_difficulty, difficulty=difficulty):
-        return False, f"不符合 {difficulty} 难度要求"
+        return _reject("difficulty", f"candidate does not match {difficulty} difficulty")
 
     return True, ""
 
@@ -292,10 +326,10 @@ def validate_text_candidate(
 def validate_translation_text(text: str) -> tuple[bool, str]:
     value = text.strip()
     if not value:
-        return False, "translation 为空"
+        return _reject("format", "translation is empty")
     lowered = value.lower()
     if lowered.startswith("翻译:") or lowered.startswith("翻译："):
-        return False, "translation 含不允许前缀"
+        return _reject("format", "translation has forbidden prefix")
     if "**" in value:
-        return False, "translation 包含 Markdown **"
+        return _reject("format", "translation contains markdown **")
     return True, ""

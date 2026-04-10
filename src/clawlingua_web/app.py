@@ -739,8 +739,15 @@ def _test_models_markdown(base_url: str, api_key: str, timeout_seconds: float, *
 
 def _prompt_file_map(cfg: Any) -> dict[str, Path]:
     return {
-        "cloze_contextual": cfg.resolve_path(cfg.prompt_cloze),
+        "cloze_prose_beginner": cfg.resolve_path(cfg.prompt_cloze_prose_beginner),
+        "cloze_prose_intermediate": cfg.resolve_path(cfg.prompt_cloze_prose_intermediate),
+        "cloze_prose_advanced": cfg.resolve_path(cfg.prompt_cloze_prose_advanced),
+        "cloze_transcript_beginner": cfg.resolve_path(cfg.prompt_cloze_transcript_beginner),
+        "cloze_transcript_intermediate": cfg.resolve_path(cfg.prompt_cloze_transcript_intermediate),
+        "cloze_transcript_advanced": cfg.resolve_path(cfg.prompt_cloze_transcript_advanced),
         "cloze_textbook_examples": cfg.resolve_path(cfg.prompt_cloze_textbook),
+        # Legacy entry kept to support older deployments.
+        "cloze_contextual": cfg.resolve_path(cfg.prompt_cloze),
         "translate_rewrite": cfg.resolve_path(cfg.prompt_translate),
     }
 
@@ -748,13 +755,25 @@ def _prompt_file_map(cfg: Any) -> dict[str, Path]:
 def _prompt_choices(lang: str) -> list[tuple[str, str]]:
     if _normalize_ui_lang(lang) == "zh":
         return [
-            ("上下文挖空 (cloze_contextual)", "cloze_contextual"),
+            ("Prose 初级 (cloze_prose_beginner)", "cloze_prose_beginner"),
+            ("Prose 中级 (cloze_prose_intermediate)", "cloze_prose_intermediate"),
+            ("Prose 高级 (cloze_prose_advanced)", "cloze_prose_advanced"),
+            ("Transcript 初级 (cloze_transcript_beginner)", "cloze_transcript_beginner"),
+            ("Transcript 中级 (cloze_transcript_intermediate)", "cloze_transcript_intermediate"),
+            ("Transcript 高级 (cloze_transcript_advanced)", "cloze_transcript_advanced"),
             ("教材例句模式 (cloze_textbook_examples)", "cloze_textbook_examples"),
+            ("旧版上下文挖空 (cloze_contextual)", "cloze_contextual"),
             ("翻译改写 (translate_rewrite)", "translate_rewrite"),
         ]
     return [
-        ("cloze_contextual", "cloze_contextual"),
+        ("cloze_prose_beginner", "cloze_prose_beginner"),
+        ("cloze_prose_intermediate", "cloze_prose_intermediate"),
+        ("cloze_prose_advanced", "cloze_prose_advanced"),
+        ("cloze_transcript_beginner", "cloze_transcript_beginner"),
+        ("cloze_transcript_intermediate", "cloze_transcript_intermediate"),
+        ("cloze_transcript_advanced", "cloze_transcript_advanced"),
         ("cloze_textbook_examples", "cloze_textbook_examples"),
+        ("cloze_contextual (legacy)", "cloze_contextual"),
         ("translate_rewrite", "translate_rewrite"),
     ]
 
@@ -1001,6 +1020,8 @@ def _build_env_snapshot(cfg: Any) -> dict[str, str]:
         "CLAWLINGUA_LLM_MODEL": _as_str(getattr(cfg, "llm_model", "")),
         "CLAWLINGUA_TRANSLATE_LLM_MODEL": _as_str(getattr(cfg, "translate_llm_model", "")),
         "CLAWLINGUA_PROMPT_LANG": _as_str(getattr(cfg, "prompt_lang", "")),
+        "CLAWLINGUA_MATERIAL_PROFILE": _as_str(getattr(cfg, "material_profile", "")),
+        "CLAWLINGUA_LEARNING_MODE": _as_str(getattr(cfg, "learning_mode", "")),
     }
 
 
@@ -1178,7 +1199,11 @@ def build_interface() -> gr.Blocks:
     prompt_files = _prompt_file_map(cfg)
     prompt_defaults_file = _prompt_defaults_path(cfg)
     initial_ui_lang = _normalize_ui_lang(getattr(cfg, "prompt_lang", "en"))
-    initial_prompt_key = "cloze_contextual" if "cloze_contextual" in prompt_files else next(iter(prompt_files))
+    initial_prompt_key = (
+        "cloze_prose_intermediate"
+        if "cloze_prose_intermediate" in prompt_files
+        else next(iter(prompt_files))
+    )
     initial_prompt_text, initial_prompt_status = _load_prompt_template(
         initial_prompt_key, prompt_files, lang=initial_ui_lang
     )
@@ -1230,7 +1255,7 @@ def build_interface() -> gr.Blocks:
                     label=_tr(initial_ui_lang, "Target language", "目标语言"),
                 )
                 content_profile = gr.Dropdown(
-                    choices=["general", "textbook_examples"],
+                    choices=["prose_article", "transcript_dialogue", "textbook_examples"],
                     value=cfg.content_profile,
                     label=_tr(initial_ui_lang, "Content profile", "内容类型"),
                 )
@@ -1531,7 +1556,7 @@ def build_interface() -> gr.Blocks:
                 )
                 content_profile_env = gr.Textbox(
                     label="CLAWLINGUA_CONTENT_PROFILE",
-                    value=cfg_view.get("CLAWLINGUA_CONTENT_PROFILE", "general"),
+                    value=cfg_view.get("CLAWLINGUA_CONTENT_PROFILE", "prose_article"),
                 )
                 cloze_difficulty_env = gr.Textbox(
                     label="CLAWLINGUA_CLOZE_DIFFICULTY",

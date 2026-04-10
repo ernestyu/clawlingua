@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 import typer
 
-from .constants import SUPPORTED_CONTENT_PROFILES
+from .constants import SUPPORTED_LEARNING_MODES, SUPPORTED_MATERIAL_PROFILES
 from .config import load_config, validate_base_config, validate_runtime_config
 from .errors import ClawLinguaError, build_error, format_error
 from .exit_codes import ExitCode
@@ -77,6 +77,12 @@ def init(
         required = [
             Path("./prompts/cloze_contextual.json"),
             Path("./prompts/cloze_textbook_examples.json"),
+            Path("./prompts/cloze_prose_beginner.json"),
+            Path("./prompts/cloze_prose_intermediate.json"),
+            Path("./prompts/cloze_prose_advanced.json"),
+            Path("./prompts/cloze_transcript_beginner.json"),
+            Path("./prompts/cloze_transcript_intermediate.json"),
+            Path("./prompts/cloze_transcript_advanced.json"),
             Path("./prompts/translate_rewrite.json"),
             Path("./templates/anki_cloze_default.json"),
         ]
@@ -130,6 +136,12 @@ def doctor(
         try:
             load_prompt(cfg.resolve_path(cfg.prompt_cloze))
             load_prompt(cfg.resolve_path(cfg.prompt_cloze_textbook))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_beginner))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_intermediate))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_advanced))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_beginner))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_intermediate))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_advanced))
             load_prompt(cfg.resolve_path(cfg.prompt_translate))
             checks.append(("prompt:schema", True, "ok"))
         except ClawLinguaError as exc:
@@ -207,7 +219,8 @@ def doctor(
                     f"min_chars={cfg.cloze_min_chars}, "
                     f"difficulty={cfg.cloze_difficulty}, "
                     f"max_per_chunk={cfg.cloze_max_per_chunk}, "
-                    f"profile={cfg.content_profile}"
+                    f"material_profile={cfg.material_profile}, "
+                    f"learning_mode={cfg.learning_mode}"
                 ),
             )
         )
@@ -253,10 +266,20 @@ def build_deck(
     input_value: str = typer.Argument(..., help="Path to .txt/.md/.epub input."),
     source_lang: str | None = typer.Option(None, "--source-lang", help="Source language code."),
     target_lang: str | None = typer.Option(None, "--target-lang", help="Target language code."),
+    material_profile: str | None = typer.Option(
+        None,
+        "--material-profile",
+        help="Material profile override: prose_article|transcript_dialogue|textbook_examples.",
+    ),
+    learning_mode: str | None = typer.Option(
+        None,
+        "--learning-mode",
+        help="Learning mode override: expression_mining.",
+    ),
     content_profile: str | None = typer.Option(
         None,
         "--content-profile",
-        help="Content profile override: general|textbook_examples (overrides env).",
+        help="[Deprecated] alias of --material-profile.",
     ),
     input_char_limit: int | None = typer.Option(
         None,
@@ -308,12 +331,22 @@ def build_deck(
                 next_steps=["Use a non-negative integer, e.g. --cloze-min-chars 60"],
                 exit_code=ExitCode.ARGUMENT_ERROR,
             )
-        if content_profile is not None and content_profile.strip().lower() not in SUPPORTED_CONTENT_PROFILES:
-            allowed = ",".join(sorted(SUPPORTED_CONTENT_PROFILES))
+        effective_material_profile = material_profile or content_profile
+        if effective_material_profile is not None and effective_material_profile.strip().lower() not in SUPPORTED_MATERIAL_PROFILES:
+            allowed = ",".join(sorted(SUPPORTED_MATERIAL_PROFILES))
             raise build_error(
-                error_code="ARG_CONTENT_PROFILE_INVALID",
-                cause="content-profile value is invalid.",
-                detail=f"content_profile={content_profile!r}",
+                error_code="ARG_MATERIAL_PROFILE_INVALID",
+                cause="material-profile value is invalid.",
+                detail=f"material_profile={effective_material_profile!r}",
+                next_steps=[f"Use one of: {allowed}"],
+                exit_code=ExitCode.ARGUMENT_ERROR,
+            )
+        if learning_mode is not None and learning_mode.strip().lower() not in SUPPORTED_LEARNING_MODES:
+            allowed = ",".join(sorted(SUPPORTED_LEARNING_MODES))
+            raise build_error(
+                error_code="ARG_LEARNING_MODE_INVALID",
+                cause="learning-mode value is invalid.",
+                detail=f"learning_mode={learning_mode!r}",
                 next_steps=[f"Use one of: {allowed}"],
                 exit_code=ExitCode.ARGUMENT_ERROR,
             )
@@ -328,7 +361,9 @@ def build_deck(
                 input_value=input_value,
                 source_lang=source_lang,
                 target_lang=target_lang,
-                content_profile=content_profile,
+                content_profile=effective_material_profile,
+                material_profile=effective_material_profile,
+                learning_mode=learning_mode,
                 input_char_limit=input_char_limit,
                 output=output,
                 deck_name=deck_name,
@@ -392,5 +427,3 @@ def main() -> Any:
 
 if __name__ == "__main__":
     main()
-
-

@@ -38,7 +38,8 @@ from ..utils.hash import stable_hash
 from ..utils.jsonx import dump_json, dump_jsonl, load_json
 from ..utils.time import utc_now_iso
 from .dedupe import dedupe_candidates
-from .validators import validate_text_candidate, validate_translation_text
+from .ranking import rank_candidates
+from .validators import classify_rejection_reason, validate_text_candidate, validate_translation_text
 
 logger = logging.getLogger(__name__)
 TEXTBOOK_PROFILE_MAX_RECOMMENDED_CLOZE_MIN_CHARS = 120
@@ -51,6 +52,8 @@ class BuildDeckOptions:
     run_id: str | None = None
     source_lang: str | None = None
     target_lang: str | None = None
+    material_profile: str | None = None
+    learning_mode: str | None = None
     input_char_limit: int | None = None
     output: Path | None = None
     deck_name: str | None = None
@@ -60,6 +63,7 @@ class BuildDeckOptions:
     temperature: float | None = None
     cloze_difficulty: str | None = None
     cloze_min_chars: int | None = None
+    # Legacy alias of material_profile.
     content_profile: str | None = None
     save_intermediate: bool | None = None
     continue_on_error: bool = False
@@ -113,7 +117,9 @@ def _save_intermediate(
     cards: list[CardRecord],
     errors: list[dict],
     output_path: Path,
-    content_profile: str,
+    material_profile: str,
+    learning_mode: str,
+    metrics: dict[str, Any] | None = None,
 ) -> None:
     dump_json(run_dir / "document.json", document.model_dump(mode="json"))
     (run_dir / "document.md").write_text(document.cleaned_text, encoding="utf-8")
@@ -138,29 +144,55 @@ def _save_intermediate(
             "run_id": document.run_id,
             "cards": len(cards),
             "errors": len(errors),
-            "content_profile": content_profile,
+            "material_profile": material_profile,
+            "content_profile": material_profile,  # backward-compatible summary key
+            "learning_mode": learning_mode,
             "output_path": str(output_path),
         }
     )
+    if metrics:
+        summary_payload["metrics"] = metrics
     dump_json(summary_path, summary_payload)
 
 
-def _resolve_content_profile(cfg: AppConfig, options: BuildDeckOptions) -> str:
-    profile = (options.content_profile or cfg.content_profile or "general").strip().lower()
+def _resolve_material_profile(cfg: AppConfig, options: BuildDeckOptions) -> str:
+    # Priority: explicit material_profile > legacy content_profile > cfg.material_profile > cfg.content_profile.
+    profile = (
+        options.material_profile
+        or options.content_profile
+        or cfg.material_profile
+        or cfg.content_profile
+        or "prose_article"
+    ).strip().lower()
+    if profile == "general":
+        profile = "prose_article"
     if profile not in SUPPORTED_CONTENT_PROFILES:
         allowed = ", ".join(sorted(SUPPORTED_CONTENT_PROFILES))
         raise build_error(
-            error_code="ARG_CONTENT_PROFILE_INVALID",
-            cause="Invalid content profile.",
-            detail=f"content_profile={profile!r}",
+            error_code="ARG_MATERIAL_PROFILE_INVALID",
+            cause="Invalid material profile.",
+            detail=f"material_profile={profile!r}",
             next_steps=[f"Use one of: {allowed}"],
             exit_code=ExitCode.ARGUMENT_ERROR,
         )
     return profile
 
 
-def _check_textbook_profile_settings(*, cfg: AppConfig, options: BuildDeckOptions, content_profile: str) -> None:
-    if content_profile != "textbook_examples":
+def _resolve_learning_mode(cfg: AppConfig, options: BuildDeckOptions) -> str:
+    mode = (options.learning_mode or cfg.learning_mode or "expression_mining").strip().lower()
+    if mode != "expression_mining":
+        raise build_error(
+            error_code="ARG_LEARNING_MODE_INVALID",
+            cause="Unsupported learning mode in current build.",
+            detail=f"learning_mode={mode!r}",
+            next_steps=["Use `expression_mining`"],
+            exit_code=ExitCode.ARGUMENT_ERROR,
+        )
+    return mode
+
+
+def _check_textbook_profile_settings(*, cfg: AppConfig, options: BuildDeckOptions, material_profile: str) -> None:
+    if material_profile != "textbook_examples":
         return
     if options.cloze_min_chars is None and cfg.cloze_min_chars > TEXTBOOK_PROFILE_MAX_RECOMMENDED_CLOZE_MIN_CHARS:
         raise build_error(
@@ -198,6 +230,98 @@ def _is_retryable_translation_item_error(result: TranslationBatchResult) -> bool
     return bool(result.error and result.error.startswith("retryable:"))
 
 
+def _apply_per_chunk_cap(items: list[dict[str, Any]], *, max_per_chunk: int | None) -> list[dict[str, Any]]:
+    if not max_per_chunk or max_per_chunk <= 0:
+        return list(items)
+    limited: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    for item in items:
+        cid = str(item.get("chunk_id", "")).strip()
+        current = counts.get(cid, 0)
+        if current >= max_per_chunk:
+            continue
+        counts[cid] = current + 1
+        limited.append(item)
+    return limited
+
+
+def _build_pipeline_metrics(
+    *,
+    chunks: list[Any],
+    raw_candidates: list[dict[str, Any]],
+    valid_candidates: list[dict[str, Any]],
+    deduped_candidates: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    chunk_ids = {str(getattr(chunk, "chunk_id", "")) for chunk in chunks if str(getattr(chunk, "chunk_id", ""))}
+    raw_by_chunk: dict[str, int] = {}
+    for item in raw_candidates:
+        cid = str(item.get("chunk_id", "")).strip()
+        if not cid:
+            continue
+        raw_by_chunk[cid] = raw_by_chunk.get(cid, 0) + 1
+    empty_chunk_count = len([cid for cid in chunk_ids if raw_by_chunk.get(cid, 0) == 0])
+
+    reason_hist: dict[str, int] = {}
+    for err in errors:
+        if str(err.get("stage", "")) != "validate_text":
+            continue
+        reason = str(err.get("reason", ""))
+        category = classify_rejection_reason(reason)
+        reason_hist[category] = reason_hist.get(category, 0) + 1
+
+    phrase_type_hist: dict[str, int] = {}
+    for item in deduped_candidates:
+        for ptype in item.get("phrase_types", []) or []:
+            key = str(ptype).strip()
+            if not key:
+                continue
+            phrase_type_hist[key] = phrase_type_hist.get(key, 0) + 1
+
+    avg_raw_per_chunk = (len(raw_candidates) / len(chunks)) if chunks else 0.0
+    pass_rate = (len(valid_candidates) / len(raw_candidates)) if raw_candidates else 0.0
+    return {
+        "chunks_total": len(chunks),
+        "raw_candidates": len(raw_candidates),
+        "validated_candidates": len(valid_candidates),
+        "deduped_candidates": len(deduped_candidates),
+        "avg_raw_candidates_per_chunk": round(avg_raw_per_chunk, 4),
+        "validation_pass_rate": round(pass_rate, 4),
+        "empty_chunk_count": empty_chunk_count,
+        "empty_chunk_ratio": round((empty_chunk_count / len(chunks)) if chunks else 0.0, 4),
+        "rejection_reason_histogram": reason_hist,
+        "phrase_type_histogram": phrase_type_hist,
+    }
+
+
+def _collect_valid_candidates(
+    *,
+    raw_candidates: list[dict[str, Any]],
+    cfg: AppConfig,
+    material_profile: str,
+    errors: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, str | None]:
+    valid_candidates: list[dict[str, Any]] = []
+    validation_rejects = 0
+    first_validation_reason: str | None = None
+    for item in raw_candidates:
+        ok, reason = validate_text_candidate(
+            item,
+            max_sentences=cfg.cloze_max_sentences,
+            min_chars=cfg.cloze_min_chars,
+            difficulty=cfg.cloze_difficulty,
+            material_profile=material_profile,
+        )
+        if not ok:
+            validation_rejects += 1
+            if first_validation_reason is None:
+                first_validation_reason = reason
+            errors.append({"stage": "validate_text", "reason": reason, "item": item})
+            continue
+        valid_candidates.append(item)
+    return valid_candidates, validation_rejects, first_validation_reason
+
+
 def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> DocumentRecord:
     source_lang = options.source_lang or cfg.default_source_lang
     target_lang = options.target_lang or cfg.default_target_lang
@@ -231,10 +355,12 @@ def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> D
     cleaned_markdown = None
     options.input_value = str(file_path)
 
+    material_profile = _resolve_material_profile(cfg, options)
     cleaned = normalize_text(
         raw_text,
         options=NormalizeOptions(
             short_line_max_words=cfg.ingest_short_line_max_words,
+            material_profile=material_profile,
         ),
     )
     if not cleaned:
@@ -258,6 +384,10 @@ def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> D
         cleaned_text=cleaned,
         cleaned_markdown=cleaned_markdown,
         fetched_at=utc_now_iso(),
+        metadata={
+            "material_profile": material_profile,
+            "learning_mode": options.learning_mode or cfg.learning_mode,
+        },
     )
 
 
@@ -270,12 +400,16 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         cfg.cloze_difficulty = options.cloze_difficulty
     if options.cloze_min_chars is not None:
         cfg.cloze_min_chars = options.cloze_min_chars
-    content_profile = _resolve_content_profile(cfg, options)
-    _check_textbook_profile_settings(cfg=cfg, options=options, content_profile=content_profile)
+    material_profile = _resolve_material_profile(cfg, options)
+    learning_mode = _resolve_learning_mode(cfg, options)
+    _check_textbook_profile_settings(cfg=cfg, options=options, material_profile=material_profile)
 
     run_ctx = create_run_context(cfg, name="build_deck", run_id=options.run_id)
     template = load_anki_template(cfg.resolve_path(cfg.anki_template))
-    cloze_prompt_path = cfg.prompt_cloze_textbook if content_profile == "textbook_examples" else cfg.prompt_cloze
+    cloze_prompt_path = cfg.resolve_cloze_prompt_path(
+        material_profile=material_profile,
+        difficulty=cfg.cloze_difficulty,
+    )
     cloze_prompt = load_prompt(cfg.resolve_path(cloze_prompt_path), prompt_lang=cfg.prompt_lang)
     translate_prompt = load_prompt(cfg.resolve_path(cfg.prompt_translate), prompt_lang=cfg.prompt_lang)
 
@@ -320,7 +454,9 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 cards=cards,
                 errors=snapshot_errors,
                 output_path=output_path,
-                content_profile=content_profile,
+                material_profile=material_profile,
+                learning_mode=learning_mode,
+                metrics=None,
             )
         except Exception:
             logger.exception("failed to persist failure snapshot")
@@ -331,6 +467,8 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         max_chars=options.max_chars or cfg.chunk_max_chars,
         min_chars=cfg.chunk_min_chars,
         overlap_sentences=cfg.chunk_overlap_sentences,
+        material_profile=material_profile,
+        difficulty=cfg.cloze_difficulty,
     )
     if not chunks:
         err = build_error(
@@ -349,16 +487,47 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
 
     # LLM chunk batch：一次可以处理多个 chunk。
     batch_size = max(1, int(cfg.llm_chunk_batch_size or 1))
+    if cfg.cloze_difficulty == "advanced" or material_profile == "transcript_dialogue":
+        batch_size = 1
 
     def _iter_batches(items: list[Any], size: int) -> list[list[Any]]:
         if size <= 1:
             return [[c] for c in items]
         return [items[i : i + size] for i in range(0, len(items), size)]
 
+    def _append_raw_items(batch: list[Any], items: list[dict[str, Any]]) -> None:
+        chunk_map = {c.chunk_id: c for c in batch}
+        for item in items:
+            cid = str(item.get("chunk_id") or "").strip()
+            chunk = chunk_map.get(cid) if cid else None
+            if len(batch) > 1 and chunk is None:
+                errors.append(
+                    {
+                        "stage": "cloze_batch_mapping",
+                        "reason": "missing_or_unknown_chunk_id",
+                        "chunk_id": cid,
+                        "item": item,
+                    }
+                )
+                if options.continue_on_error:
+                    continue
+                err = build_error(
+                    error_code="CLOZE_BATCH_CHUNK_ID_MISSING",
+                    cause="Batch cloze output is missing a valid chunk_id.",
+                    detail=f"chunk_id={cid!r}",
+                    next_steps=["Force model output to include a valid chunk_id"],
+                    exit_code=ExitCode.LLM_PARSE_ERROR,
+                )
+                _save_failure_snapshot(err)
+                raise err
+            if chunk is not None:
+                item["chunk_id"] = chunk.chunk_id
+                item["chunk_text"] = chunk.source_text
+            raw_candidates.append(item)
+
     for batch in _iter_batches(chunks, batch_size):
         try:
             if len(batch) == 1:
-                # 保持单 chunk 行为，便于 debug。
                 chunk = batch[0]
                 items = generate_cloze_candidates_for_chunk(
                     client=client,
@@ -375,42 +544,11 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                     chunks=batch,
                     temperature=options.temperature,
                 )
-
-            # 补充 chunk_id/chunk_text（有些模型可能没带 chunk_text）
-            chunk_map = {c.chunk_id: c for c in batch}
-            for item in items:
-                cid = str(item.get("chunk_id") or "").strip()
-                chunk = chunk_map.get(cid) if cid else None
-                if len(batch) > 1 and chunk is None:
-                    # batch 模式下必须有可识别的 chunk_id，避免候选挂错 chunk。
-                    errors.append(
-                        {
-                            "stage": "cloze_batch_mapping",
-                            "reason": "missing_or_unknown_chunk_id",
-                            "chunk_id": cid,
-                            "item": item,
-                        }
-                    )
-                    if options.continue_on_error:
-                        continue
-                    err = build_error(
-                        error_code="CLOZE_BATCH_CHUNK_ID_MISSING",
-                        cause="Batch cloze output is missing a valid chunk_id.",
-                        detail=f"chunk_id={cid!r}",
-                        next_steps=["Force model output to include a valid chunk_id"],
-                        exit_code=ExitCode.LLM_PARSE_ERROR,
-                    )
-                    _save_failure_snapshot(err)
-                    raise err
-                if chunk is not None:
-                    item["chunk_id"] = chunk.chunk_id
-                    item["chunk_text"] = chunk.source_text
-                raw_candidates.append(item)
+            _append_raw_items(batch, items)
         except ClawLinguaError as exc:
             if not options.continue_on_error:
                 _save_failure_snapshot(exc)
                 raise
-            # 记录整个 batch 的错误，但保留每个 chunk_id 方便排查。
             errors.append(
                 {
                     "stage": "cloze",
@@ -419,22 +557,12 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 }
             )
 
-    validation_rejects = 0
-    first_validation_reason: str | None = None
-    for item in raw_candidates:
-        ok, reason = validate_text_candidate(
-            item,
-            max_sentences=cfg.cloze_max_sentences,
-            min_chars=cfg.cloze_min_chars,
-            difficulty=cfg.cloze_difficulty,
-        )
-        if not ok:
-            validation_rejects += 1
-            if first_validation_reason is None:
-                first_validation_reason = reason
-            errors.append({"stage": "validate_text", "reason": reason, "item": item})
-            continue
-        valid_candidates.append(item)
+    valid_candidates, validation_rejects, first_validation_reason = _collect_valid_candidates(
+        raw_candidates=raw_candidates,
+        cfg=cfg,
+        material_profile=material_profile,
+        errors=errors,
+    )
 
     if validation_rejects:
         logger.warning(
@@ -443,31 +571,86 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             len(raw_candidates),
             first_validation_reason or "",
         )
+
     if not valid_candidates:
+        errors.append(
+            {
+                "stage": "cloze_fallback_single_chunk",
+                "reason": "no valid candidates after first pass",
+            }
+        )
+        fallback_raw: list[dict[str, Any]] = []
+        for chunk in chunks:
+            try:
+                items = generate_cloze_candidates_for_chunk(
+                    client=client,
+                    prompt=cloze_prompt,
+                    document=document,
+                    chunk=chunk,
+                    temperature=0.1 if options.temperature is None else options.temperature,
+                )
+            except ClawLinguaError as exc:
+                errors.append(
+                    {
+                        "stage": "cloze_fallback_single_chunk_error",
+                        "chunk_id": chunk.chunk_id,
+                        "error": exc.to_lines(),
+                    }
+                )
+                continue
+            for item in items:
+                item["chunk_id"] = chunk.chunk_id
+                item["chunk_text"] = chunk.source_text
+                fallback_raw.append(item)
+
+        raw_candidates.extend(fallback_raw)
+        valid_candidates, _, first_validation_reason = _collect_valid_candidates(
+            raw_candidates=fallback_raw,
+            cfg=cfg,
+            material_profile=material_profile,
+            errors=errors,
+        )
+
+    if not valid_candidates and not (cfg.allow_empty_deck or options.continue_on_error):
         err = build_error(
             error_code="CARD_VALIDATION_FAILED",
             cause="All candidates failed validation.",
             detail=f"raw={len(raw_candidates)}, first_reason={first_validation_reason or 'unknown'}",
-            next_steps=["Adjust prompt constraints", "Lower CLAWLINGUA_CLOZE_MIN_CHARS if needed"],
+            next_steps=[
+                "Adjust prompt constraints",
+                "Lower CLAWLINGUA_CLOZE_MIN_CHARS if needed",
+                "Try `--difficulty intermediate` for difficult inputs",
+            ],
             exit_code=ExitCode.CARD_VALIDATION_ERROR,
         )
         _save_failure_snapshot(err)
         raise err
 
-    deduped = dedupe_candidates(valid_candidates)
-    if cfg.cloze_max_per_chunk and cfg.cloze_max_per_chunk > 0:
-        # Per-chunk cap to avoid generating too many cards from a single segment.
-        by_chunk: dict[str, list[dict]] = {}
-        for item in deduped:
-            cid = str(item.get("chunk_id", ""))
-            bucket = by_chunk.setdefault(cid, [])
-            if len(bucket) < cfg.cloze_max_per_chunk:
-                bucket.append(item)
-        deduped = [c for bucket in by_chunk.values() for c in bucket]
+    if valid_candidates:
+        ranked_candidates = rank_candidates(
+            valid_candidates,
+            difficulty=cfg.cloze_difficulty,
+            material_profile=material_profile,
+        )
+        deduped = dedupe_candidates(ranked_candidates)
+        deduped = _apply_per_chunk_cap(deduped, max_per_chunk=cfg.cloze_max_per_chunk)
+    else:
+        deduped = []
+        errors.append(
+            {
+                "stage": "cloze_empty_result",
+                "reason": "no valid candidates after fallback",
+            }
+        )
 
     if options.max_notes and options.max_notes > 0:
         deduped = deduped[: options.max_notes]
-    logger.info("text generation complete | raw=%d valid=%d", len(raw_candidates), len(deduped))
+    logger.info(
+        "text generation complete | raw=%d valid=%d deduped=%d",
+        len(raw_candidates),
+        len(valid_candidates),
+        len(deduped),
+    )
 
     translate_batch_size = max(1, int(cfg.translate_batch_size or 1))
 
@@ -693,7 +876,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 )
             break
 
-    if not cards:
+    if not cards and not cfg.allow_empty_deck:
         err = build_error(
             error_code="CARD_EMPTY",
             cause="No exportable cards were produced.",
@@ -703,6 +886,13 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         )
         _save_failure_snapshot(err)
         raise err
+    if not cards:
+        errors.append(
+            {
+                "stage": "empty_output",
+                "reason": "no cards produced; exporting empty deck",
+            }
+        )
     logger.info("translation generation complete | translated=%d", len(cards))
 
     voices = cfg.get_source_voices(document.source_lang)
@@ -751,6 +941,20 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         raise
     logger.info("deck export complete | file=%s", output_path)
 
+    pipeline_metrics = _build_pipeline_metrics(
+        chunks=chunks,
+        raw_candidates=raw_candidates,
+        valid_candidates=valid_candidates,
+        deduped_candidates=deduped,
+        errors=errors,
+    )
+    pipeline_metrics["prompt_info"] = {
+        "cloze_prompt_name": cloze_prompt.name,
+        "cloze_prompt_version": cloze_prompt.version,
+        "translate_prompt_name": translate_prompt.name,
+        "translate_prompt_version": translate_prompt.version,
+    }
+
     if save_intermediate:
         _save_intermediate(
             run_dir=run_ctx.run_dir,
@@ -761,7 +965,9 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             cards=cards,
             errors=errors,
             output_path=output_path,
-            content_profile=content_profile,
+            material_profile=material_profile,
+            learning_mode=learning_mode,
+            metrics=pipeline_metrics,
         )
 
     return BuildDeckResult(

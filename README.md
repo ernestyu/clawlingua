@@ -12,7 +12,7 @@ It:
 - uses `edge_tts` to generate audio for each card
 - exports a complete Anki deck via `genanki`
 
-This README describes the current **V1 CLI**. For an overview in Chinese, see
+This README describes the current **V2-oriented CLI**. For an overview in Chinese, see
 [`README_zh.md`](./README_zh.md).
 
 ---
@@ -43,6 +43,12 @@ python -m clawlingua.cli init
 - create `.env` from `.env.example` (if missing)
 - verify that the default prompts and template exist:
   - `./prompts/cloze_contextual.json`
+  - `./prompts/cloze_prose_beginner.json`
+  - `./prompts/cloze_prose_intermediate.json`
+  - `./prompts/cloze_prose_advanced.json`
+  - `./prompts/cloze_transcript_beginner.json`
+  - `./prompts/cloze_transcript_intermediate.json`
+  - `./prompts/cloze_transcript_advanced.json`
   - `./prompts/cloze_textbook_examples.json`
   - `./prompts/translate_rewrite.json`
   - `./templates/anki_cloze_default.json`
@@ -134,9 +140,10 @@ CLAWLINGUA_LLM_CHUNK_BATCH_SIZE=1
 - The LLM decides how many candidates to return per chunk (0–N).
 - `CLOZE_MAX_PER_CHUNK` is a **safety cap** applied *after* validation and
   dedupe; set to `0` or empty to disable.
-- Difficulty is a prompt parameter used to adjust how “aggressive” clozes are.
+- Difficulty is now a first-class strategy selector (not only a prompt hint):
+  it affects prompt family variant, chunk batching behavior, validation, and ranking.
 
-For `content_profile=textbook_examples`, if `CLOZE_MIN_CHARS` is above 120
+For `material_profile=textbook_examples`, if `CLOZE_MIN_CHARS` is above 120
 and you do not override with `--cloze-min-chars`, the run is rejected.
 
 ### 2.5 Translation LLM (small LLM)
@@ -161,9 +168,17 @@ CLAWLINGUA_TRANSLATE_BATCH_SIZE=4
 ### 2.6 Prompts, templates, output
 
 ```env
-CLAWLINGUA_CONTENT_PROFILE=general
+CLAWLINGUA_CONTENT_PROFILE=prose_article
+CLAWLINGUA_MATERIAL_PROFILE=prose_article
+CLAWLINGUA_LEARNING_MODE=expression_mining
 CLAWLINGUA_PROMPT_CLOZE=./prompts/cloze_contextual.json
 CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
+CLAWLINGUA_PROMPT_CLOZE_PROSE_BEGINNER=./prompts/cloze_prose_beginner.json
+CLAWLINGUA_PROMPT_CLOZE_PROSE_INTERMEDIATE=./prompts/cloze_prose_intermediate.json
+CLAWLINGUA_PROMPT_CLOZE_PROSE_ADVANCED=./prompts/cloze_prose_advanced.json
+CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_BEGINNER=./prompts/cloze_transcript_beginner.json
+CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE=./prompts/cloze_transcript_intermediate.json
+CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_ADVANCED=./prompts/cloze_transcript_advanced.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
 CLAWLINGUA_PROMPT_LANG=zh
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
@@ -175,11 +190,18 @@ CLAWLINGUA_EXPORT_DIR=./outputs
 CLAWLINGUA_LOG_DIR=./logs
 CLAWLINGUA_LOG_LEVEL=INFO
 CLAWLINGUA_SAVE_INTERMEDIATE=true
+CLAWLINGUA_ALLOW_EMPTY_DECK=true
 CLAWLINGUA_DEFAULT_DECK_NAME=ClawLingua Default Deck
 ```
 
-- `CLAWLINGUA_CONTENT_PROFILE=general` uses `cloze_contextual.json`.
-- `CLAWLINGUA_CONTENT_PROFILE=textbook_examples` uses `cloze_textbook_examples.json`.
+- `CLAWLINGUA_MATERIAL_PROFILE` chooses material strategy: `prose_article`,
+  `transcript_dialogue`, `textbook_examples`.
+- `CLAWLINGUA_LEARNING_MODE` is currently `expression_mining` (explicit in V2 model).
+- Prompt selection is now **profile + difficulty** driven:
+  - prose: `cloze_prose_{beginner|intermediate|advanced}.json`
+  - transcript: `cloze_transcript_{beginner|intermediate|advanced}.json`
+  - textbook_examples: `cloze_textbook_examples.json`
+- `CLAWLINGUA_CONTENT_PROFILE` is kept as a backward-compatible alias.
 - `CLAWLINGUA_PROMPT_LANG` controls which language variant is used for multi-lingual prompts (`en` or `zh`), and can be overridden by `--prompt-lang`.
 
 ### 2.7 TTS (edge_tts)
@@ -204,9 +226,15 @@ each card, selecting a voice from the configured list based on `source_lang`.
 
 ## 3. Cloze & translation prompts
 
-### 3.1 Cloze prompt: `prompts/cloze_contextual.json`
+### 3.1 Cloze prompt families
 
-This prompt controls how cloze candidates are generated.
+Cloze generation now uses **prompt family + difficulty variant**:
+
+- `prose_article`: `cloze_prose_beginner.json`, `cloze_prose_intermediate.json`, `cloze_prose_advanced.json`
+- `transcript_dialogue`: `cloze_transcript_beginner.json`, `cloze_transcript_intermediate.json`, `cloze_transcript_advanced.json`
+- `textbook_examples`: `cloze_textbook_examples.json`
+
+Legacy `cloze_contextual.json` is still supported for backward compatibility.
 
 - Prompt fields support both legacy and multi-lingual formats:
   - Legacy string format: `"system_prompt": "..."`.
@@ -214,7 +242,7 @@ This prompt controls how cloze candidates are generated.
 - At runtime, the language variant is selected based on
   `CLAWLINGUA_PROMPT_LANG` (or the `--prompt-lang` CLI override).
 
-It uses `source_lang`, `target_lang`, `difficulty`, `cloze_max_sentences`, and
+It uses `source_lang`, `target_lang`, `learning_mode`, `difficulty`, `cloze_max_sentences`, and
 a merged `chunk_text` (possibly containing multiple chunk blocks) as
 placeholders.
 
@@ -326,7 +354,7 @@ Performs a series of checks:
 - primary LLM connectivity (`CLAWLINGUA_LLM_*`)
 - translation LLM config & connectivity (`CLAWLINGUA_TRANSLATE_LLM_*`)
 - output directory writability
-- cloze control summary (max_sentences / min_chars / difficulty / max_per_chunk / profile)
+- cloze control summary (max_sentences / min_chars / difficulty / max_per_chunk / material_profile / learning_mode)
 - TTS voices for `default_source_lang`
 
 ### 4.3 `build deck`
@@ -337,7 +365,8 @@ Core command:
 python -m clawlingua.cli build deck INPUT \
   --source-lang en \
   --target-lang zh \
-  --content-profile general|textbook_examples \
+  --material-profile prose_article|transcript_dialogue|textbook_examples \
+  --learning-mode expression_mining \
   --input-char-limit 4000 \
   --env-file .env \
   --output deck.apkg \
@@ -357,7 +386,9 @@ Where:
 
 - `INPUT`: path to `.txt`/`.md`/`.epub` file.
 - `--source-lang` / `--target-lang` override defaults from env.
-- `--content-profile` switches prompt policy (`general` or `textbook_examples`).
+- `--material-profile` selects material strategy and cloze prompt family.
+- `--learning-mode` is explicit in V2 model (`expression_mining` for now).
+- `--content-profile` is kept as a deprecated alias of `--material-profile`.
 - `--input-char-limit` lets you process only the first N characters for quick tests.
 - `--difficulty` overrides `CLAWLINGUA_CLOZE_DIFFICULTY`.
 - `--prompt-lang` overrides `CLAWLINGUA_PROMPT_LANG` for multi-lingual prompts.
@@ -376,7 +407,7 @@ Where:
 ### 4.4 `prompt validate`
 
 ```bash
-python -m clawlingua.cli prompt validate ./prompts/cloze_contextual.json
+python -m clawlingua.cli prompt validate ./prompts/cloze_prose_intermediate.json
 python -m clawlingua.cli prompt validate ./prompts/cloze_textbook_examples.json
 ```
 

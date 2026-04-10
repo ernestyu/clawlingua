@@ -8,6 +8,12 @@ APP_NAME = "clawlingua"
 
 DEFAULT_PROMPT_CLOZE = Path("./prompts/cloze_contextual.json")
 DEFAULT_PROMPT_CLOZE_TEXTBOOK = Path("./prompts/cloze_textbook_examples.json")
+DEFAULT_PROMPT_CLOZE_PROSE_BEGINNER = Path("./prompts/cloze_prose_beginner.json")
+DEFAULT_PROMPT_CLOZE_PROSE_INTERMEDIATE = Path("./prompts/cloze_prose_intermediate.json")
+DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED = Path("./prompts/cloze_prose_advanced.json")
+DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER = Path("./prompts/cloze_transcript_beginner.json")
+DEFAULT_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE = Path("./prompts/cloze_transcript_intermediate.json")
+DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED = Path("./prompts/cloze_transcript_advanced.json")
 DEFAULT_PROMPT_TRANSLATE = Path("./prompts/translate_rewrite.json")
 DEFAULT_ANKI_TEMPLATE = Path("./templates/anki_cloze_default.json")
 # Where intermediate run directories (JSONL, snapshots) are stored.
@@ -21,4 +27,7 @@ DEFAULT_DECK_NAME = "ClawLingua Default Deck"
 ANKI_FIELDS_ORDER = ["Text", "Original", "Translation", "Note", "Audio"]
 SUPPORTED_FILE_SUFFIXES = {".txt", ".md", ".markdown", ".epub"}
 SUPPORTED_INPUT_TYPES = {"file"}
-SUPPORTED_CONTENT_PROFILES = {"general", "textbook_examples"}
+# Legacy alias "general" maps to "prose_article".
+SUPPORTED_MATERIAL_PROFILES = {"general", "prose_article", "transcript_dialogue", "textbook_examples"}
+SUPPORTED_CONTENT_PROFILES = SUPPORTED_MATERIAL_PROFILES
+SUPPORTED_LEARNING_MODES = {"expression_mining"}

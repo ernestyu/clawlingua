@@ -1,0 +1,31 @@
+{
+    "name":  "cloze_transcript_beginner",
+    "version":  "0.2.0",
+    "description":  "Beginner expression mining for transcript/dialogue style text.",
+    "mode":  "cloze",
+    "system_prompt":  "You are a language-learning content editor. Output a JSON array only. Do not output explanations or code fences.",
+    "user_prompt_template":  {
+                                 "en":  "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\nlearning_mode={learning_mode}\ndifficulty={difficulty}\ncloze_max_sentences={cloze_max_sentences}\ncloze_min_chars={cloze_min_chars}\ncloze_max_per_chunk={cloze_max_per_chunk}\n\nYou will receive one or more chunks in this format:\nchunk_id=chunk_0001_xxxxxx\nchunk_text=\\n\u003cchunk text\u003e\n\nReturn a JSON array. Each item MUST include:\n{\n  \"chunk_id\": \"matching chunk id\",\n  \"text\": \"cloze sentence(s)\",\n  \"original\": \"plain text without cloze markers/html\",\n  \"target_phrases\": [\"phrase 1\", \"phrase 2\"],\n  \"note_hint\": \"optional hint\"\n}\n\nOptional debug fields are allowed:\n- \"selection_reason\": short reason why this candidate is selected\n- \"phrase_types\": array of labels\n- \"learning_value_score\": numeric score\n\nGlobal requirements:\n1) text must contain at least one cloze: {{cN::\u003cb\u003ePHRASE\u003c/b\u003e}}(hint).\n2) cN index increases by appearance order in each text.\n3) original must not contain cloze markers or html.\n4) use \u003cb\u003e...\u003c/b\u003e for emphasis, do NOT use markdown **.\n5) omit candidates shorter than cloze_min_chars or exceeding cloze_max_sentences.\n6) if no suitable candidate exists, return an empty array.\n\nMaterial profile: transcript_dialogue.\nBeginner rubric:\n- Prefer practical spoken expressions with clear context.\n- Usually 1 cloze per candidate.\n- Ignore filler noise and disfluencies.\n- Keep candidates short, natural, and reusable in everyday dialogue.\n\nchunk_text:\n{chunk_text}",
+                                 "zh":  "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\nlearning_mode={learning_mode}\ndifficulty={difficulty}\ncloze_max_sentences={cloze_max_sentences}\ncloze_min_chars={cloze_min_chars}\ncloze_max_per_chunk={cloze_max_per_chunk}\n\n你将收到一个或多个 chunk，格式如下：\nchunk_id=chunk_0001_xxxxxx\nchunk_text=\\n\u003cchunk 原文\u003e\n\n请返回 JSON 数组。每个元素必须包含：\n{\n  \"chunk_id\": \"对应的 chunk id\",\n  \"text\": \"包含 cloze 的句子\",\n  \"original\": \"不含 cloze 标记或 html 的纯文本\",\n  \"target_phrases\": [\"短语1\", \"短语2\"],\n  \"note_hint\": \"可选提示\"\n}\n\n允许附加调试字段：\n- \"selection_reason\": 该候选被选中的简短理由\n- \"phrase_types\": 标签数组\n- \"learning_value_score\": 数值评分\n\n全局要求：\n1) text 必须至少包含一个 cloze：{{cN::\u003cb\u003e短语\u003c/b\u003e}}(提示)。\n2) 同一条 text 内 cN 按出现顺序递增。\n3) original 不得包含 cloze 标记或 html。\n4) 可以使用 \u003cb\u003e...\u003c/b\u003e 强调，不要使用 markdown **。\n5) 丢弃长度小于 cloze_min_chars 或句子数超过 cloze_max_sentences 的候选。\n6) 若没有合适内容，返回空数组。\n\n材料类型：transcript_dialogue。\n难度规范（beginner）：\n- 优先真实口语中可直接复用的实用表达。\n- 通常每条 1 个 cloze。\n- 忽略口头噪音和无意义停顿词。\n- 保持候选简短、自然、适合日常对话迁移。\n\nchunk_text:\n{chunk_text}"
+                             },
+    "placeholders":  [
+                         "source_lang",
+                         "target_lang",
+                         "document_title",
+                         "source_url",
+                         "chunk_text",
+                         "learning_mode",
+                         "difficulty",
+                         "cloze_max_sentences",
+                         "cloze_min_chars",
+                         "cloze_max_per_chunk"
+                     ],
+    "output_format":  {
+                          "type":  "json",
+                          "schema_name":  "cloze_cards_v1"
+                      },
+    "parser":  {
+                   "strip_code_fences":  true,
+                   "expect_json_array":  true
+               }
+}

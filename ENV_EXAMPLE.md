@@ -35,9 +35,21 @@ CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE=
 # Number of originals translated in one request (recommended: 4-8).
 CLAWLINGUA_TRANSLATE_BATCH_SIZE=4
 
-CLAWLINGUA_CONTENT_PROFILE=general
+# Legacy alias (kept for backward compatibility): general|textbook_examples
+CLAWLINGUA_CONTENT_PROFILE=prose_article
+# V2 selectors
+CLAWLINGUA_MATERIAL_PROFILE=prose_article
+CLAWLINGUA_LEARNING_MODE=expression_mining
+
+# Legacy generic cloze prompt path (still supported)
 CLAWLINGUA_PROMPT_CLOZE=./prompts/cloze_contextual.json
 CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
+CLAWLINGUA_PROMPT_CLOZE_PROSE_BEGINNER=./prompts/cloze_prose_beginner.json
+CLAWLINGUA_PROMPT_CLOZE_PROSE_INTERMEDIATE=./prompts/cloze_prose_intermediate.json
+CLAWLINGUA_PROMPT_CLOZE_PROSE_ADVANCED=./prompts/cloze_prose_advanced.json
+CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_BEGINNER=./prompts/cloze_transcript_beginner.json
+CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE=./prompts/cloze_transcript_intermediate.json
+CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_ADVANCED=./prompts/cloze_transcript_advanced.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
@@ -48,6 +60,7 @@ CLAWLINGUA_EXPORT_DIR=./outputs
 CLAWLINGUA_LOG_DIR=./logs
 CLAWLINGUA_LOG_LEVEL=INFO
 CLAWLINGUA_SAVE_INTERMEDIATE=true
+CLAWLINGUA_ALLOW_EMPTY_DECK=true
 CLAWLINGUA_DEFAULT_DECK_NAME=ClawLingua Default Deck
 
 CLAWLINGUA_TTS_PROVIDER=edge_tts
