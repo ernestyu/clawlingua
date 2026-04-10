@@ -29,7 +29,13 @@ class OpenAICompatibleClient:
     def config(self) -> AppConfig:
         return self._cfg
 
-    def chat(self, messages: list[dict[str, str]], *, temperature: float | None = None) -> str:
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float | None = None,
+        max_retries: int | None = None,
+    ) -> str:
         # 根据用途选择模型/温度/API key
         if self._for_translation and self._cfg.translate_llm_model:
             model = self._cfg.translate_llm_model
@@ -54,8 +60,9 @@ class OpenAICompatibleClient:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        retries = self._cfg.llm_max_retries if max_retries is None else max(1, int(max_retries))
         last_err: Exception | None = None
-        for attempt in range(1, self._cfg.llm_max_retries + 1):
+        for attempt in range(1, retries + 1):
             try:
                 with httpx.Client(timeout=self._cfg.llm_timeout_seconds) as client:
                     response = client.post(self._endpoint, json=payload, headers=headers)
@@ -84,7 +91,7 @@ class OpenAICompatibleClient:
                 return str(content)
             except Exception as exc:
                 last_err = exc
-                if attempt >= self._cfg.llm_max_retries:
+                if attempt >= retries:
                     break
                 delay = self._cfg.llm_retry_backoff_seconds * (2 ** (attempt - 1))
                 time.sleep(delay)

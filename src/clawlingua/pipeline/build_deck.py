@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from ..anki.deck_exporter import export_apkg
 from ..anki.media_manager import MediaManager
@@ -23,20 +25,24 @@ from ..llm.cloze_generator import (
     generate_cloze_candidates_for_chunk,
 )
 from ..llm.prompt_loader import load_prompt
-from ..llm.translation_generator import generate_translation
+from ..llm.translation_generator import (
+    TranslationBatchResult,
+    generate_translation_batch,
+)
 from ..models.card import CardRecord
 from ..models.document import DocumentRecord
 from ..runtime import create_run_context
 from ..tts.provider_registry import get_tts_provider
 from ..tts.voice_selector import UniformVoiceSelector
 from ..utils.hash import stable_hash
-from ..utils.jsonx import dump_json, dump_jsonl
+from ..utils.jsonx import dump_json, dump_jsonl, load_json
 from ..utils.time import utc_now_iso
 from .dedupe import dedupe_candidates
 from .validators import validate_text_candidate, validate_translation_text
 
 logger = logging.getLogger(__name__)
 TEXTBOOK_PROFILE_MAX_RECOMMENDED_CLOZE_MIN_CHARS = 120
+TRANSLATION_BATCH_MAX_RETRIES = 3
 
 
 @dataclass
@@ -118,16 +124,25 @@ def _save_intermediate(
     dump_jsonl(run_dir / "cards.final.jsonl", [card.model_dump(mode="json") for card in cards])
     if errors:
         dump_jsonl(run_dir / "errors.jsonl", errors)
-    dump_json(
-        run_dir / "run_summary.json",
+    summary_path = run_dir / "run_summary.json"
+    summary_payload: dict[str, Any] = {}
+    if summary_path.exists():
+        try:
+            existing = load_json(summary_path)
+            if isinstance(existing, dict):
+                summary_payload.update(existing)
+        except Exception:
+            logger.warning("failed to load existing run summary | path=%s", summary_path)
+    summary_payload.update(
         {
             "run_id": document.run_id,
             "cards": len(cards),
             "errors": len(errors),
             "content_profile": content_profile,
             "output_path": str(output_path),
-        },
+        }
     )
+    dump_json(summary_path, summary_payload)
 
 
 def _resolve_content_profile(cfg: AppConfig, options: BuildDeckOptions) -> str:
@@ -162,6 +177,25 @@ def _check_textbook_profile_settings(*, cfg: AppConfig, options: BuildDeckOption
             ],
             exit_code=ExitCode.ARGUMENT_ERROR,
         )
+
+
+def _translation_retry_delay_seconds(cfg: AppConfig, attempt: int) -> float:
+    base = float(cfg.llm_retry_backoff_seconds or 0.0)
+    if base <= 0:
+        return 0.0
+    return base * (2 ** max(0, attempt - 1))
+
+
+def _is_retryable_translation_batch_error(exc: ClawLinguaError) -> bool:
+    return exc.error_code in {
+        "LLM_REQUEST_FAILED",
+        "LLM_RESPONSE_PARSE_FAILED",
+        "LLM_RESPONSE_SHAPE_INVALID",
+    }
+
+
+def _is_retryable_translation_item_error(result: TranslationBatchResult) -> bool:
+    return bool(result.error and result.error.startswith("retryable:"))
 
 
 def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> DocumentRecord:
@@ -316,7 +350,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     # LLM chunk batch：一次可以处理多个 chunk。
     batch_size = max(1, int(cfg.llm_chunk_batch_size or 1))
 
-    def _iter_batches(items: list[ChunkRecord], size: int) -> list[list[ChunkRecord]]:
+    def _iter_batches(items: list[Any], size: int) -> list[list[Any]]:
         if size <= 1:
             return [[c] for c in items]
         return [items[i : i + size] for i in range(0, len(items), size)]
@@ -435,32 +469,9 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         deduped = deduped[: options.max_notes]
     logger.info("text generation complete | raw=%d valid=%d", len(raw_candidates), len(deduped))
 
-    for idx, item in enumerate(deduped, start=1):
-        try:
-            translation = generate_translation(
-                client=translate_client,
-                prompt=translate_prompt,
-                document=document,
-                chunk_text="",
-                text_original=str(item["original"]),
-                temperature=options.temperature,
-            )
-            ok, reason = validate_translation_text(translation)
-            if not ok:
-                raise build_error(
-                    error_code="TRANSLATION_VALIDATION_FAILED",
-                    cause="Translation 校验失败。",
-                    detail=reason,
-                    next_steps=["检查 translate prompt 输出"],
-                    exit_code=ExitCode.CARD_VALIDATION_ERROR,
-                )
-        except ClawLinguaError as exc:
-            if not options.continue_on_error:
-                _save_failure_snapshot(exc)
-                raise
-            errors.append({"stage": "translation", "index": idx, "error": exc.to_lines()})
-            continue
+    translate_batch_size = max(1, int(cfg.translate_batch_size or 1))
 
+    def _append_card_from_translation(*, idx: int, item: dict[str, Any], translation: str) -> None:
         card_id = f"card_{idx:06d}_{stable_hash(str(item['original']), length=6)}"
         target_phrases = list(item.get("target_phrases") or [])
         note = _build_note(
@@ -487,6 +498,200 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 target_phrases=[str(x) for x in target_phrases],
             )
         )
+
+    pending_translations: list[dict[str, Any]] = [
+        {"index": idx, "item": item}
+        for idx, item in enumerate(deduped, start=1)
+    ]
+
+    for batch in _iter_batches(pending_translations, translate_batch_size):
+        remaining = list(batch)
+        attempt = 0
+
+        while remaining:
+            attempt += 1
+            originals = [str(entry["item"].get("original", "")) for entry in remaining]
+            try:
+                batch_results = generate_translation_batch(
+                    client=translate_client,
+                    prompt=translate_prompt,
+                    document=document,
+                    chunk_text="",
+                    text_originals=originals,
+                    temperature=options.temperature,
+                )
+            except ClawLinguaError as exc:
+                if _is_retryable_translation_batch_error(exc) and attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                    errors.append(
+                        {
+                            "stage": "translation_batch_retry",
+                            "attempt": attempt,
+                            "remaining": len(remaining),
+                            "error": exc.to_lines(),
+                        }
+                    )
+                    delay = _translation_retry_delay_seconds(cfg, attempt)
+                    if delay > 0:
+                        time.sleep(delay)
+                    continue
+
+                if _is_retryable_translation_batch_error(exc):
+                    exhausted_msg = f"translation batch retries exhausted after {TRANSLATION_BATCH_MAX_RETRIES} attempts"
+                    exhausted_error = build_error(
+                        error_code="TRANSLATION_BATCH_RETRIES_EXHAUSTED",
+                        cause="Translation batch retries exhausted.",
+                        detail=exhausted_msg,
+                        next_steps=["Check translation LLM network/connectivity", "Inspect `errors.jsonl` for failed originals"],
+                        exit_code=ExitCode.LLM_REQUEST_ERROR,
+                    )
+                    if not options.continue_on_error:
+                        _save_failure_snapshot(exhausted_error)
+                        raise exhausted_error
+                    for entry in remaining:
+                        errors.append(
+                            {
+                                "stage": "translation_batch_retries_exhausted",
+                                "index": int(entry["index"]),
+                                "attempts": attempt,
+                                "error": exhausted_msg,
+                            }
+                        )
+                    break
+
+                if not options.continue_on_error:
+                    _save_failure_snapshot(exc)
+                    raise
+                errors.append(
+                    {
+                        "stage": "translation_batch_error",
+                        "attempt": attempt,
+                        "remaining": len(remaining),
+                        "error": exc.to_lines(),
+                    }
+                )
+                break
+
+            expected_count = len(remaining)
+            returned_count = len(batch_results)
+            if returned_count != expected_count:
+                errors.append(
+                    {
+                        "stage": "translation_batch_incomplete_response",
+                        "attempt": attempt,
+                        "expected": expected_count,
+                        "returned": returned_count,
+                    }
+                )
+
+            retry_remaining: list[dict[str, Any]] = []
+            matched_count = min(expected_count, returned_count)
+            for pos in range(matched_count):
+                entry = remaining[pos]
+                idx = int(entry["index"])
+                item = entry["item"]
+                result = batch_results[pos]
+
+                if result.ok:
+                    translation = str(result.translation or "").strip()
+                    ok, reason = validate_translation_text(translation)
+                    if not ok:
+                        if not options.continue_on_error:
+                            err = build_error(
+                                error_code="TRANSLATION_VALIDATION_FAILED",
+                                cause="Translation validation failed.",
+                                detail=f"index={idx}, reason={reason}",
+                                next_steps=["Check translation prompt output", "Lower temperature if output is unstable"],
+                                exit_code=ExitCode.CARD_VALIDATION_ERROR,
+                            )
+                            _save_failure_snapshot(err)
+                            raise err
+                        errors.append(
+                            {
+                                "stage": "translation_validation",
+                                "index": idx,
+                                "reason": reason,
+                                "original": str(item.get("original", "")),
+                            }
+                        )
+                        continue
+
+                    _append_card_from_translation(idx=idx, item=item, translation=translation)
+                    continue
+
+                if _is_retryable_translation_item_error(result):
+                    retry_remaining.append(entry)
+                    continue
+
+                item_error = result.error or "translation item failed"
+                if not options.continue_on_error:
+                    err = build_error(
+                        error_code="TRANSLATION_ITEM_FAILED",
+                        cause="Translation item failed.",
+                        detail=f"index={idx}, error={item_error}",
+                        next_steps=["Inspect translation prompt output and `errors.jsonl`"],
+                        exit_code=ExitCode.CARD_VALIDATION_ERROR,
+                    )
+                    _save_failure_snapshot(err)
+                    raise err
+                errors.append(
+                    {
+                        "stage": "translation_item_failed",
+                        "index": idx,
+                        "error": item_error,
+                        "original": str(item.get("original", "")),
+                    }
+                )
+
+            if returned_count < expected_count:
+                retry_remaining.extend(remaining[returned_count:])
+            elif returned_count > expected_count:
+                errors.append(
+                    {
+                        "stage": "translation_batch_extra_items",
+                        "attempt": attempt,
+                        "expected": expected_count,
+                        "returned": returned_count,
+                    }
+                )
+
+            if not retry_remaining:
+                break
+
+            if attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                errors.append(
+                    {
+                        "stage": "translation_batch_retry_remaining",
+                        "attempt": attempt,
+                        "remaining": len(retry_remaining),
+                    }
+                )
+                delay = _translation_retry_delay_seconds(cfg, attempt)
+                if delay > 0:
+                    time.sleep(delay)
+                remaining = retry_remaining
+                continue
+
+            exhausted_msg = f"translation batch retries exhausted after {TRANSLATION_BATCH_MAX_RETRIES} attempts"
+            exhausted_error = build_error(
+                error_code="TRANSLATION_BATCH_RETRIES_EXHAUSTED",
+                cause="Translation batch retries exhausted.",
+                detail=exhausted_msg,
+                next_steps=["Check translation LLM network/connectivity", "Inspect `errors.jsonl` for failed originals"],
+                exit_code=ExitCode.LLM_REQUEST_ERROR,
+            )
+            if not options.continue_on_error:
+                _save_failure_snapshot(exhausted_error)
+                raise exhausted_error
+            for entry in retry_remaining:
+                errors.append(
+                    {
+                        "stage": "translation_batch_retries_exhausted",
+                        "index": int(entry["index"]),
+                        "attempts": attempt,
+                        "error": exhausted_msg,
+                    }
+                )
+            break
 
     if not cards:
         err = build_error(

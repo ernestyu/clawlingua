@@ -77,6 +77,8 @@ class AppConfig(BaseModel):
     translate_llm_api_key: str | None = None
     translate_llm_model: str | None = None
     translate_llm_temperature: float | None = None
+    # Number of originals translated in one LLM request.
+    translate_batch_size: int = 4
 
     prompt_cloze: Path = DEFAULT_PROMPT_CLOZE
     prompt_cloze_textbook: Path = DEFAULT_PROMPT_CLOZE_TEXTBOOK
@@ -291,6 +293,9 @@ def load_config(
         ),
         "translate_llm_temperature": _env_value(
             merged.get("CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE"), None
+        ),
+        "translate_batch_size": _env_value(
+            merged.get("CLAWLINGUA_TRANSLATE_BATCH_SIZE"), 4
         ),
         "prompt_cloze": _env_value(merged.get("CLAWLINGUA_PROMPT_CLOZE"), DEFAULT_PROMPT_CLOZE),
         "prompt_cloze_textbook": _env_value(
