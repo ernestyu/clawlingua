@@ -1,5 +1,7 @@
 # ClawLingua
 
+**Languages:** English | [中文说明](README_zh.md)
+
 ClawLingua is a Python CLI that turns real-world text (podcast transcripts, articles, etc.)
 into Anki cloze decks (`.apkg`) for language learning.
 
