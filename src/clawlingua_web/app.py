@@ -13,6 +13,8 @@ This will start a Gradio app bound to 0.0.0.0 by default.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -34,6 +36,7 @@ from clawlingua.config import (
 from clawlingua.logger import setup_logging
 from clawlingua.models.prompt_schema import PromptSpec
 from clawlingua.pipeline.build_deck import BuildDeckOptions, run_build_deck
+from clawlingua.utils.time import make_run_id, utc_now_iso
 
 logger = logging.getLogger("clawlingua.web")
 
@@ -72,6 +75,29 @@ _ZH_I18N = {
     "Error": "\u9519\u8bef",
     "No input file provided.": "\u672a\u63d0\u4f9b\u8f93\u5165\u6587\u4ef6\u3002",
     "Run complete": "\u8fd0\u884c\u5b8c\u6210",
+    "Running": "\u8fd0\u884c\u4e2d",
+    "Completed": "\u5b8c\u6210",
+    "Failed": "\u5931\u8d25",
+    "Run failed": "\u8fd0\u884c\u5931\u8d25",
+    "Recent runs": "\u6700\u8fd1\u8fd0\u884c",
+    "### Recent runs": "### \u6700\u8fd1\u8fd0\u884c",
+    "Refresh runs": "\u5237\u65b0\u8fd0\u884c\u5217\u8868",
+    "Run ID": "Run ID",
+    "Started at": "\u5f00\u59cb\u65f6\u95f4",
+    "Finished at": "\u7ed3\u675f\u65f6\u95f4",
+    "Cards": "\u5361\u7247\u6570",
+    "Errors": "\u9519\u8bef\u6570",
+    "unknown": "\u672a\u77e5",
+    "running": "\u8fd0\u884c\u4e2d",
+    "completed": "\u5b8c\u6210",
+    "failed": "\u5931\u8d25",
+    "Run details": "\u8fd0\u884c\u8be6\u60c5",
+    "Title": "\u6807\u9898",
+    "Output path": "\u8f93\u51fa\u6587\u4ef6",
+    "Last error": "\u6700\u540e\u9519\u8bef",
+    "Output file not available yet.": "\u5c1a\u672a\u751f\u6210\u8f93\u51fa\u6587\u4ef6\u3002",
+    "No runs found.": "\u6682\u672a\u627e\u5230\u8fd0\u884c\u8bb0\u5f55\u3002",
+    "No run selected.": "\u672a\u9009\u62e9\u8fd0\u884c\u8bb0\u5f55\u3002",
     "### Config (.env editor)": "### \u914d\u7f6e\uff08.env \u7f16\u8f91\u5668\uff09",
     "LLM (primary)": "\u4e3b LLM",
     "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).": "OpenAI \u517c\u5bb9\u63a5\u53e3\u57fa\u7840\u5730\u5740\uff08/chat/completions \u4e4b\u524d\u7684\u90e8\u5206\uff0c\u5982 .../v1\uff09\u3002",
@@ -471,7 +497,7 @@ def _run_single_build_v2(
     prompt_lang: str | None = None,
 ) -> Dict[str, Any]:
     if uploaded_file is None:
-        return {"status": "error", "message": "No input file provided."}
+        return {"status": "error", "message": "No input file provided.", "run_id": None}
 
     cfg = _load_app_config()
     if prompt_lang:
@@ -481,10 +507,39 @@ def _run_single_build_v2(
     try:
         local_input = _materialize_uploaded_file(uploaded_file, tmp_dir)
     except Exception as exc:
-        return {"status": "error", "message": str(exc)}
+        return {"status": "error", "message": str(exc), "run_id": None}
+
+    run_id = make_run_id()
+    run_dir = cfg.resolve_path(cfg.output_dir) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    default_output_path = (cfg.resolve_path(cfg.export_dir) / run_id / "output.apkg").resolve()
+    summary_path = run_dir / "run_summary.json"
+
+    source_lang_value = source_lang or cfg.default_source_lang
+    target_lang_value = target_lang or cfg.default_target_lang
+    profile_value = content_profile or cfg.content_profile
+    title_value = (deck_title or "").strip() or local_input.stem
+    _write_run_summary(
+        summary_path,
+        {
+            "run_id": run_id,
+            "started_at": utc_now_iso(),
+            "finished_at": None,
+            "status": "running",
+            "title": title_value,
+            "source_lang": source_lang_value,
+            "target_lang": target_lang_value,
+            "content_profile": profile_value,
+            "cards": 0,
+            "errors": 0,
+            "output_path": str(default_output_path),
+            "env_snapshot": _build_env_snapshot(cfg),
+        },
+    )
 
     options = BuildDeckOptions(
         input_value=str(local_input),
+        run_id=run_id,
         source_lang=source_lang or None,
         target_lang=target_lang or None,
         content_profile=content_profile or None,
@@ -501,13 +556,42 @@ def _run_single_build_v2(
     try:
         result = run_build_deck(cfg, options)
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        return {"status": "error", "message": str(exc)}
+        previous = _read_run_summary(summary_path)
+        previous_errors = _as_int(previous.get("errors"), default=0) if previous else 0
+        _update_run_summary(
+            summary_path,
+            {
+                "finished_at": utc_now_iso(),
+                "status": "failed",
+                "errors": max(1, previous_errors),
+                "last_error": str(exc),
+            },
+        )
+        return {
+            "status": "error",
+            "run_id": run_id,
+            "run_dir": str(run_dir),
+            "message": str(exc),
+        }
+
+    output_path = str(result.output_path)
+    _update_run_summary(
+        summary_path,
+        {
+            "finished_at": utc_now_iso(),
+            "status": "completed",
+            "cards": result.cards_count,
+            "errors": result.errors_count,
+            "output_path": output_path,
+            "last_error": None,
+        },
+    )
 
     return {
         "status": "ok",
         "run_id": result.run_id,
         "run_dir": str(result.run_dir),
-        "output_path": str(result.output_path),
+        "output_path": output_path,
         "cards_count": result.cards_count,
         "errors_count": result.errors_count,
     }
@@ -852,6 +936,234 @@ def _default_template_for_lang(
     return _resolve_template_for_lang(entry, lang=lang)
 
 
+@dataclass
+class RunInfo:
+    run_id: str
+    started_at: str
+    finished_at: str | None
+    title: str
+    source_lang: str
+    target_lang: str
+    content_profile: str
+    status: str
+    cards: int
+    errors: int
+    output_path: str | None
+    last_error: str | None = None
+
+
+def _as_str(value: Any, *, default: str = "") -> str:
+    if isinstance(value, str):
+        text = value.strip()
+        return text if text else default
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text if text else default
+
+
+def _as_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    text = _as_str(value)
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _normalize_run_status(value: Any) -> str:
+    status = _as_str(value).lower()
+    if status in {"running", "completed", "failed", "unknown"}:
+        return status
+    return "unknown"
+
+
+def _status_text(lang: str, status: str) -> str:
+    normalized = _normalize_run_status(status)
+    return _tr(lang, normalized, normalized)
+
+
+def _build_env_snapshot(cfg: Any) -> dict[str, str]:
+    return {
+        "CLAWLINGUA_LLM_MODEL": _as_str(getattr(cfg, "llm_model", "")),
+        "CLAWLINGUA_TRANSLATE_LLM_MODEL": _as_str(getattr(cfg, "translate_llm_model", "")),
+        "CLAWLINGUA_PROMPT_LANG": _as_str(getattr(cfg, "prompt_lang", "")),
+    }
+
+
+def _write_run_summary(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("failed to write run summary | path=%s", path)
+
+
+def _read_run_summary(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def _update_run_summary(path: Path, updates: dict[str, Any]) -> None:
+    payload = _read_run_summary(path)
+    payload.update(updates)
+    _write_run_summary(path, payload)
+
+
+def _resolve_output_path(cfg: Any, run_dir: Path, output_path: Any) -> Path | None:
+    text = _as_str(output_path)
+    if not text:
+        return None
+    path = Path(text)
+    if path.is_absolute():
+        return path
+    workspace_candidate = (cfg.workspace_root / path).resolve()
+    run_dir_candidate = (run_dir / path).resolve()
+    if workspace_candidate.exists() or not run_dir_candidate.exists():
+        return workspace_candidate
+    return run_dir_candidate
+
+
+def _run_started_sort_key(value: str) -> float:
+    dt = _parse_iso_datetime(value)
+    return dt.timestamp() if dt is not None else 0.0
+
+
+def _run_info_from_dir(cfg: Any, run_dir: Path) -> RunInfo:
+    run_id = run_dir.name
+    summary = _read_run_summary(run_dir / "run_summary.json")
+    fallback_started = datetime.fromtimestamp(run_dir.stat().st_mtime, tz=timezone.utc).isoformat()
+
+    started_at = _as_str(summary.get("started_at"), default=fallback_started)
+    finished_at_text = _as_str(summary.get("finished_at"))
+    finished_at = finished_at_text or None
+    status = _normalize_run_status(summary.get("status"))
+    title = _as_str(summary.get("title"), default=run_id)
+    source_lang = _as_str(summary.get("source_lang"))
+    target_lang = _as_str(summary.get("target_lang"))
+    content_profile = _as_str(summary.get("content_profile"))
+    cards = max(0, _as_int(summary.get("cards"), default=0))
+    errors = max(0, _as_int(summary.get("errors"), default=0))
+    output_path_resolved = _resolve_output_path(cfg, run_dir, summary.get("output_path"))
+    output_path_text = str(output_path_resolved) if output_path_resolved is not None else None
+    output_exists = bool(output_path_resolved and output_path_resolved.exists())
+    last_error = _as_str(summary.get("last_error")) or None
+
+    if status == "completed" and not output_exists:
+        status = "failed"
+    if status == "running" and finished_at is not None:
+        status = "failed"
+
+    return RunInfo(
+        run_id=run_id,
+        started_at=started_at,
+        finished_at=finished_at,
+        title=title,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        content_profile=content_profile,
+        status=status,
+        cards=cards,
+        errors=errors,
+        output_path=output_path_text,
+        last_error=last_error,
+    )
+
+
+def _scan_runs(cfg: Any, *, limit: int = 30) -> list[RunInfo]:
+    runs_root = cfg.resolve_path(cfg.output_dir)
+    if not runs_root.exists() or not runs_root.is_dir():
+        return []
+
+    infos: list[RunInfo] = []
+    for entry in runs_root.iterdir():
+        if not entry.is_dir():
+            continue
+        infos.append(_run_info_from_dir(cfg, entry))
+
+    infos.sort(key=lambda item: _run_started_sort_key(item.started_at), reverse=True)
+    max_items = max(0, int(limit))
+    if max_items:
+        infos = infos[:max_items]
+    return infos
+
+
+def _run_choice_label(info: RunInfo, *, lang: str) -> str:
+    started = info.started_at or "-"
+    title = info.title or "-"
+    return f"{info.run_id} | {started} | {_status_text(lang, info.status)} | {title}"
+
+
+def _load_run_detail(run_id: str | None, cfg: Any, *, lang: str) -> tuple[str, str | None]:
+    selected = _as_str(run_id)
+    if not selected:
+        return _tr(lang, "No run selected.", "No run selected."), None
+
+    run_dir = cfg.resolve_path(cfg.output_dir) / selected
+    if not run_dir.exists() or not run_dir.is_dir():
+        return _tr(lang, "No run selected.", "No run selected."), None
+
+    info = _run_info_from_dir(cfg, run_dir)
+    download_path = None
+    if info.output_path:
+        candidate = Path(info.output_path)
+        if candidate.exists():
+            download_path = str(candidate)
+
+    lines = [
+        f"### {_tr(lang, 'Run details', '运行详情')}",
+        f"- {_tr(lang, 'Run ID', 'Run ID')}: `{info.run_id}`",
+        f"- {_tr(lang, 'Status', '状态')}: **{_status_text(lang, info.status)}**",
+        f"- {_tr(lang, 'Started at', '开始时间')}: `{info.started_at or '-'}`",
+        f"- {_tr(lang, 'Finished at', '结束时间')}: `{info.finished_at or '-'}`",
+        f"- {_tr(lang, 'Title', '标题')}: `{info.title or '-'}`",
+        f"- {_tr(lang, 'Source language', '源语言')}: `{info.source_lang or '-'}`",
+        f"- {_tr(lang, 'Target language', '目标语言')}: `{info.target_lang or '-'}`",
+        f"- {_tr(lang, 'Content profile', '内容类型')}: `{info.content_profile or '-'}`",
+        f"- {_tr(lang, 'Cards', '卡片数')}: **{info.cards}**",
+        f"- {_tr(lang, 'Errors', '错误数')}: **{info.errors}**",
+        f"- {_tr(lang, 'Output path', '输出文件')}: `{info.output_path or '-'}`",
+    ]
+    if info.last_error:
+        lines.append(f"- {_tr(lang, 'Last error', '最后错误')}: `{info.last_error}`")
+    if download_path is None:
+        lines.append(f"- {_tr(lang, 'Output file not available yet.', '尚未生成输出文件。')}")
+    return "\n".join(lines), download_path
+
+
+def _refresh_recent_runs(cfg: Any, *, lang: str, preferred_run_id: str | None = None) -> tuple[Any, str, str | None]:
+    runs = _scan_runs(cfg, limit=30)
+    if not runs:
+        detail = _tr(lang, "No runs found.", "No runs found.")
+        return gr.update(choices=[], value=None), detail, None
+
+    choices = [(_run_choice_label(run, lang=lang), run.run_id) for run in runs]
+    run_ids = {run.run_id for run in runs}
+    selected = preferred_run_id if preferred_run_id in run_ids else runs[0].run_id
+    detail, download_path = _load_run_detail(selected, cfg, lang=lang)
+    return gr.update(choices=choices, value=selected), detail, download_path
+
+
 def build_interface() -> gr.Blocks:
     """Construct the Gradio Blocks interface.
 
@@ -870,6 +1182,16 @@ def build_interface() -> gr.Blocks:
     initial_prompt_text, initial_prompt_status = _load_prompt_template(
         initial_prompt_key, prompt_files, lang=initial_ui_lang
     )
+    initial_runs = _scan_runs(cfg, limit=30)
+    if initial_runs:
+        initial_run_choices = [(_run_choice_label(run, lang=initial_ui_lang), run.run_id) for run in initial_runs]
+        initial_run_selected = initial_runs[0].run_id
+        initial_run_detail, initial_run_download = _load_run_detail(initial_run_selected, cfg, lang=initial_ui_lang)
+    else:
+        initial_run_choices = []
+        initial_run_selected = None
+        initial_run_detail = _tr(initial_ui_lang, "No runs found.", "No runs found.")
+        initial_run_download = None
 
     with gr.Blocks(title="ClawLingua Web UI") as demo:
         with gr.Row():
@@ -988,10 +1310,28 @@ def build_interface() -> gr.Blocks:
                     value=False,
                 )
 
-            run_button = gr.Button(_tr(initial_ui_lang, "Run", "开始运行"))
+            run_button = gr.Button(_tr(initial_ui_lang, "Run", "Run"))
 
-            run_status = gr.Markdown(label=_tr(initial_ui_lang, "Status", "状态"))
-            output_file = gr.File(label=_tr(initial_ui_lang, "Download .apkg", "下载 .apkg"), interactive=False)
+            run_status = gr.Markdown(label=_tr(initial_ui_lang, "Status", "Status"))
+            output_file = gr.File(label=_tr(initial_ui_lang, "Download .apkg", "Download .apkg"), interactive=False)
+            recent_runs_heading = gr.Markdown(_tr(initial_ui_lang, "### Recent runs", "### Recent runs"))
+            with gr.Row():
+                refresh_runs_button = gr.Button(_tr(initial_ui_lang, "Refresh runs", "Refresh runs"))
+                run_selector = gr.Dropdown(
+                    choices=initial_run_choices,
+                    value=initial_run_selected,
+                    label=_tr(initial_ui_lang, "Run ID", "Run ID"),
+                )
+            run_detail = gr.Markdown(value=initial_run_detail)
+            run_download_file = gr.File(
+                label=_tr(initial_ui_lang, "Download .apkg", "Download .apkg"),
+                interactive=False,
+                value=initial_run_download,
+            )
+
+            def _on_run_start(ui_lang_val: str) -> tuple[str, None]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                return _tr(lang, "Running", "Running"), None
 
             def _on_run(
                 file_obj,
@@ -1026,18 +1366,48 @@ def build_interface() -> gr.Blocks:
                     continue_on_error=bool(continue_on_error_val),
                     prompt_lang=lang,
                 )
+                cfg_now = _load_app_config()
+                run_id = _as_str(result.get("run_id")) or None
+                selector_update, detail_md, history_download = _refresh_recent_runs(
+                    cfg_now,
+                    lang=lang,
+                    preferred_run_id=run_id,
+                )
+
                 if result.get("status") != "ok":
                     msg = result.get("message") or "Unknown error"
-                    return f"❌ {_tr(lang, 'Error', '错误')}: {msg}", None
+                    run_line = f"- run_id: `{run_id}`\n" if run_id else ""
+                    status_md = f"{_tr(lang, 'Failed', 'Failed')}\n\n{run_line}- {_tr(lang, 'Error', 'Error')}: `{msg}`"
+                    return status_md, None, selector_update, detail_md, history_download
 
-                run_id = result["run_id"]
                 cards = result["cards_count"]
                 errors = result["errors_count"]
                 out_path = result["output_path"]
-                status_md = f"✅ {_tr(lang, 'Run complete', '运行完成')}\n\n- run_id: `{run_id}`\n- cards: **{cards}**\n- errors: **{errors}**\n- output: `{out_path}`"
-                return status_md, out_path
+                status_md = (
+                    f"{_tr(lang, 'Completed', 'Completed')}\n\n"
+                    f"- run_id: `{run_id}`\n"
+                    f"- cards: **{cards}**\n"
+                    f"- errors: **{errors}**\n"
+                    f"- output: `{out_path}`"
+                )
+                return status_md, out_path, selector_update, detail_md, history_download
+
+            def _on_refresh_runs(ui_lang_val: str, selected_run_id: str | None) -> tuple[Any, str, str | None]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                cfg_now = _load_app_config()
+                return _refresh_recent_runs(cfg_now, lang=lang, preferred_run_id=selected_run_id)
+
+            def _on_run_selected(run_id_val: str | None, ui_lang_val: str) -> tuple[str, str | None]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                cfg_now = _load_app_config()
+                return _load_run_detail(run_id_val, cfg_now, lang=lang)
 
             run_button.click(
+                _on_run_start,
+                inputs=[ui_lang],
+                outputs=[run_status, output_file],
+                queue=False,
+            ).then(
                 _on_run,
                 inputs=[
                     input_file,
@@ -1055,9 +1425,20 @@ def build_interface() -> gr.Blocks:
                     continue_on_error,
                     ui_lang,
                 ],
-                outputs=[run_status, output_file],
+                outputs=[run_status, output_file, run_selector, run_detail, run_download_file],
             )
 
+            refresh_runs_button.click(
+                _on_refresh_runs,
+                inputs=[ui_lang, run_selector],
+                outputs=[run_selector, run_detail, run_download_file],
+            )
+
+            run_selector.change(
+                _on_run_selected,
+                inputs=[run_selector, ui_lang],
+                outputs=[run_detail, run_download_file],
+            )
         with gr.Tab(_tr(initial_ui_lang, "Config", "配置")) as config_tab:
             config_heading = gr.Markdown(_tr(initial_ui_lang, "### Config (.env editor)", "### 配置（.env 编辑器）"))
 
@@ -1550,7 +1931,12 @@ def build_interface() -> gr.Blocks:
                 outputs=[prompt_editor, prompt_status],
             )
 
-        def _on_ui_lang_change(lang_value: str, prompt_lang_current: str, prompt_key_current: str) -> tuple[Any, ...]:
+        def _on_ui_lang_change(
+            lang_value: str,
+            prompt_lang_current: str,
+            prompt_key_current: str,
+            run_id_current: str | None,
+        ) -> tuple[Any, ...]:
             lang = _normalize_ui_lang(lang_value)
             _ = prompt_lang_current
             prompt_lang_next = lang
@@ -1560,72 +1946,85 @@ def build_interface() -> gr.Blocks:
                 prompt_files,
                 lang=lang,
             )
+            cfg_now = _load_app_config()
+            run_selector_next, run_detail_next, run_download_next = _refresh_recent_runs(
+                cfg_now,
+                lang=lang,
+                preferred_run_id=run_id_current,
+            )
+            selector_choices = run_selector_next.get("choices", [])
+            selector_value = run_selector_next.get("value")
             return (
-                gr.update(label=_tr(lang, "UI language", "界面语言")),
-                gr.update(value=_tr(lang, "# ClawLingua Web UI\nLocal deck builder for text learning.", "# ClawLingua Web UI\n本地化文本学习牌组生成器。")),
-                gr.update(label=_tr(lang, "Run", "运行")),
-                gr.update(label=_tr(lang, "Config", "配置")),
-                gr.update(label=_tr(lang, "Prompt", "提示词")),
-                gr.update(label=_tr(lang, "Input file", "输入文件")),
-                gr.update(label=_tr(lang, "Deck title (optional)", "牌组名称（可选）")),
-                gr.update(label=_tr(lang, "Source language", "源语言")),
-                gr.update(label=_tr(lang, "Target language", "目标语言")),
-                gr.update(label=_tr(lang, "Content profile", "内容类型")),
-                gr.update(label=_tr(lang, "Difficulty", "难度")),
-                gr.update(label=_tr(lang, "Max notes (0 = no limit)", "最大 note 数（0=不限）"), info=_tr(lang, "Maximum notes after dedupe. Empty/0 means no limit.", "去重后最多生成多少 note。空或 0 表示不限制。")),
-                gr.update(label=_tr(lang, "Input char limit", "输入字符上限"), info=_tr(lang, "Only process the first N chars of input. Empty means no limit.", "仅处理输入前 N 个字符。留空表示不限制。")),
-                gr.update(label=_tr(lang, "Advanced", "高级参数")),
-                gr.update(label=_tr(lang, "Cloze min chars (override env)", "最小挖空长度（覆盖 env）"), info=_tr(lang, "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.", "仅本次运行覆盖 CLAWLINGUA_CLOZE_MIN_CHARS。")),
-                gr.update(label=_tr(lang, "Chunk max chars (override env)", "chunk 最大字符（覆盖 env）"), info=_tr(lang, "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.", "仅本次运行覆盖 CLAWLINGUA_CHUNK_MAX_CHARS。")),
-                gr.update(label=_tr(lang, "Temperature (override env)", "温度参数（覆盖 env）"), info=_tr(lang, "0 is more deterministic; higher values are more random.", "0 更确定，高值更随机。")),
-                gr.update(label=_tr(lang, "Save intermediate files", "保存中间文件"), info=_tr(lang, "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.", "将中间 JSONL/media 写入 OUTPUT_DIR/<run_id>。")),
-                gr.update(label=_tr(lang, "Continue on error", "遇错继续"), info=_tr(lang, "If enabled, continue processing after per-item failures.", "勾选后遇到局部错误仍继续处理后续内容。")),
-                gr.update(value=_tr(lang, "Run", "开始运行")),
-                gr.update(label=_tr(lang, "Status", "状态")),
-                gr.update(label=_tr(lang, "Download .apkg", "下载 .apkg")),
-                gr.update(value=_tr(lang, "### Config (.env editor)", "### 配置（.env 编辑器）")),
-                gr.update(label=_tr(lang, "LLM (primary)", "主 LLM")),
-                gr.update(info=_tr(lang, "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).", "OpenAI 兼容接口基础地址（/chat/completions 之前的部分，如 .../v1）。")),
-                gr.update(info=_tr(lang, "API key for primary LLM, when required.", "主 LLM 的 API Key（如需要）。")),
-                gr.update(info=_tr(lang, "Model name for primary LLM.", "主 LLM 的模型名。")),
-                gr.update(info=_tr(lang, "Request timeout in seconds.", "请求超时（秒）。")),
-                gr.update(info=_tr(lang, "Default temperature for primary LLM.", "主 LLM 默认温度参数。")),
-                gr.update(value=_tr(lang, "List models", "列出模型")),
-                gr.update(value=_tr(lang, "Test", "测试连通")),
-                gr.update(label=_tr(lang, "Primary LLM status", "主 LLM 状态")),
-                gr.update(label=_tr(lang, "Translation LLM", "翻译 LLM")),
-                gr.update(info=_tr(lang, "Optional base URL for translation model.", "翻译模型可选基础地址。")),
-                gr.update(info=_tr(lang, "API key for translation LLM, when required.", "翻译 LLM 的 API Key（如需要）。")),
-                gr.update(info=_tr(lang, "Model name for translation LLM.", "翻译 LLM 的模型名。")),
-                gr.update(info=_tr(lang, "Default temperature for translation LLM.", "翻译 LLM 默认温度参数。")),
-                gr.update(value=_tr(lang, "List models (translate)", "列出翻译模型")),
-                gr.update(value=_tr(lang, "Test (translate)", "测试翻译连通")),
-                gr.update(label=_tr(lang, "Translation LLM status", "翻译 LLM 状态")),
-                gr.update(label=_tr(lang, "Chunk & Cloze", "切块与挖空")),
-                gr.update(info=_tr(lang, "Default max chars per chunk.", "默认每个 chunk 的最大字符数。")),
-                gr.update(info=_tr(lang, "Minimum chars required for cloze text.", "挖空文本最小字符数。")),
-                gr.update(info=_tr(lang, "Max cards per chunk after dedupe. Empty/0 means unlimited.", "去重后每个 chunk 最多卡片数。空或 0 表示不限制。")),
-                gr.update(label="CLAWLINGUA_PROMPT_LANG", info=_tr(lang, "Prompt language for multi-lingual prompts (en/zh).", "多语言 prompt 选择（en/zh）。"), value=prompt_lang_next),
-                gr.update(label=_tr(lang, "Paths & defaults", "路径与默认值")),
-                gr.update(info=_tr(lang, "Directory for intermediate run data (JSONL, media).", "中间运行数据目录（JSONL、media）。")),
-                gr.update(info=_tr(lang, "Default directory for exported decks.", "默认牌组导出目录。")),
-                gr.update(info=_tr(lang, "Directory for log files.", "日志目录。")),
-                gr.update(value=_tr(lang, "Load defaults from ENV_EXAMPLE.md", "从 ENV_EXAMPLE.md 载入默认值")),
-                gr.update(value=_tr(lang, "Save config", "保存配置")),
-                gr.update(label=_tr(lang, "TTS voices (Edge)", "语音配置（Edge）")),
-                gr.update(value=_tr(lang, "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)", "具体的音色可以参考[Edge TTS Voice Samples](https://tts.travisvn.com/)")),
-                gr.update(info=_tr(lang, "Configure 4 voice slots used for random selection.", "配置 4 个语音槽位，用于随机选择。")),
-                gr.update(value=_tr(lang, "### Prompt template editor", "### Prompt 模板编辑器")),
-                gr.update(label=_tr(lang, "Prompt file", "Prompt 文件"), choices=_prompt_choices(lang), value=prompt_key_next),
-                gr.update(label=_tr(lang, "Prompt template", "Prompt 模板"), value=prompt_template_next),
-                gr.update(value=_tr(lang, "Save", "保存")),
-                gr.update(value=_tr(lang, "Load default", "载入默认")),
-                gr.update(label=_tr(lang, "Prompt status", "Prompt 状态"), value=prompt_status_next),
+                gr.update(label=_tr(lang, "UI language", "UI language")),
+                gr.update(value=_tr(lang, "# ClawLingua Web UI\nLocal deck builder for text learning.", "# ClawLingua Web UI\nLocal deck builder for text learning.")),
+                gr.update(label=_tr(lang, "Run", "Run")),
+                gr.update(label=_tr(lang, "Config", "Config")),
+                gr.update(label=_tr(lang, "Prompt", "Prompt")),
+                gr.update(label=_tr(lang, "Input file", "Input file")),
+                gr.update(label=_tr(lang, "Deck title (optional)", "Deck title (optional)")),
+                gr.update(label=_tr(lang, "Source language", "Source language")),
+                gr.update(label=_tr(lang, "Target language", "Target language")),
+                gr.update(label=_tr(lang, "Content profile", "Content profile")),
+                gr.update(label=_tr(lang, "Difficulty", "Difficulty")),
+                gr.update(label=_tr(lang, "Max notes (0 = no limit)", "Max notes (0 = no limit)"), info=_tr(lang, "Maximum notes after dedupe. Empty/0 means no limit.", "Maximum notes after dedupe. Empty/0 means no limit.")),
+                gr.update(label=_tr(lang, "Input char limit", "Input char limit"), info=_tr(lang, "Only process the first N chars of input. Empty means no limit.", "Only process the first N chars of input. Empty means no limit.")),
+                gr.update(label=_tr(lang, "Advanced", "Advanced")),
+                gr.update(label=_tr(lang, "Cloze min chars (override env)", "Cloze min chars (override env)"), info=_tr(lang, "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.", "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.")),
+                gr.update(label=_tr(lang, "Chunk max chars (override env)", "Chunk max chars (override env)"), info=_tr(lang, "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.", "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.")),
+                gr.update(label=_tr(lang, "Temperature (override env)", "Temperature (override env)"), info=_tr(lang, "0 is more deterministic; higher values are more random.", "0 is more deterministic; higher values are more random.")),
+                gr.update(label=_tr(lang, "Save intermediate files", "Save intermediate files"), info=_tr(lang, "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.", "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.")),
+                gr.update(label=_tr(lang, "Continue on error", "Continue on error"), info=_tr(lang, "If enabled, continue processing after per-item failures.", "If enabled, continue processing after per-item failures.")),
+                gr.update(value=_tr(lang, "Run", "Run")),
+                gr.update(label=_tr(lang, "Status", "Status")),
+                gr.update(label=_tr(lang, "Download .apkg", "Download .apkg")),
+                gr.update(value=_tr(lang, "### Recent runs", "### Recent runs")),
+                gr.update(value=_tr(lang, "Refresh runs", "Refresh runs")),
+                gr.update(label=_tr(lang, "Run ID", "Run ID"), choices=selector_choices, value=selector_value),
+                gr.update(value=run_detail_next),
+                gr.update(label=_tr(lang, "Download .apkg", "Download .apkg"), value=run_download_next),
+                gr.update(value=_tr(lang, "### Config (.env editor)", "### Config (.env editor)")),
+                gr.update(label=_tr(lang, "LLM (primary)", "LLM (primary)")),
+                gr.update(info=_tr(lang, "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).", "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).")),
+                gr.update(info=_tr(lang, "API key for primary LLM, when required.", "API key for primary LLM, when required.")),
+                gr.update(info=_tr(lang, "Model name for primary LLM.", "Model name for primary LLM.")),
+                gr.update(info=_tr(lang, "Request timeout in seconds.", "Request timeout in seconds.")),
+                gr.update(info=_tr(lang, "Default temperature for primary LLM.", "Default temperature for primary LLM.")),
+                gr.update(value=_tr(lang, "List models", "List models")),
+                gr.update(value=_tr(lang, "Test", "Test")),
+                gr.update(label=_tr(lang, "Primary LLM status", "Primary LLM status")),
+                gr.update(label=_tr(lang, "Translation LLM", "Translation LLM")),
+                gr.update(info=_tr(lang, "Optional base URL for translation model.", "Optional base URL for translation model.")),
+                gr.update(info=_tr(lang, "API key for translation LLM, when required.", "API key for translation LLM, when required.")),
+                gr.update(info=_tr(lang, "Model name for translation LLM.", "Model name for translation LLM.")),
+                gr.update(info=_tr(lang, "Default temperature for translation LLM.", "Default temperature for translation LLM.")),
+                gr.update(value=_tr(lang, "List models (translate)", "List models (translate)")),
+                gr.update(value=_tr(lang, "Test (translate)", "Test (translate)")),
+                gr.update(label=_tr(lang, "Translation LLM status", "Translation LLM status")),
+                gr.update(label=_tr(lang, "Chunk & Cloze", "Chunk & Cloze")),
+                gr.update(info=_tr(lang, "Default max chars per chunk.", "Default max chars per chunk.")),
+                gr.update(info=_tr(lang, "Minimum chars required for cloze text.", "Minimum chars required for cloze text.")),
+                gr.update(info=_tr(lang, "Max cards per chunk after dedupe. Empty/0 means unlimited.", "Max cards per chunk after dedupe. Empty/0 means unlimited.")),
+                gr.update(label="CLAWLINGUA_PROMPT_LANG", info=_tr(lang, "Prompt language for multi-lingual prompts (en/zh).", "Prompt language for multi-lingual prompts (en/zh)."), value=prompt_lang_next),
+                gr.update(label=_tr(lang, "Paths & defaults", "Paths & defaults")),
+                gr.update(info=_tr(lang, "Directory for intermediate run data (JSONL, media).", "Directory for intermediate run data (JSONL, media).")),
+                gr.update(info=_tr(lang, "Default directory for exported decks.", "Default directory for exported decks.")),
+                gr.update(info=_tr(lang, "Directory for log files.", "Directory for log files.")),
+                gr.update(value=_tr(lang, "Load defaults from ENV_EXAMPLE.md", "Load defaults from ENV_EXAMPLE.md")),
+                gr.update(value=_tr(lang, "Save config", "Save config")),
+                gr.update(label=_tr(lang, "TTS voices (Edge)", "TTS voices (Edge)")),
+                gr.update(value=_tr(lang, "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)", "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)")),
+                gr.update(info=_tr(lang, "Configure 4 voice slots used for random selection.", "Configure 4 voice slots used for random selection.")),
+                gr.update(value=_tr(lang, "### Prompt template editor", "### Prompt template editor")),
+                gr.update(label=_tr(lang, "Prompt file", "Prompt file"), choices=_prompt_choices(lang), value=prompt_key_next),
+                gr.update(label=_tr(lang, "Prompt template", "Prompt template"), value=prompt_template_next),
+                gr.update(value=_tr(lang, "Save", "Save")),
+                gr.update(value=_tr(lang, "Load default", "Load default")),
+                gr.update(label=_tr(lang, "Prompt status", "Prompt status"), value=prompt_status_next),
             )
 
         ui_lang.change(
             _on_ui_lang_change,
-            inputs=[ui_lang, prompt_lang_env, prompt_file_selector],
+            inputs=[ui_lang, prompt_lang_env, prompt_file_selector, run_selector],
             outputs=[
                 ui_lang,
                 title_md,
@@ -1649,6 +2048,11 @@ def build_interface() -> gr.Blocks:
                 run_button,
                 run_status,
                 output_file,
+                recent_runs_heading,
+                refresh_runs_button,
+                run_selector,
+                run_detail,
+                run_download_file,
                 config_heading,
                 llm_accordion,
                 llm_base_url,
@@ -1689,6 +2093,7 @@ def build_interface() -> gr.Blocks:
                 prompt_status,
             ],
         )
+
 
     return demo
 

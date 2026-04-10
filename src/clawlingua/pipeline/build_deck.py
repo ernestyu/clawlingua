@@ -42,6 +42,7 @@ TEXTBOOK_PROFILE_MAX_RECOMMENDED_CLOZE_MIN_CHARS = 120
 @dataclass
 class BuildDeckOptions:
     input_value: str
+    run_id: str | None = None
     source_lang: str | None = None
     target_lang: str | None = None
     input_char_limit: int | None = None
@@ -238,7 +239,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     content_profile = _resolve_content_profile(cfg, options)
     _check_textbook_profile_settings(cfg=cfg, options=options, content_profile=content_profile)
 
-    run_ctx = create_run_context(cfg, name="build_deck")
+    run_ctx = create_run_context(cfg, name="build_deck", run_id=options.run_id)
     template = load_anki_template(cfg.resolve_path(cfg.anki_template))
     cloze_prompt_path = cfg.prompt_cloze_textbook if content_profile == "textbook_examples" else cfg.prompt_cloze
     cloze_prompt = load_prompt(cfg.resolve_path(cloze_prompt_path), prompt_lang=cfg.prompt_lang)

@@ -17,7 +17,7 @@ class RunContext:
     media_dir: Path
 
 
-def create_run_context(cfg: AppConfig, *, name: str = "build_deck") -> RunContext:
+def create_run_context(cfg: AppConfig, *, name: str = "build_deck", run_id: str | None = None) -> RunContext:
     """Create a run context.
 
     - ``run_dir`` is always under ``output_dir`` (typically ./runs/<run_id>) and
@@ -27,8 +27,7 @@ def create_run_context(cfg: AppConfig, *, name: str = "build_deck") -> RunContex
       ``--output`` is provided.
     """
 
-    run_id = make_run_id(name)
-    run_dir = ensure_dir(cfg.resolve_path(cfg.output_dir) / run_id)
+    resolved_run_id = (run_id or "").strip() or make_run_id(name)
+    run_dir = ensure_dir(cfg.resolve_path(cfg.output_dir) / resolved_run_id)
     media_dir = ensure_dir(run_dir / "media")
-    return RunContext(run_id=run_id, run_dir=run_dir, media_dir=media_dir)
-
+    return RunContext(run_id=resolved_run_id, run_dir=run_dir, media_dir=media_dir)
