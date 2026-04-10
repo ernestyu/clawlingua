@@ -8,13 +8,14 @@ Usage (development):
 
     python -m clawlingua_web.app
 
-This will start a Gradio app bound to 127.0.0.1.
+This will start a Gradio app bound to 0.0.0.0 by default.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import shutil
@@ -130,6 +131,9 @@ _ZH_I18N = {
     "Prompt template saved.": "Prompt \u6a21\u677f\u5df2\u4fdd\u5b58\u3002",
     "Prompt template restored from default.": "\u5df2\u4ece\u9ed8\u8ba4\u6a21\u677f\u8fd8\u539f Prompt\u3002",
     "Backup created": "\u5df2\u521b\u5efa\u5907\u4efd",
+    "TTS voices (Edge)": "\u8bed\u97f3\u914d\u7f6e\uff08Edge\uff09",
+    "Configure 4 voice slots used for random selection.": "\u914d\u7f6e 4 \u4e2a\u8bed\u97f3\u69fd\u4f4d\uff0c\u7528\u4e8e\u968f\u673a\u9009\u62e9\u3002",
+    "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)": "\u5177\u4f53\u7684\u97f3\u8272\u53ef\u4ee5\u53c2\u8003[Edge TTS Voice Samples](https://tts.travisvn.com/)",
 }
 
 
@@ -1179,6 +1183,36 @@ def build_interface() -> gr.Blocks:
                     value=cfg_view.get("CLAWLINGUA_DEFAULT_DECK_NAME", cfg.default_deck_name),
                 )
 
+            with gr.Accordion(_tr(initial_ui_lang, "TTS voices (Edge)", "语音配置（Edge）"), open=False) as tts_accordion:
+                tts_hint_md = gr.Markdown(
+                    _tr(
+                        initial_ui_lang,
+                        "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)",
+                        "具体的音色可以参考[Edge TTS Voice Samples](https://tts.travisvn.com/)",
+                    )
+                )
+                tts_voice1_env = gr.Textbox(
+                    label="CLAWLINGUA_TTS_EDGE_VOICE1",
+                    value=cfg_view.get("CLAWLINGUA_TTS_EDGE_VOICE1", ""),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Configure 4 voice slots used for random selection.",
+                        "配置 4 个语音槽位，用于随机选择。",
+                    ),
+                )
+                tts_voice2_env = gr.Textbox(
+                    label="CLAWLINGUA_TTS_EDGE_VOICE2",
+                    value=cfg_view.get("CLAWLINGUA_TTS_EDGE_VOICE2", ""),
+                )
+                tts_voice3_env = gr.Textbox(
+                    label="CLAWLINGUA_TTS_EDGE_VOICE3",
+                    value=cfg_view.get("CLAWLINGUA_TTS_EDGE_VOICE3", ""),
+                )
+                tts_voice4_env = gr.Textbox(
+                    label="CLAWLINGUA_TTS_EDGE_VOICE4",
+                    value=cfg_view.get("CLAWLINGUA_TTS_EDGE_VOICE4", ""),
+                )
+
             with gr.Row():
                 load_defaults_btn = gr.Button(_tr(initial_ui_lang, "Load defaults from ENV_EXAMPLE.md", "从 ENV_EXAMPLE.md 载入默认值"))
                 save_config_btn = gr.Button(_tr(initial_ui_lang, "Save config", "保存配置"))
@@ -1242,6 +1276,10 @@ def build_interface() -> gr.Blocks:
                 export_dir_val: str,
                 log_dir_val: str,
                 default_deck_name_val: str,
+                tts_voice1_val: str,
+                tts_voice2_val: str,
+                tts_voice3_val: str,
+                tts_voice4_val: str,
                 ui_lang_val: str,
             ) -> tuple[str, ...]:
                 defaults = _read_env_example()
@@ -1271,6 +1309,10 @@ def build_interface() -> gr.Blocks:
                     dv("CLAWLINGUA_EXPORT_DIR", export_dir_val),
                     dv("CLAWLINGUA_LOG_DIR", log_dir_val),
                     dv("CLAWLINGUA_DEFAULT_DECK_NAME", default_deck_name_val),
+                    dv("CLAWLINGUA_TTS_EDGE_VOICE1", tts_voice1_val),
+                    dv("CLAWLINGUA_TTS_EDGE_VOICE2", tts_voice2_val),
+                    dv("CLAWLINGUA_TTS_EDGE_VOICE3", tts_voice3_val),
+                    dv("CLAWLINGUA_TTS_EDGE_VOICE4", tts_voice4_val),
                     f"✅ {_tr(lang, 'Loaded defaults from ENV_EXAMPLE.md (not yet saved).', '已载入 ENV_EXAMPLE.md 默认值（尚未保存）。')}",
                 )
 
@@ -1297,6 +1339,10 @@ def build_interface() -> gr.Blocks:
                     export_dir_env,
                     log_dir_env,
                     default_deck_name_env,
+                    tts_voice1_env,
+                    tts_voice2_env,
+                    tts_voice3_env,
+                    tts_voice4_env,
                     ui_lang,
                 ],
                 outputs=[
@@ -1320,6 +1366,10 @@ def build_interface() -> gr.Blocks:
                     export_dir_env,
                     log_dir_env,
                     default_deck_name_env,
+                    tts_voice1_env,
+                    tts_voice2_env,
+                    tts_voice3_env,
+                    tts_voice4_env,
                     save_config_status,
                 ],
             )
@@ -1345,6 +1395,10 @@ def build_interface() -> gr.Blocks:
                 export_dir_val,
                 log_dir_val,
                 default_deck_name_val,
+                tts_voice1_val,
+                tts_voice2_val,
+                tts_voice3_val,
+                tts_voice4_val,
                 ui_lang_val,
             ):
                 updated = {
@@ -1368,6 +1422,10 @@ def build_interface() -> gr.Blocks:
                     "CLAWLINGUA_EXPORT_DIR": export_dir_val or "",
                     "CLAWLINGUA_LOG_DIR": log_dir_val or "",
                     "CLAWLINGUA_DEFAULT_DECK_NAME": default_deck_name_val or "",
+                    "CLAWLINGUA_TTS_EDGE_VOICE1": tts_voice1_val or "",
+                    "CLAWLINGUA_TTS_EDGE_VOICE2": tts_voice2_val or "",
+                    "CLAWLINGUA_TTS_EDGE_VOICE3": tts_voice3_val or "",
+                    "CLAWLINGUA_TTS_EDGE_VOICE4": tts_voice4_val or "",
                 }
                 msg = _save_env_v2(updated, lang=_normalize_ui_lang(ui_lang_val))
                 return msg
@@ -1395,6 +1453,10 @@ def build_interface() -> gr.Blocks:
                     export_dir_env,
                     log_dir_env,
                     default_deck_name_env,
+                    tts_voice1_env,
+                    tts_voice2_env,
+                    tts_voice3_env,
+                    tts_voice4_env,
                     ui_lang,
                 ],
                 outputs=[save_config_status],
@@ -1550,6 +1612,9 @@ def build_interface() -> gr.Blocks:
                 gr.update(info=_tr(lang, "Directory for log files.", "日志目录。")),
                 gr.update(value=_tr(lang, "Load defaults from ENV_EXAMPLE.md", "从 ENV_EXAMPLE.md 载入默认值")),
                 gr.update(value=_tr(lang, "Save config", "保存配置")),
+                gr.update(label=_tr(lang, "TTS voices (Edge)", "语音配置（Edge）")),
+                gr.update(value=_tr(lang, "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)", "具体的音色可以参考[Edge TTS Voice Samples](https://tts.travisvn.com/)")),
+                gr.update(info=_tr(lang, "Configure 4 voice slots used for random selection.", "配置 4 个语音槽位，用于随机选择。")),
                 gr.update(value=_tr(lang, "### Prompt template editor", "### Prompt 模板编辑器")),
                 gr.update(label=_tr(lang, "Prompt file", "Prompt 文件"), choices=_prompt_choices(lang), value=prompt_key_next),
                 gr.update(label=_tr(lang, "Prompt template", "Prompt 模板"), value=prompt_template_next),
@@ -1613,6 +1678,9 @@ def build_interface() -> gr.Blocks:
                 log_dir_env,
                 load_defaults_btn,
                 save_config_btn,
+                tts_accordion,
+                tts_hint_md,
+                tts_voice1_env,
                 prompt_heading,
                 prompt_file_selector,
                 prompt_editor,
@@ -1625,17 +1693,23 @@ def build_interface() -> gr.Blocks:
     return demo
 
 
-def launch(*, server_port: int = 7860) -> None:
-    """Launch the Gradio app bound to 127.0.0.1.
+def launch(*, server_port: int | None = None, server_host: str | None = None) -> None:
+    """Launch the Gradio app.
 
     Logging is configured via the shared `setup_logging` function when
     loading the application config. Web-specific events are logged under
     the `clawlingua.web` logger.
     """
 
-    logger.info("starting ClawLingua web UI | port=%d", server_port)
+    port_value = server_port
+    if port_value is None:
+        env_port = _to_optional_int(os.getenv("CLAWLINGUA_WEB_PORT"), min_value=1)
+        port_value = env_port or 7860
+    host_value = (server_host or os.getenv("CLAWLINGUA_WEB_HOST") or "0.0.0.0").strip() or "0.0.0.0"
+
+    logger.info("starting ClawLingua web UI | host=%s port=%d", host_value, port_value)
     demo = build_interface()
-    demo.queue().launch(server_name="127.0.0.1", server_port=server_port)
+    demo.queue().launch(server_name=host_value, server_port=port_value)
     logger.info("ClawLingua web UI stopped")
 
 

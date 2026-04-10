@@ -1,0 +1,13 @@
+services:
+  clawlingua-web:
+    build: .
+    container_name: clawlingua-web
+    env_file:
+      - .env
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./runs:/app/runs
+      - ./outputs:/app/outputs
+      - ./logs:/app/logs
+    restart: unless-stopped
