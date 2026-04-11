@@ -20,4 +20,5 @@ class CardRecord(BaseModel):
     audio_file: str | None = None
     audio_field: str | None = None
     target_phrases: list[str] = Field(default_factory=list)
-
+    phrase_types: list[str] = Field(default_factory=list)
+    expression_transfer: str = ""

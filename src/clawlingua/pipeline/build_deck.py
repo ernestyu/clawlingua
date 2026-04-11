@@ -39,6 +39,7 @@ from ..utils.jsonx import dump_json, dump_jsonl, load_json
 from ..utils.time import utc_now_iso
 from .dedupe import dedupe_candidates
 from .ranking import rank_candidates
+from .taxonomy import normalize_phrase_types
 from .validators import classify_rejection_reason, validate_text_candidate, validate_translation_text
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,8 @@ def _build_note(
     title: str | None,
     source_url: str | None,
     target_phrases: list[str],
+    phrase_types: list[str],
+    expression_transfer: str | None,
     chunk_id: str,
     source_lang: str,
     target_lang: str,
@@ -95,6 +98,10 @@ def _build_note(
         f"source_lang: {source_lang}",
         f"target_lang: {target_lang}",
     ]
+    if phrase_types:
+        lines.append(f"phrase_types: {' | '.join(phrase_types)}")
+    if expression_transfer:
+        lines.append(f"transfer: {expression_transfer}")
     return "\n".join(lines)
 
 
@@ -250,6 +257,7 @@ def _build_pipeline_metrics(
     chunks: list[Any],
     raw_candidates: list[dict[str, Any]],
     valid_candidates: list[dict[str, Any]],
+    ranked_candidates: list[dict[str, Any]],
     deduped_candidates: list[dict[str, Any]],
     errors: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -269,14 +277,49 @@ def _build_pipeline_metrics(
         reason = str(err.get("reason", ""))
         category = classify_rejection_reason(reason)
         reason_hist[category] = reason_hist.get(category, 0) + 1
+    top_rejection_categories = [
+        {"category": category, "count": count}
+        for category, count in sorted(reason_hist.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    ]
 
-    phrase_type_hist: dict[str, int] = {}
+    model_taxonomy_hist: dict[str, int] = {}
+    for item in raw_candidates:
+        for ptype in normalize_phrase_types(item.get("phrase_types"), max_items=2):
+            model_taxonomy_hist[ptype] = model_taxonomy_hist.get(ptype, 0) + 1
+
+    candidate_phrase_type_hist: dict[str, int] = {}
+    candidate_phrase_type_score_sum: dict[str, float] = {}
+    candidate_phrase_type_score_count: dict[str, int] = {}
+    for item in ranked_candidates:
+        score = float(item.get("learning_value_score", 0.0))
+        for ptype in item.get("phrase_types", []) or []:
+            key = str(ptype).strip()
+            if not key:
+                continue
+            candidate_phrase_type_hist[key] = candidate_phrase_type_hist.get(key, 0) + 1
+            candidate_phrase_type_score_sum[key] = candidate_phrase_type_score_sum.get(key, 0.0) + score
+            candidate_phrase_type_score_count[key] = candidate_phrase_type_score_count.get(key, 0) + 1
+
+    selected_phrase_type_hist: dict[str, int] = {}
     for item in deduped_candidates:
         for ptype in item.get("phrase_types", []) or []:
             key = str(ptype).strip()
             if not key:
                 continue
-            phrase_type_hist[key] = phrase_type_hist.get(key, 0) + 1
+            selected_phrase_type_hist[key] = selected_phrase_type_hist.get(key, 0) + 1
+
+    phrase_type_avg_score = {
+        key: round(candidate_phrase_type_score_sum[key] / candidate_phrase_type_score_count[key], 4)
+        for key in candidate_phrase_type_score_sum
+        if candidate_phrase_type_score_count.get(key, 0) > 0
+    }
+    transfer_non_empty_count = len(
+        [
+            item
+            for item in deduped_candidates
+            if str(item.get("expression_transfer", "")).strip()
+        ]
+    )
 
     avg_raw_per_chunk = (len(raw_candidates) / len(chunks)) if chunks else 0.0
     pass_rate = (len(valid_candidates) / len(raw_candidates)) if raw_candidates else 0.0
@@ -290,7 +333,19 @@ def _build_pipeline_metrics(
         "empty_chunk_count": empty_chunk_count,
         "empty_chunk_ratio": round((empty_chunk_count / len(chunks)) if chunks else 0.0, 4),
         "rejection_reason_histogram": reason_hist,
-        "phrase_type_histogram": phrase_type_hist,
+        "rejection_reason_top": top_rejection_categories,
+        # Backward-compatible key: selected/final histogram.
+        "phrase_type_histogram": selected_phrase_type_hist,
+        "taxonomy_model_histogram": model_taxonomy_hist,
+        "taxonomy_candidate_histogram": candidate_phrase_type_hist,
+        "taxonomy_selected_histogram": selected_phrase_type_hist,
+        "taxonomy_average_score": phrase_type_avg_score,
+        "expression_transfer_non_empty_count": transfer_non_empty_count,
+        "expression_transfer_non_empty_ratio": round(
+            transfer_non_empty_count / len(deduped_candidates), 4
+        )
+        if deduped_candidates
+        else 0.0,
     }
 
 
@@ -436,6 +491,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     raw_candidates: list[dict] = []
     valid_candidates: list[dict] = []
     deduped: list[dict] = []
+    ranked_candidates: list[dict[str, Any]] = []
     cards: list[CardRecord] = []
     chunks: list = []
 
@@ -661,6 +717,8 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             title=document.title,
             source_url=document.source_url,
             target_phrases=[str(x) for x in target_phrases],
+            phrase_types=[str(x) for x in (item.get("phrase_types") or []) if str(x).strip()],
+            expression_transfer=str(item.get("expression_transfer", "")).strip() or None,
             chunk_id=str(item.get("chunk_id", "")),
             source_lang=document.source_lang,
             target_lang=document.target_lang,
@@ -679,6 +737,8 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 translation=translation,
                 note=note,
                 target_phrases=[str(x) for x in target_phrases],
+                phrase_types=[str(x) for x in (item.get("phrase_types") or []) if str(x).strip()],
+                expression_transfer=str(item.get("expression_transfer", "")).strip(),
             )
         )
 
@@ -945,6 +1005,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         chunks=chunks,
         raw_candidates=raw_candidates,
         valid_candidates=valid_candidates,
+        ranked_candidates=ranked_candidates,
         deduped_candidates=deduped,
         errors=errors,
     )

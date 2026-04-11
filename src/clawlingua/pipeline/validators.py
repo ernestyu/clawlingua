@@ -6,6 +6,16 @@ import re
 from collections.abc import Iterable
 
 from ..utils.text import count_sentences, normalize_for_dedupe
+from .taxonomy import (
+    HIGH_VALUE_ADVANCED_TYPES,
+    PHRASE_TAXONOMY,
+    STRUCTURAL_DISCOURSE_TYPES,
+    TRANSFER_MAX_CHARS,
+    TRANSFER_MIN_CHARS,
+    looks_like_translation_style_transfer,
+    normalize_expression_transfer,
+    normalize_phrase_types,
+)
 
 # {{c1::...}} format
 _CLOZE_MARK_RE = re.compile(r"\{\{c\d+::")
@@ -116,6 +126,58 @@ def classify_rejection_reason(reason: str) -> str:
 
 def _reject(category: str, message: str) -> tuple[bool, str]:
     return False, f"{category}:{message}"
+
+
+def _normalize_phrase_type_input(value: object) -> tuple[list[str], int]:
+    if value is None:
+        return [], 0
+    if isinstance(value, list):
+        raw = [str(x).strip() for x in value if str(x).strip()]
+        return normalize_phrase_types(raw, max_items=2), len(raw)
+    if isinstance(value, str):
+        raw = [part.strip() for part in value.split(",") if part.strip()]
+        return normalize_phrase_types(raw, max_items=2), len(raw)
+    raw = [str(value).strip()] if str(value).strip() else []
+    return normalize_phrase_types(raw, max_items=2), len(raw)
+
+
+def _validate_expression_transfer(*, transfer: str, note_hint: str, difficulty: str) -> tuple[bool, str]:
+    if not transfer:
+        return True, ""
+    if len(transfer) > TRANSFER_MAX_CHARS:
+        return _reject("format", f"expression_transfer exceeds {TRANSFER_MAX_CHARS} chars")
+    if len(transfer) < TRANSFER_MIN_CHARS:
+        return _reject("format", "expression_transfer is too short")
+    if looks_like_translation_style_transfer(transfer):
+        return _reject("quality", "expression_transfer looks like dictionary translation")
+    if note_hint and normalize_for_dedupe(note_hint) == normalize_for_dedupe(transfer):
+        return _reject("quality", "expression_transfer duplicates note_hint")
+    if "\n" in transfer:
+        return _reject("format", "expression_transfer must be one short line")
+    diff = (difficulty or "intermediate").strip().lower()
+    if diff == "beginner" and len(transfer) > 0 and len(transfer.split()) > 20:
+        return _reject("difficulty", "beginner expression_transfer should stay lightweight")
+    return True, ""
+
+
+def _has_obviously_invalid_type_combo(
+    *,
+    phrase_types: list[str],
+    text: str,
+    target_phrases: list[str],
+) -> bool:
+    if len(phrase_types) < 2:
+        return False
+    structural_count = len([ptype for ptype in phrase_types if ptype in STRUCTURAL_DISCOURSE_TYPES])
+    phrase_token_counts = [len(_TOKEN_RE.findall(p.lower())) for p in target_phrases if p.strip()]
+    max_phrase_tokens = max(phrase_token_counts) if phrase_token_counts else 0
+    # Two structural discourse labels on a very short context with tiny phrase targets
+    # are typically over-tagging noise from model guesses.
+    if structural_count >= 2 and len(text) < 48 and max_phrase_tokens <= 2:
+        return True
+    if "phrasal_verb" in phrase_types and structural_count >= 1 and len(text) < 40 and max_phrase_tokens <= 2:
+        return True
+    return False
 
 
 def _normalize_single_cloze(text: str) -> str:
@@ -250,8 +312,16 @@ def validate_text_candidate(
 ) -> tuple[bool, str]:
     text = str(item.get("text", "")).strip()
     original = str(item.get("original", "")).strip()
+    note_hint = str(item.get("note_hint", "")).strip()
+    item["note_hint"] = note_hint
     target_phrases_raw = item.get("target_phrases") or []
     target_phrases = [str(x).strip() for x in target_phrases_raw if str(x).strip()]
+    raw_phrase_types_value = item.get("phrase_types")
+    phrase_types, raw_phrase_type_count = _normalize_phrase_type_input(raw_phrase_types_value)
+    item["phrase_types"] = phrase_types
+    raw_transfer = str(item.get("expression_transfer", "")).strip()
+    transfer_text = normalize_expression_transfer(raw_transfer, max_chars=TRANSFER_MAX_CHARS * 4)
+    item["expression_transfer"] = transfer_text
 
     if not text:
         return _reject("format", "text is empty")
@@ -303,6 +373,25 @@ def validate_text_candidate(
         return _reject("format", f"text exceeds {max_sentences} sentences")
     if not isinstance(target_phrases_raw, list) or len(target_phrases) < 1:
         return _reject("format", "target_phrases is empty or invalid")
+    if raw_phrase_type_count > 2:
+        return _reject("format", "phrase_types has too many labels")
+    if raw_phrase_type_count > 0 and not phrase_types:
+        allowed = ", ".join(PHRASE_TAXONOMY)
+        return _reject("format", f"phrase_types must be in taxonomy: {allowed}")
+    if _has_obviously_invalid_type_combo(
+        phrase_types=phrase_types,
+        text=text,
+        target_phrases=target_phrases,
+    ):
+        return _reject("quality", "phrase_types combination is inconsistent with candidate context")
+
+    transfer_ok, transfer_reason = _validate_expression_transfer(
+        transfer=transfer_text,
+        note_hint=note_hint,
+        difficulty=difficulty,
+    )
+    if not transfer_ok:
+        return transfer_ok, transfer_reason
 
     profile_ok, profile_reason = _passes_material_profile(
         material_profile=material_profile,
@@ -319,6 +408,16 @@ def validate_text_candidate(
     phrases_for_difficulty = target_phrases or cloze_phrases
     if not _passes_difficulty(phrases_for_difficulty, difficulty=difficulty):
         return _reject("difficulty", f"candidate does not match {difficulty} difficulty")
+
+    diff = (difficulty or "").strip().lower()
+    if diff == "advanced":
+        if phrase_types and not any(pt in HIGH_VALUE_ADVANCED_TYPES for pt in phrase_types):
+            phrase_scores = [_phrase_score(p) for p in phrases_for_difficulty]
+            if max(phrase_scores or [-10.0]) < 1.2:
+                return _reject(
+                    "quality",
+                    "advanced candidate lacks high-value taxonomy support",
+                )
 
     return True, ""
 

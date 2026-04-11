@@ -61,9 +61,18 @@ def generate_cloze_candidates_for_chunk(
             "target_phrases": [str(x).strip() for x in target_phrases if str(x).strip()],
             "note_hint": str(note_hint).strip(),
         }
-        for key in ("selection_reason", "phrase_types", "learning_value_score"):
-            if key in item:
-                candidate[key] = item[key]
+        if "selection_reason" in item:
+            candidate["selection_reason"] = str(item.get("selection_reason", "")).strip()
+        if "learning_value_score" in item:
+            candidate["learning_value_score"] = item.get("learning_value_score")
+        if "phrase_types" in item:
+            raw_types = item.get("phrase_types")
+            if isinstance(raw_types, list):
+                candidate["phrase_types"] = [str(x).strip() for x in raw_types if str(x).strip()]
+            elif str(raw_types).strip():
+                candidate["phrase_types"] = [str(raw_types).strip()]
+        if "expression_transfer" in item:
+            candidate["expression_transfer"] = str(item.get("expression_transfer", "")).strip()
         candidates.append(candidate)
     return candidates
 
@@ -121,8 +130,17 @@ def generate_cloze_candidates_for_batch(
             "target_phrases": [str(x).strip() for x in target_phrases if str(x).strip()],
             "note_hint": str(note_hint).strip(),
         }
-        for key in ("selection_reason", "phrase_types", "learning_value_score"):
-            if key in item:
-                candidate[key] = item[key]
+        if "selection_reason" in item:
+            candidate["selection_reason"] = str(item.get("selection_reason", "")).strip()
+        if "learning_value_score" in item:
+            candidate["learning_value_score"] = item.get("learning_value_score")
+        if "phrase_types" in item:
+            raw_types = item.get("phrase_types")
+            if isinstance(raw_types, list):
+                candidate["phrase_types"] = [str(x).strip() for x in raw_types if str(x).strip()]
+            elif str(raw_types).strip():
+                candidate["phrase_types"] = [str(raw_types).strip()]
+        if "expression_transfer" in item:
+            candidate["expression_transfer"] = str(item.get("expression_transfer", "")).strip()
         candidates.append(candidate)
     return candidates
