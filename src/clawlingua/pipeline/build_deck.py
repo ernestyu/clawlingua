@@ -6,6 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from ..anki.deck_exporter import export_apkg
@@ -377,6 +378,49 @@ def _collect_valid_candidates(
     return valid_candidates, validation_rejects, first_validation_reason
 
 
+def _collect_fallback_raw_candidates(
+    *,
+    client: OpenAICompatibleClient,
+    prompt: Any,
+    document: DocumentRecord,
+    chunks: list[Any],
+    temperature: float | None,
+    errors: list[dict[str, Any]],
+    generate_fn: Callable[..., list[dict[str, Any]]] = generate_cloze_candidates_for_chunk,
+) -> list[dict[str, Any]]:
+    """Generate fallback raw candidates chunk-by-chunk.
+
+    This helper keeps fallback accumulation explicit and isolated so candidates
+    are appended exactly once per generated item.
+    """
+
+    fallback_raw: list[dict[str, Any]] = []
+    for chunk in chunks:
+        try:
+            items = generate_fn(
+                client=client,
+                prompt=prompt,
+                document=document,
+                chunk=chunk,
+                temperature=temperature,
+            )
+        except ClawLinguaError as exc:
+            errors.append(
+                {
+                    "stage": "cloze_fallback_single_chunk_error",
+                    "chunk_id": chunk.chunk_id,
+                    "error": exc.to_lines(),
+                }
+            )
+            continue
+
+        for item in items:
+            item["chunk_id"] = chunk.chunk_id
+            item["chunk_text"] = chunk.source_text
+            fallback_raw.append(item)
+    return fallback_raw
+
+
 def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> DocumentRecord:
     source_lang = options.source_lang or cfg.default_source_lang
     target_lang = options.target_lang or cfg.default_target_lang
@@ -635,29 +679,14 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 "reason": "no valid candidates after first pass",
             }
         )
-        fallback_raw: list[dict[str, Any]] = []
-        for chunk in chunks:
-            try:
-                items = generate_cloze_candidates_for_chunk(
-                    client=client,
-                    prompt=cloze_prompt,
-                    document=document,
-                    chunk=chunk,
-                    temperature=0.1 if options.temperature is None else options.temperature,
-                )
-            except ClawLinguaError as exc:
-                errors.append(
-                    {
-                        "stage": "cloze_fallback_single_chunk_error",
-                        "chunk_id": chunk.chunk_id,
-                        "error": exc.to_lines(),
-                    }
-                )
-                continue
-            for item in items:
-                item["chunk_id"] = chunk.chunk_id
-                item["chunk_text"] = chunk.source_text
-                fallback_raw.append(item)
+        fallback_raw = _collect_fallback_raw_candidates(
+            client=client,
+            prompt=cloze_prompt,
+            document=document,
+            chunks=chunks,
+            temperature=0.1 if options.temperature is None else options.temperature,
+            errors=errors,
+        )
 
         raw_candidates.extend(fallback_raw)
         valid_candidates, _, first_validation_reason = _collect_valid_candidates(

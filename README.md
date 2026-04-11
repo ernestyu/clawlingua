@@ -11,6 +11,10 @@ It:
 - uses a separate (usually cheaper) LLM for translations
 - uses `edge_tts` to generate audio for each card
 - exports a complete Anki deck via `genanki`
+- applies taxonomy-aware candidate ranking in advanced mode
+- combines model-proposed labels with programmatic re-ranking corrections
+- adds `expression_transfer` hints to capture cross-context reuse intent
+- writes taxonomy/validation/transfer metrics into `run_summary.json` for tuning
 
 This README describes the current **V2-oriented CLI**. For an overview in Chinese, see
 [`README_zh.md`](./README_zh.md).

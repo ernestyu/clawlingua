@@ -36,6 +36,14 @@ _COGNITIVE_FRAME_RE = re.compile(
     r"\b(?:think of .* as|frame(?:d)? as|amounts to|this suggests|this implies|this points to|seen as|not so much .* as)\b",
     re.IGNORECASE,
 )
+_STANCE_FRAME_RE = re.compile(
+    r"\b(?:i would argue|one could argue|i'd say|it seems to me|from where i stand|to my mind|my view is|the point here is)\b",
+    re.IGNORECASE,
+)
+_ABSTRACTION_BRIDGE_RE = re.compile(
+    r"\b(?:stepping back|at a higher level|in broader terms|from a broader perspective|the bigger picture|as a general rule|in structural terms|this reflects|this reveals)\b",
+    re.IGNORECASE,
+)
 _TRANSFER_CHUNK_RE = re.compile(
     r"\b(?:it turns out|if anything|at the end of the day|the point is that|what matters is|on that note|that being said)\b",
     re.IGNORECASE,
@@ -59,6 +67,7 @@ _PATTERN_LAYER: dict[str, list[re.Pattern[str]]] = {
             re.IGNORECASE,
         ),
         _SCOPE_LIMIT_RE,
+        _STANCE_FRAME_RE,
     ],
     "discourse_organizer": [
         re.compile(
@@ -73,6 +82,7 @@ _PATTERN_LAYER: dict[str, list[re.Pattern[str]]] = {
             re.IGNORECASE,
         ),
         _COGNITIVE_FRAME_RE,
+        _ABSTRACTION_BRIDGE_RE,
     ],
     "metaphor_imagery": [
         re.compile(
