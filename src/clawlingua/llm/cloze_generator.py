@@ -7,10 +7,7 @@ from ..models.document import DocumentRecord
 from ..models.prompt_schema import PromptSpec
 from .client import OpenAICompatibleClient
 from .response_parser import parse_json_content
-
-
-def _render(template: str, values: dict[str, str]) -> str:
-    return template.format(**values)
+from .template_renderer import render_prompt_template
 
 
 def generate_cloze_candidates_for_chunk(
@@ -36,7 +33,7 @@ def generate_cloze_candidates_for_chunk(
         "cloze_min_chars": str(client.config.cloze_min_chars),
         "cloze_max_per_chunk": str(effective_max_per_chunk),
     }
-    user_prompt = _render(prompt.user_prompt_template, placeholders)
+    user_prompt = render_prompt_template(prompt.user_prompt_template, placeholders)
     content = client.chat(
         [
             {"role": "system", "content": prompt.system_prompt},
@@ -105,7 +102,7 @@ def generate_cloze_candidates_for_batch(
         "cloze_min_chars": str(client.config.cloze_min_chars),
         "cloze_max_per_chunk": str(effective_max_per_chunk),
     }
-    user_prompt = _render(prompt.user_prompt_template, placeholders)
+    user_prompt = render_prompt_template(prompt.user_prompt_template, placeholders)
     content = client.chat(
         [
             {"role": "system", "content": prompt.system_prompt},

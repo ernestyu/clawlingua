@@ -9,6 +9,7 @@ from ..models.document import DocumentRecord
 from ..models.prompt_schema import PromptSpec
 from .client import OpenAICompatibleClient
 from .response_parser import parse_json_content
+from .template_renderer import render_prompt_template
 
 
 @dataclass
@@ -16,10 +17,6 @@ class TranslationBatchResult:
     ok: bool
     translation: str | None = None
     error: str | None = None
-
-
-def _render(template: str, values: dict[str, str]) -> str:
-    return template.format(**values)
 
 
 def _normalize_translation_item(item: object) -> TranslationBatchResult:
@@ -65,7 +62,7 @@ def generate_translation_batch(
         "batch_size": str(len(text_originals)),
     }
 
-    user_prompt = _render(prompt.user_prompt_template, placeholders)
+    user_prompt = render_prompt_template(prompt.user_prompt_template, placeholders)
     batch_contract = (
         "Input is a JSON array named text_originals_json.\n"
         f"Translate each item to {document.target_lang} and return a JSON array with exactly {len(text_originals)} items.\n"

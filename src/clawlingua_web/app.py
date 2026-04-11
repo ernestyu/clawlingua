@@ -400,6 +400,12 @@ def _run_single_build(
     try:
         result = run_build_deck(cfg, options)
     except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.exception(
+            "web build failed | input=%s profile=%s difficulty=%s",
+            str(dst),
+            content_profile or cfg.content_profile,
+            difficulty or cfg.cloze_difficulty,
+        )
         return {"status": "error", "message": str(exc)}
 
     return {
@@ -507,6 +513,7 @@ def _run_single_build_v2(
     try:
         local_input = _materialize_uploaded_file(uploaded_file, tmp_dir)
     except Exception as exc:
+        logger.exception("failed to materialize uploaded file")
         return {"status": "error", "message": str(exc), "run_id": None}
 
     run_id = make_run_id()
@@ -556,6 +563,13 @@ def _run_single_build_v2(
     try:
         result = run_build_deck(cfg, options)
     except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.exception(
+            "web build failed | run_id=%s input=%s profile=%s difficulty=%s",
+            run_id,
+            str(local_input),
+            content_profile or cfg.content_profile,
+            difficulty or cfg.cloze_difficulty,
+        )
         previous = _read_run_summary(summary_path)
         previous_errors = _as_int(previous.get("errors"), default=0) if previous else 0
         _update_run_summary(
