@@ -20,10 +20,16 @@ from .constants import (
     DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED,
     DEFAULT_PROMPT_CLOZE_PROSE_BEGINNER,
     DEFAULT_PROMPT_CLOZE_PROSE_INTERMEDIATE,
+    DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED,
+    DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER,
+    DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE,
     DEFAULT_PROMPT_CLOZE_TEXTBOOK,
     DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED,
     DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER,
     DEFAULT_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE,
+    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED,
+    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER,
+    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE,
     DEFAULT_PROMPT_TRANSLATE,
     SUPPORTED_CONTENT_PROFILES,
     SUPPORTED_LEARNING_MODES,
@@ -104,9 +110,21 @@ class AppConfig(BaseModel):
     prompt_cloze_prose_beginner: Path = DEFAULT_PROMPT_CLOZE_PROSE_BEGINNER
     prompt_cloze_prose_intermediate: Path = DEFAULT_PROMPT_CLOZE_PROSE_INTERMEDIATE
     prompt_cloze_prose_advanced: Path = DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED
+    prompt_cloze_prose_reading_support_beginner: Path = DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER
+    prompt_cloze_prose_reading_support_intermediate: Path = DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE
+    prompt_cloze_prose_reading_support_advanced: Path = DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED
     prompt_cloze_transcript_beginner: Path = DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER
     prompt_cloze_transcript_intermediate: Path = DEFAULT_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE
     prompt_cloze_transcript_advanced: Path = DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED
+    prompt_cloze_transcript_reading_support_beginner: Path = (
+        DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER
+    )
+    prompt_cloze_transcript_reading_support_intermediate: Path = (
+        DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE
+    )
+    prompt_cloze_transcript_reading_support_advanced: Path = (
+        DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED
+    )
 
     prompt_translate: Path = DEFAULT_PROMPT_TRANSLATE
     anki_template: Path = DEFAULT_ANKI_TEMPLATE
@@ -199,14 +217,33 @@ class AppConfig(BaseModel):
         *,
         material_profile: str | None = None,
         difficulty: str | None = None,
+        learning_mode: str | None = None,
     ) -> Path:
         profile = _normalize_profile(material_profile or self.material_profile)
         diff = (difficulty or self.cloze_difficulty or "intermediate").strip().lower()
+        mode = (learning_mode or self.learning_mode or "expression_mining").strip().lower()
         if diff not in {"beginner", "intermediate", "advanced"}:
             diff = "intermediate"
+        if mode not in SUPPORTED_LEARNING_MODES:
+            mode = "expression_mining"
 
         if profile == "textbook_examples":
             return self.prompt_cloze_textbook
+        if mode == "reading_support":
+            if profile == "transcript_dialogue":
+                return {
+                    "beginner": self.prompt_cloze_transcript_reading_support_beginner,
+                    "intermediate": self.prompt_cloze_transcript_reading_support_intermediate,
+                    "advanced": self.prompt_cloze_transcript_reading_support_advanced,
+                }[diff]
+            if profile == "prose_article":
+                return {
+                    "beginner": self.prompt_cloze_prose_reading_support_beginner,
+                    "intermediate": self.prompt_cloze_prose_reading_support_intermediate,
+                    "advanced": self.prompt_cloze_prose_reading_support_advanced,
+                }[diff]
+            # Legacy/unexpected profile in reading_support mode.
+            return self.prompt_cloze
         if profile == "transcript_dialogue":
             return {
                 "beginner": self.prompt_cloze_transcript_beginner,
@@ -368,6 +405,18 @@ def load_config(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_ADVANCED"),
             DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED,
         ),
+        "prompt_cloze_prose_reading_support_beginner": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER"),
+            DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER,
+        ),
+        "prompt_cloze_prose_reading_support_intermediate": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE"),
+            DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE,
+        ),
+        "prompt_cloze_prose_reading_support_advanced": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED"),
+            DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED,
+        ),
         "prompt_cloze_transcript_beginner": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_BEGINNER"),
             DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER,
@@ -379,6 +428,18 @@ def load_config(
         "prompt_cloze_transcript_advanced": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_ADVANCED"),
             DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED,
+        ),
+        "prompt_cloze_transcript_reading_support_beginner": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER"),
+            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER,
+        ),
+        "prompt_cloze_transcript_reading_support_intermediate": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE"),
+            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE,
+        ),
+        "prompt_cloze_transcript_reading_support_advanced": _env_value(
+            merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED"),
+            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED,
         ),
         "prompt_translate": _env_value(merged.get("CLAWLINGUA_PROMPT_TRANSLATE"), DEFAULT_PROMPT_TRANSLATE),
         "anki_template": _env_value(merged.get("CLAWLINGUA_ANKI_TEMPLATE"), DEFAULT_ANKI_TEMPLATE),
@@ -415,9 +476,33 @@ def validate_base_config(cfg: AppConfig) -> None:
         ("CLAWLINGUA_PROMPT_CLOZE_PROSE_BEGINNER", cfg.resolve_path(cfg.prompt_cloze_prose_beginner)),
         ("CLAWLINGUA_PROMPT_CLOZE_PROSE_INTERMEDIATE", cfg.resolve_path(cfg.prompt_cloze_prose_intermediate)),
         ("CLAWLINGUA_PROMPT_CLOZE_PROSE_ADVANCED", cfg.resolve_path(cfg.prompt_cloze_prose_advanced)),
+        (
+            "CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER",
+            cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_beginner),
+        ),
+        (
+            "CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE",
+            cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_intermediate),
+        ),
+        (
+            "CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED",
+            cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_advanced),
+        ),
         ("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_BEGINNER", cfg.resolve_path(cfg.prompt_cloze_transcript_beginner)),
         ("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE", cfg.resolve_path(cfg.prompt_cloze_transcript_intermediate)),
         ("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_ADVANCED", cfg.resolve_path(cfg.prompt_cloze_transcript_advanced)),
+        (
+            "CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER",
+            cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_beginner),
+        ),
+        (
+            "CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE",
+            cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_intermediate),
+        ),
+        (
+            "CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED",
+            cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_advanced),
+        ),
         ("CLAWLINGUA_PROMPT_TRANSLATE", cfg.resolve_path(cfg.prompt_translate)),
         ("CLAWLINGUA_ANKI_TEMPLATE", cfg.resolve_path(cfg.anki_template)),
     ]

@@ -142,11 +142,15 @@ def _resolve_expression_transfer(
     *,
     phrase_types: list[str],
     difficulty: str,
+    learning_mode: str,
 ) -> str:
     raw = normalize_expression_transfer(item.get("expression_transfer", ""))
     diff = (difficulty or "intermediate").strip().lower()
+    mode = (learning_mode or "expression_mining").strip().lower()
     if raw:
         return raw
+    if mode == "reading_support":
+        return ""
     if diff == "beginner" or not phrase_types:
         return ""
     return _default_expression_transfer(phrase_types[0])
@@ -263,6 +267,7 @@ def score_candidate(
     *,
     difficulty: str,
     material_profile: str,
+    learning_mode: str = "expression_mining",
 ) -> tuple[float, list[str], list[str], str, dict[str, list[str]]]:
     text = str(item.get("text", "")).strip()
     original = str(item.get("original", "")).strip()
@@ -276,7 +281,13 @@ def score_candidate(
         phrases=phrases,
         difficulty=difficulty,
     )
-    expression_transfer = _resolve_expression_transfer(item, phrase_types=phrase_types, difficulty=difficulty)
+    expression_transfer = _resolve_expression_transfer(
+        item,
+        phrase_types=phrase_types,
+        difficulty=difficulty,
+        learning_mode=learning_mode,
+    )
+    mode = (learning_mode or "expression_mining").strip().lower()
 
     score = 0.0
     reasons: list[str] = []
@@ -292,7 +303,8 @@ def score_candidate(
         reasons.append("context_short")
 
     sentence_count = count_sentences(text)
-    if sentence_count <= 3:
+    sentence_limit = 2 if mode == "reading_support" else 3
+    if sentence_count <= sentence_limit:
         score += 0.6
     else:
         score -= 0.5
@@ -314,7 +326,10 @@ def score_candidate(
         reasons.append("low_value_pattern")
 
     for ptype in phrase_types:
-        score += phrase_type_weight(label=ptype, difficulty=difficulty)
+        type_weight = phrase_type_weight(label=ptype, difficulty=difficulty)
+        if mode == "reading_support":
+            type_weight *= 0.35
+        score += type_weight
     if pattern_reasons:
         reasons.extend(pattern_reasons[:2])
     if correction_reasons:
@@ -322,16 +337,42 @@ def score_candidate(
 
     diff = (difficulty or "intermediate").strip().lower()
     high_value_count = len([ptype for ptype in phrase_types if ptype in HIGH_VALUE_ADVANCED_TYPES])
-    if diff == "advanced":
-        if high_value_count > 0:
-            score += 0.8 + 0.3 * (high_value_count - 1)
-            reasons.append("advanced_high_value")
-        elif phrase_types == ["phrasal_verb"]:
-            score -= 1.2
-            reasons.append("advanced_phrasal_only")
-    if expression_transfer:
-        score += 0.5 if diff == "advanced" else 0.3
-        reasons.append("transfer_ready")
+    if mode == "reading_support":
+        # reading_support: prioritize readability and discourse continuity.
+        if sentence_count > 2:
+            score -= 0.8
+            reasons.append("reading_support_too_many_sentences")
+        cloze_count = text.count("{{c")
+        if cloze_count > 2:
+            score -= 1.0
+            reasons.append("reading_support_too_many_clozes")
+        discourse_help = len(
+            [
+                p
+                for p in phrase_types
+                if p in {"discourse_organizer", "concession_contrast", "stance_positioning", "abstraction_bridge"}
+            ]
+        )
+        if discourse_help:
+            score += 0.9 + 0.2 * (discourse_help - 1)
+            reasons.append("reading_support_discourse_help")
+        if high_value_count and diff == "advanced":
+            score += 0.25
+            reasons.append("reading_support_advanced_signal")
+        if expression_transfer:
+            score += 0.1
+            reasons.append("transfer_optional")
+    else:
+        if diff == "advanced":
+            if high_value_count > 0:
+                score += 0.8 + 0.3 * (high_value_count - 1)
+                reasons.append("advanced_high_value")
+            elif phrase_types == ["phrasal_verb"]:
+                score -= 1.2
+                reasons.append("advanced_phrasal_only")
+        if expression_transfer:
+            score += 0.5 if diff == "advanced" else 0.3
+            reasons.append("transfer_ready")
 
     score = _difficulty_score_adjustment(score, difficulty=difficulty)
     score = _material_score_adjustment(score, material_profile=material_profile, text=text)
@@ -347,6 +388,7 @@ def rank_candidates(
     *,
     difficulty: str,
     material_profile: str,
+    learning_mode: str = "expression_mining",
 ) -> list[dict[str, Any]]:
     ranked: list[dict[str, Any]] = []
     for item in items:
@@ -354,6 +396,7 @@ def rank_candidates(
             item,
             difficulty=difficulty,
             material_profile=material_profile,
+            learning_mode=learning_mode,
         )
         enriched = dict(item)
         enriched["learning_value_score"] = score

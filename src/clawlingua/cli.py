@@ -80,9 +80,15 @@ def init(
             Path("./prompts/cloze_prose_beginner.json"),
             Path("./prompts/cloze_prose_intermediate.json"),
             Path("./prompts/cloze_prose_advanced.json"),
+            Path("./prompts/cloze_prose_reading_support_beginner.json"),
+            Path("./prompts/cloze_prose_reading_support_intermediate.json"),
+            Path("./prompts/cloze_prose_reading_support_advanced.json"),
             Path("./prompts/cloze_transcript_beginner.json"),
             Path("./prompts/cloze_transcript_intermediate.json"),
             Path("./prompts/cloze_transcript_advanced.json"),
+            Path("./prompts/cloze_transcript_reading_support_beginner.json"),
+            Path("./prompts/cloze_transcript_reading_support_intermediate.json"),
+            Path("./prompts/cloze_transcript_reading_support_advanced.json"),
             Path("./prompts/translate_rewrite.json"),
             Path("./templates/anki_cloze_default.json"),
         ]
@@ -139,9 +145,15 @@ def doctor(
             load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_beginner))
             load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_intermediate))
             load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_advanced))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_beginner))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_intermediate))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_advanced))
             load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_beginner))
             load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_intermediate))
             load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_advanced))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_beginner))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_intermediate))
+            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_advanced))
             load_prompt(cfg.resolve_path(cfg.prompt_translate))
             checks.append(("prompt:schema", True, "ok"))
         except ClawLinguaError as exc:
@@ -274,7 +286,7 @@ def build_deck(
     learning_mode: str | None = typer.Option(
         None,
         "--learning-mode",
-        help="Learning mode override: expression_mining.",
+        help="Learning mode override: expression_mining|reading_support.",
     ),
     content_profile: str | None = typer.Option(
         None,

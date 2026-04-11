@@ -36,6 +36,7 @@ from clawlingua.config import (
 from clawlingua.logger import setup_logging
 from clawlingua.models.prompt_schema import PromptSpec
 from clawlingua.pipeline.build_deck import BuildDeckOptions, run_build_deck
+from clawlingua.pipeline.validators import classify_rejection_reason
 from clawlingua.utils.time import make_run_id, utc_now_iso
 
 logger = logging.getLogger("clawlingua.web")
@@ -92,9 +93,34 @@ _ZH_I18N = {
     "completed": "\u5b8c\u6210",
     "failed": "\u5931\u8d25",
     "Run details": "\u8fd0\u884c\u8be6\u60c5",
+    "Run analytics": "\u8fd0\u884c\u7edf\u8ba1\u5206\u6790",
     "Title": "\u6807\u9898",
     "Output path": "\u8f93\u51fa\u6587\u4ef6",
     "Last error": "\u6700\u540e\u9519\u8bef",
+    "Learning mode": "\u5b66\u4e60\u6a21\u5f0f",
+    "Material profile": "\u6750\u6599\u7c7b\u578b",
+    "Taxonomy filter": "taxonomy \u8fc7\u6ee4",
+    "Transfer filter": "transfer \u8fc7\u6ee4",
+    "Rejection filter": "\u62d2\u7edd\u539f\u56e0\u8fc7\u6ee4",
+    "Chunk filter": "chunk \u8fc7\u6ee4",
+    "Apply filters": "\u5e94\u7528\u8fc7\u6ee4",
+    "Representative samples": "\u4ee3\u8868\u6027\u6837\u4f8b",
+    "Transfer non-empty ratio": "Transfer \u975e\u7a7a\u6bd4\u4f8b",
+    "Avg clozes per candidate": "\u6bcf\u6761\u5e73\u5747 cloze \u6570",
+    "Avg target phrases per candidate": "\u6bcf\u6761\u5e73\u5747 target phrase \u6570",
+    "Avg selected per chunk": "\u6bcf\u4e2a chunk \u5e73\u5747\u4fdd\u7559\u6761\u6570",
+    "Filtered selected items": "\u8fc7\u6ee4\u540e\u4fdd\u7559\u6761\u76ee",
+    "Filtered rejected items": "\u8fc7\u6ee4\u540e\u62d2\u7edd\u6761\u76ee",
+    "Raw candidates": "\u539f\u59cb\u5019\u9009",
+    "Validated candidates": "\u901a\u8fc7\u9a8c\u8bc1",
+    "Selected cards": "\u6700\u7ec8\u4fdd\u7559",
+    "Chunks": "\u5207\u5757\u6570",
+    "Model taxonomy histogram": "\u6a21\u578b taxonomy \u5206\u5e03",
+    "Candidate taxonomy histogram": "\u5019\u9009 taxonomy \u5206\u5e03",
+    "Selected taxonomy histogram": "\u6700\u7ec8 taxonomy \u5206\u5e03",
+    "Taxonomy average score": "taxonomy \u5e73\u5747\u5f97\u5206",
+    "Rejection reason histogram": "\u62d2\u7edd\u539f\u56e0\u5206\u5e03",
+    "Transfer non-empty ratio by taxonomy": "taxonomy \u7ef4\u5ea6 transfer \u975e\u7a7a\u7387",
     "Output file not available yet.": "\u5c1a\u672a\u751f\u6210\u8f93\u51fa\u6587\u4ef6\u3002",
     "No runs found.": "\u6682\u672a\u627e\u5230\u8fd0\u884c\u8bb0\u5f55\u3002",
     "No run selected.": "\u672a\u9009\u62e9\u8fd0\u884c\u8bb0\u5f55\u3002",
@@ -345,6 +371,7 @@ def _run_single_build(
     source_lang: str,
     target_lang: str,
     content_profile: str,
+    learning_mode: str,
     difficulty: str,
     max_notes: Optional[int],
     input_char_limit: Optional[int],
@@ -386,6 +413,7 @@ def _run_single_build(
         source_lang=source_lang or None,
         target_lang=target_lang or None,
         content_profile=content_profile or None,
+        learning_mode=learning_mode or None,
         input_char_limit=input_char_limit,
         deck_name=deck_title or None,
         max_chars=chunk_max_chars,
@@ -492,6 +520,7 @@ def _run_single_build_v2(
     source_lang: str,
     target_lang: str,
     content_profile: str,
+    learning_mode: str,
     difficulty: str,
     max_notes: int | None,
     input_char_limit: int | None,
@@ -524,7 +553,8 @@ def _run_single_build_v2(
 
     source_lang_value = source_lang or cfg.default_source_lang
     target_lang_value = target_lang or cfg.default_target_lang
-    profile_value = content_profile or cfg.content_profile
+    profile_value = content_profile or getattr(cfg, "material_profile", None) or cfg.content_profile
+    learning_mode_value = learning_mode or cfg.learning_mode
     title_value = (deck_title or "").strip() or local_input.stem
     _write_run_summary(
         summary_path,
@@ -537,6 +567,9 @@ def _run_single_build_v2(
             "source_lang": source_lang_value,
             "target_lang": target_lang_value,
             "content_profile": profile_value,
+            "material_profile": profile_value,
+            "learning_mode": learning_mode_value,
+            "difficulty": difficulty or cfg.cloze_difficulty,
             "cards": 0,
             "errors": 0,
             "output_path": str(default_output_path),
@@ -550,6 +583,8 @@ def _run_single_build_v2(
         source_lang=source_lang or None,
         target_lang=target_lang or None,
         content_profile=content_profile or None,
+        material_profile=content_profile or None,
+        learning_mode=learning_mode or None,
         input_char_limit=input_char_limit,
         deck_name=deck_title or None,
         max_chars=chunk_max_chars,
@@ -756,9 +791,23 @@ def _prompt_file_map(cfg: Any) -> dict[str, Path]:
         "cloze_prose_beginner": cfg.resolve_path(cfg.prompt_cloze_prose_beginner),
         "cloze_prose_intermediate": cfg.resolve_path(cfg.prompt_cloze_prose_intermediate),
         "cloze_prose_advanced": cfg.resolve_path(cfg.prompt_cloze_prose_advanced),
+        "cloze_prose_reading_support_beginner": cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_beginner),
+        "cloze_prose_reading_support_intermediate": cfg.resolve_path(
+            cfg.prompt_cloze_prose_reading_support_intermediate
+        ),
+        "cloze_prose_reading_support_advanced": cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_advanced),
         "cloze_transcript_beginner": cfg.resolve_path(cfg.prompt_cloze_transcript_beginner),
         "cloze_transcript_intermediate": cfg.resolve_path(cfg.prompt_cloze_transcript_intermediate),
         "cloze_transcript_advanced": cfg.resolve_path(cfg.prompt_cloze_transcript_advanced),
+        "cloze_transcript_reading_support_beginner": cfg.resolve_path(
+            cfg.prompt_cloze_transcript_reading_support_beginner
+        ),
+        "cloze_transcript_reading_support_intermediate": cfg.resolve_path(
+            cfg.prompt_cloze_transcript_reading_support_intermediate
+        ),
+        "cloze_transcript_reading_support_advanced": cfg.resolve_path(
+            cfg.prompt_cloze_transcript_reading_support_advanced
+        ),
         "cloze_textbook_examples": cfg.resolve_path(cfg.prompt_cloze_textbook),
         # Legacy entry kept to support older deployments.
         "cloze_contextual": cfg.resolve_path(cfg.prompt_cloze),
@@ -772,9 +821,27 @@ def _prompt_choices(lang: str) -> list[tuple[str, str]]:
             ("Prose 初级 (cloze_prose_beginner)", "cloze_prose_beginner"),
             ("Prose 中级 (cloze_prose_intermediate)", "cloze_prose_intermediate"),
             ("Prose 高级 (cloze_prose_advanced)", "cloze_prose_advanced"),
+            ("Prose 阅读支持 初级 (cloze_prose_reading_support_beginner)", "cloze_prose_reading_support_beginner"),
+            (
+                "Prose 阅读支持 中级 (cloze_prose_reading_support_intermediate)",
+                "cloze_prose_reading_support_intermediate",
+            ),
+            ("Prose 阅读支持 高级 (cloze_prose_reading_support_advanced)", "cloze_prose_reading_support_advanced"),
             ("Transcript 初级 (cloze_transcript_beginner)", "cloze_transcript_beginner"),
             ("Transcript 中级 (cloze_transcript_intermediate)", "cloze_transcript_intermediate"),
             ("Transcript 高级 (cloze_transcript_advanced)", "cloze_transcript_advanced"),
+            (
+                "Transcript 阅读支持 初级 (cloze_transcript_reading_support_beginner)",
+                "cloze_transcript_reading_support_beginner",
+            ),
+            (
+                "Transcript 阅读支持 中级 (cloze_transcript_reading_support_intermediate)",
+                "cloze_transcript_reading_support_intermediate",
+            ),
+            (
+                "Transcript 阅读支持 高级 (cloze_transcript_reading_support_advanced)",
+                "cloze_transcript_reading_support_advanced",
+            ),
             ("教材例句模式 (cloze_textbook_examples)", "cloze_textbook_examples"),
             ("旧版上下文挖空 (cloze_contextual)", "cloze_contextual"),
             ("翻译改写 (translate_rewrite)", "translate_rewrite"),
@@ -783,9 +850,15 @@ def _prompt_choices(lang: str) -> list[tuple[str, str]]:
         ("cloze_prose_beginner", "cloze_prose_beginner"),
         ("cloze_prose_intermediate", "cloze_prose_intermediate"),
         ("cloze_prose_advanced", "cloze_prose_advanced"),
+        ("cloze_prose_reading_support_beginner", "cloze_prose_reading_support_beginner"),
+        ("cloze_prose_reading_support_intermediate", "cloze_prose_reading_support_intermediate"),
+        ("cloze_prose_reading_support_advanced", "cloze_prose_reading_support_advanced"),
         ("cloze_transcript_beginner", "cloze_transcript_beginner"),
         ("cloze_transcript_intermediate", "cloze_transcript_intermediate"),
         ("cloze_transcript_advanced", "cloze_transcript_advanced"),
+        ("cloze_transcript_reading_support_beginner", "cloze_transcript_reading_support_beginner"),
+        ("cloze_transcript_reading_support_intermediate", "cloze_transcript_reading_support_intermediate"),
+        ("cloze_transcript_reading_support_advanced", "cloze_transcript_reading_support_advanced"),
         ("cloze_textbook_examples", "cloze_textbook_examples"),
         ("cloze_contextual (legacy)", "cloze_contextual"),
         ("translate_rewrite", "translate_rewrite"),
@@ -978,6 +1051,8 @@ class RunInfo:
     source_lang: str
     target_lang: str
     content_profile: str
+    material_profile: str
+    learning_mode: str
     status: str
     cards: int
     errors: int
@@ -1097,6 +1172,8 @@ def _run_info_from_dir(cfg: Any, run_dir: Path) -> RunInfo:
     source_lang = _as_str(summary.get("source_lang"))
     target_lang = _as_str(summary.get("target_lang"))
     content_profile = _as_str(summary.get("content_profile"))
+    material_profile = _as_str(summary.get("material_profile"), default=content_profile)
+    learning_mode = _as_str(summary.get("learning_mode"), default="expression_mining")
     cards = max(0, _as_int(summary.get("cards"), default=0))
     errors = max(0, _as_int(summary.get("errors"), default=0))
     output_path_resolved = _resolve_output_path(cfg, run_dir, summary.get("output_path"))
@@ -1117,6 +1194,8 @@ def _run_info_from_dir(cfg: Any, run_dir: Path) -> RunInfo:
         source_lang=source_lang,
         target_lang=target_lang,
         content_profile=content_profile,
+        material_profile=material_profile,
+        learning_mode=learning_mode,
         status=status,
         cards=cards,
         errors=errors,
@@ -1174,7 +1253,9 @@ def _load_run_detail(run_id: str | None, cfg: Any, *, lang: str) -> tuple[str, s
         f"- {_tr(lang, 'Title', '标题')}: `{info.title or '-'}`",
         f"- {_tr(lang, 'Source language', '源语言')}: `{info.source_lang or '-'}`",
         f"- {_tr(lang, 'Target language', '目标语言')}: `{info.target_lang or '-'}`",
+        f"- {_tr(lang, 'Learning mode', '学习模式')}: `{info.learning_mode or '-'}`",
         f"- {_tr(lang, 'Content profile', '内容类型')}: `{info.content_profile or '-'}`",
+        f"- {_tr(lang, 'Material profile', '材料类型')}: `{info.material_profile or '-'}`",
         f"- {_tr(lang, 'Cards', '卡片数')}: **{info.cards}**",
         f"- {_tr(lang, 'Errors', '错误数')}: **{info.errors}**",
         f"- {_tr(lang, 'Output path', '输出文件')}: `{info.output_path or '-'}`",
@@ -1197,6 +1278,358 @@ def _refresh_recent_runs(cfg: Any, *, lang: str, preferred_run_id: str | None = 
     selected = preferred_run_id if preferred_run_id in run_ids else runs[0].run_id
     detail, download_path = _load_run_detail(selected, cfg, lang=lang)
     return gr.update(choices=choices, value=selected), detail, download_path
+
+
+def _read_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(item, dict):
+            rows.append(item)
+    return rows
+
+
+def _bar(value: float, max_value: float, *, width: int = 18) -> str:
+    if max_value <= 0:
+        return "░" * width
+    ratio = max(0.0, min(1.0, value / max_value))
+    filled = int(round(ratio * width))
+    return ("█" * filled) + ("░" * max(0, width - filled))
+
+
+def _render_count_histogram(title: str, hist: dict[str, int]) -> str:
+    if not hist:
+        return f"#### {title}\n- n/a"
+    max_value = max(hist.values())
+    lines = [f"#### {title}"]
+    for key, value in sorted(hist.items(), key=lambda kv: kv[1], reverse=True):
+        lines.append(f"- `{key}` `{value}` {_bar(float(value), float(max_value))}")
+    return "\n".join(lines)
+
+
+def _render_score_histogram(title: str, hist: dict[str, float]) -> str:
+    if not hist:
+        return f"#### {title}\n- n/a"
+    max_value = max(hist.values())
+    lines = [f"#### {title}"]
+    for key, value in sorted(hist.items(), key=lambda kv: kv[1], reverse=True):
+        lines.append(f"- `{key}` `{value:.3f}` {_bar(float(value), float(max_value))}")
+    return "\n".join(lines)
+
+
+def _short_text(value: str, *, limit: int = 120) -> str:
+    text = _as_str(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _run_analysis_payload(run_id: str | None, cfg: Any) -> dict[str, Any]:
+    selected = _as_str(run_id)
+    if not selected:
+        return {}
+    run_dir = cfg.resolve_path(cfg.output_dir) / selected
+    if not run_dir.exists() or not run_dir.is_dir():
+        return {}
+    summary = _read_run_summary(run_dir / "run_summary.json")
+    metrics = summary.get("metrics")
+    if not isinstance(metrics, dict):
+        metrics = {}
+
+    selected_candidates = _read_jsonl_dicts(run_dir / "text_candidates.validated.jsonl")
+    raw_candidates = _read_jsonl_dicts(run_dir / "text_candidates.raw.jsonl")
+    cards = _read_jsonl_dicts(run_dir / "cards.final.jsonl")
+    errors = _read_jsonl_dicts(run_dir / "errors.jsonl")
+    chunks = _read_jsonl_dicts(run_dir / "chunks.jsonl")
+
+    rejected: list[dict[str, Any]] = []
+    for item in errors:
+        if _as_str(item.get("stage")) != "validate_text":
+            continue
+        reason = _as_str(item.get("reason"))
+        category = classify_rejection_reason(reason)
+        candidate = item.get("item")
+        candidate_map = candidate if isinstance(candidate, dict) else {}
+        rejected.append(
+            {
+                "reason": reason,
+                "reason_category": category,
+                "chunk_id": _as_str(item.get("chunk_id") or candidate_map.get("chunk_id")),
+                "item": candidate_map,
+            }
+        )
+
+    return {
+        "run_id": selected,
+        "run_dir": run_dir,
+        "summary": summary,
+        "metrics": metrics,
+        "selected_candidates": selected_candidates,
+        "raw_candidates": raw_candidates,
+        "cards": cards,
+        "rejected": rejected,
+        "chunks": chunks,
+    }
+
+
+def _analysis_filter_choices(payload: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
+    metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics"), dict) else {}
+    selected_candidates = payload.get("selected_candidates", []) if isinstance(payload.get("selected_candidates"), list) else []
+    rejected = payload.get("rejected", []) if isinstance(payload.get("rejected"), list) else []
+
+    taxonomy_keys: set[str] = set()
+    for key in (
+        "taxonomy_model_histogram",
+        "taxonomy_candidate_histogram",
+        "taxonomy_selected_histogram",
+        "taxonomy_average_score",
+    ):
+        value = metrics.get(key)
+        if isinstance(value, dict):
+            taxonomy_keys.update(_as_str(item) for item in value.keys() if _as_str(item))
+    for item in selected_candidates:
+        if not isinstance(item, dict):
+            continue
+        for ptype in item.get("phrase_types", []) or []:
+            key = _as_str(ptype)
+            if key:
+                taxonomy_keys.add(key)
+
+    rejection_keys: set[str] = set()
+    for item in rejected:
+        if not isinstance(item, dict):
+            continue
+        key = _as_str(item.get("reason_category"))
+        if key:
+            rejection_keys.add(key)
+
+    chunk_keys: set[str] = set()
+    for item in selected_candidates:
+        if not isinstance(item, dict):
+            continue
+        key = _as_str(item.get("chunk_id"))
+        if key:
+            chunk_keys.add(key)
+    for item in rejected:
+        if not isinstance(item, dict):
+            continue
+        key = _as_str(item.get("chunk_id"))
+        if key:
+            chunk_keys.add(key)
+
+    taxonomy_choices = [("all", "all")] + [(key, key) for key in sorted(taxonomy_keys)]
+    rejection_choices = [("all", "all")] + [(key, key) for key in sorted(rejection_keys)]
+    chunk_choices = [("all", "all")] + [(key, key) for key in sorted(chunk_keys)]
+    return taxonomy_choices, rejection_choices, chunk_choices
+
+
+def _build_run_analysis(
+    run_id: str | None,
+    cfg: Any,
+    *,
+    lang: str,
+    taxonomy_filter: str = "all",
+    transfer_filter: str = "all",
+    rejection_filter: str = "all",
+    chunk_filter: str = "all",
+) -> tuple[str, list[list[Any]], list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
+    payload = _run_analysis_payload(run_id, cfg)
+    if not payload:
+        return _tr(lang, "No run selected.", "No run selected."), [], [("all", "all")], [("all", "all")], [("all", "all")]
+
+    summary = payload["summary"]
+    metrics = payload["metrics"]
+    selected_candidates = payload["selected_candidates"]
+    rejected = payload["rejected"]
+    taxonomy_choices, rejection_choices, chunk_choices = _analysis_filter_choices(payload)
+
+    taxonomy_filter = _as_str(taxonomy_filter, default="all")
+    transfer_filter = _as_str(transfer_filter, default="all")
+    rejection_filter = _as_str(rejection_filter, default="all")
+    chunk_filter = _as_str(chunk_filter, default="all")
+
+    filtered_selected: list[dict[str, Any]] = []
+    for item in selected_candidates:
+        if not isinstance(item, dict):
+            continue
+        item_types = [_as_str(x) for x in (item.get("phrase_types", []) or []) if _as_str(x)]
+        has_transfer = bool(_as_str(item.get("expression_transfer")))
+        item_chunk = _as_str(item.get("chunk_id"))
+
+        if taxonomy_filter != "all" and taxonomy_filter not in item_types:
+            continue
+        if transfer_filter == "with_transfer" and not has_transfer:
+            continue
+        if transfer_filter == "without_transfer" and has_transfer:
+            continue
+        if chunk_filter != "all" and item_chunk != chunk_filter:
+            continue
+        filtered_selected.append(item)
+
+    filtered_rejected: list[dict[str, Any]] = []
+    for item in rejected:
+        if not isinstance(item, dict):
+            continue
+        item_chunk = _as_str(item.get("chunk_id"))
+        reason_category = _as_str(item.get("reason_category"))
+        if rejection_filter != "all" and reason_category != rejection_filter:
+            continue
+        if chunk_filter != "all" and item_chunk != chunk_filter:
+            continue
+        filtered_rejected.append(item)
+
+    learning_mode = _as_str(summary.get("learning_mode"), default=_as_str(metrics.get("learning_mode"), default="expression_mining"))
+    material_profile = _as_str(summary.get("material_profile"), default=_as_str(summary.get("content_profile"), default="-"))
+    difficulty = _as_str(summary.get("difficulty"), default=_as_str(metrics.get("difficulty"), default="-"))
+    chunks_total = _as_int(metrics.get("chunks_total"), default=0)
+    raw_total = _as_int(metrics.get("raw_candidates"), default=0)
+    valid_total = _as_int(metrics.get("validated_candidates"), default=0)
+    selected_total = _as_int(metrics.get("deduped_candidates"), default=0)
+    transfer_ratio = float(metrics.get("expression_transfer_non_empty_ratio") or 0.0)
+    avg_clozes = float(metrics.get("avg_clozes_per_candidate") or 0.0)
+    avg_phrases = float(metrics.get("avg_target_phrases_per_candidate") or 0.0)
+    avg_selected_per_chunk = float(metrics.get("avg_selected_candidates_per_chunk") or 0.0)
+
+    model_hist = metrics.get("taxonomy_model_histogram") if isinstance(metrics.get("taxonomy_model_histogram"), dict) else {}
+    candidate_hist = (
+        metrics.get("taxonomy_candidate_histogram") if isinstance(metrics.get("taxonomy_candidate_histogram"), dict) else {}
+    )
+    selected_hist = (
+        metrics.get("taxonomy_selected_histogram") if isinstance(metrics.get("taxonomy_selected_histogram"), dict) else {}
+    )
+    avg_score_hist = metrics.get("taxonomy_average_score") if isinstance(metrics.get("taxonomy_average_score"), dict) else {}
+    rejection_hist = (
+        metrics.get("rejection_reason_histogram") if isinstance(metrics.get("rejection_reason_histogram"), dict) else {}
+    )
+    transfer_by_tax = (
+        metrics.get("expression_transfer_non_empty_ratio_by_taxonomy")
+        if isinstance(metrics.get("expression_transfer_non_empty_ratio_by_taxonomy"), dict)
+        else {}
+    )
+
+    lines = [
+        f"### {_tr(lang, 'Run analytics', '运行统计分析')}",
+        f"- {_tr(lang, 'Learning mode', '学习模式')}: `{learning_mode}`",
+        f"- {_tr(lang, 'Material profile', '材料类型')}: `{material_profile}`",
+        f"- {_tr(lang, 'Difficulty', '难度')}: `{difficulty}`",
+        f"- {_tr(lang, 'Chunks', '切块数')}: **{chunks_total}**",
+        f"- {_tr(lang, 'Raw candidates', '原始候选')}: **{raw_total}**",
+        f"- {_tr(lang, 'Validated candidates', '通过验证')}: **{valid_total}**",
+        f"- {_tr(lang, 'Selected cards', '最终保留')}: **{selected_total}**",
+        f"- {_tr(lang, 'Transfer non-empty ratio', 'Transfer 非空比例')}: **{transfer_ratio:.2%}**",
+        f"- {_tr(lang, 'Avg clozes per candidate', '每条平均 cloze 数')}: **{avg_clozes:.2f}**",
+        f"- {_tr(lang, 'Avg target phrases per candidate', '每条平均 target phrase 数')}: **{avg_phrases:.2f}**",
+        f"- {_tr(lang, 'Avg selected per chunk', '每个 chunk 平均保留条数')}: **{avg_selected_per_chunk:.2f}**",
+        f"- {_tr(lang, 'Filtered selected items', '过滤后保留条目')}: **{len(filtered_selected)}**",
+        f"- {_tr(lang, 'Filtered rejected items', '过滤后拒绝条目')}: **{len(filtered_rejected)}**",
+        "",
+        _render_count_histogram(_tr(lang, "Model taxonomy histogram", "模型 taxonomy 分布"), model_hist),
+        _render_count_histogram(_tr(lang, "Candidate taxonomy histogram", "候选 taxonomy 分布"), candidate_hist),
+        _render_count_histogram(_tr(lang, "Selected taxonomy histogram", "最终 taxonomy 分布"), selected_hist),
+        _render_score_histogram(_tr(lang, "Taxonomy average score", "taxonomy 平均得分"), avg_score_hist),
+        _render_count_histogram(_tr(lang, "Rejection reason histogram", "拒绝原因分布"), rejection_hist),
+        _render_score_histogram(_tr(lang, "Transfer non-empty ratio by taxonomy", "taxonomy 维度 transfer 非空率"), transfer_by_tax),
+    ]
+
+    sample_rows: list[list[Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    if rejection_filter == "all":
+        top_selected = sorted(
+            filtered_selected,
+            key=lambda row: float(row.get("learning_value_score", 0.0)),
+            reverse=True,
+        )[:5]
+        for item in top_selected:
+            key = ("top_selected", _as_str(item.get("chunk_id")), _as_str(item.get("text")))
+            if key in seen:
+                continue
+            seen.add(key)
+            sample_rows.append(
+                [
+                    "top_selected",
+                    _as_str(item.get("chunk_id")),
+                    " | ".join([_as_str(x) for x in (item.get("phrase_types", []) or []) if _as_str(x)]),
+                    float(item.get("learning_value_score", 0.0)),
+                    _short_text(_as_str(item.get("text"))),
+                    _short_text(_as_str(item.get("expression_transfer"))),
+                    _short_text(_as_str(item.get("selection_reason"))),
+                ]
+            )
+
+        taxonomy_bucket: dict[str, dict[str, Any]] = {}
+        for item in sorted(
+            filtered_selected,
+            key=lambda row: float(row.get("learning_value_score", 0.0)),
+            reverse=True,
+        ):
+            for ptype in item.get("phrase_types", []) or []:
+                key = _as_str(ptype)
+                if not key or key in taxonomy_bucket:
+                    continue
+                taxonomy_bucket[key] = item
+        for ptype, item in list(taxonomy_bucket.items())[:5]:
+            key = ("taxonomy_example", _as_str(item.get("chunk_id")), _as_str(item.get("text")))
+            if key in seen:
+                continue
+            seen.add(key)
+            sample_rows.append(
+                [
+                    f"taxonomy_example:{ptype}",
+                    _as_str(item.get("chunk_id")),
+                    " | ".join([_as_str(x) for x in (item.get("phrase_types", []) or []) if _as_str(x)]),
+                    float(item.get("learning_value_score", 0.0)),
+                    _short_text(_as_str(item.get("text"))),
+                    _short_text(_as_str(item.get("expression_transfer"))),
+                    _short_text(_as_str(item.get("selection_reason"))),
+                ]
+            )
+
+        transfer_examples = [item for item in filtered_selected if _as_str(item.get("expression_transfer"))][:5]
+        for item in transfer_examples:
+            key = ("transfer_example", _as_str(item.get("chunk_id")), _as_str(item.get("text")))
+            if key in seen:
+                continue
+            seen.add(key)
+            sample_rows.append(
+                [
+                    "transfer_example",
+                    _as_str(item.get("chunk_id")),
+                    " | ".join([_as_str(x) for x in (item.get("phrase_types", []) or []) if _as_str(x)]),
+                    float(item.get("learning_value_score", 0.0)),
+                    _short_text(_as_str(item.get("text"))),
+                    _short_text(_as_str(item.get("expression_transfer"))),
+                    _short_text(_as_str(item.get("selection_reason"))),
+                ]
+            )
+
+    for item in filtered_rejected[:3]:
+        candidate = item.get("item") if isinstance(item.get("item"), dict) else {}
+        key = ("rejected_example", _as_str(item.get("chunk_id")), _as_str(candidate.get("text")))
+        if key in seen:
+            continue
+        seen.add(key)
+        sample_rows.append(
+            [
+                f"rejected:{_as_str(item.get('reason_category'))}",
+                _as_str(item.get("chunk_id")),
+                " | ".join([_as_str(x) for x in (candidate.get("phrase_types", []) or []) if _as_str(x)]),
+                float(candidate.get("learning_value_score", 0.0)),
+                _short_text(_as_str(candidate.get("text"))),
+                _short_text(_as_str(candidate.get("expression_transfer"))),
+                _short_text(_as_str(item.get("reason"))),
+            ]
+        )
+
+    return "\n".join(lines), sample_rows, taxonomy_choices, rejection_choices, chunk_choices
 
 
 def build_interface() -> gr.Blocks:
@@ -1231,6 +1664,21 @@ def build_interface() -> gr.Blocks:
         initial_run_selected = None
         initial_run_detail = _tr(initial_ui_lang, "No runs found.", "No runs found.")
         initial_run_download = None
+    (
+        initial_analysis_md,
+        initial_samples_rows,
+        initial_taxonomy_choices,
+        initial_rejection_choices,
+        initial_chunk_choices,
+    ) = _build_run_analysis(
+        initial_run_selected,
+        cfg,
+        lang=initial_ui_lang,
+        taxonomy_filter="all",
+        transfer_filter="all",
+        rejection_filter="all",
+        chunk_filter="all",
+    )
 
     with gr.Blocks(title="ClawLingua Web UI") as demo:
         with gr.Row():
@@ -1272,6 +1720,11 @@ def build_interface() -> gr.Blocks:
                     choices=["prose_article", "transcript_dialogue", "textbook_examples"],
                     value=cfg.content_profile,
                     label=_tr(initial_ui_lang, "Content profile", "内容类型"),
+                )
+                learning_mode = gr.Dropdown(
+                    choices=["expression_mining", "reading_support"],
+                    value=getattr(cfg, "learning_mode", "expression_mining"),
+                    label=_tr(initial_ui_lang, "Learning mode", "学习模式"),
                 )
                 difficulty = gr.Dropdown(
                     choices=["beginner", "intermediate", "advanced"],
@@ -1367,6 +1820,60 @@ def build_interface() -> gr.Blocks:
                 interactive=False,
                 value=initial_run_download,
             )
+            analytics_heading = gr.Markdown(
+                _tr(initial_ui_lang, "### Run analytics", "### 运行统计分析"),
+                render=False,
+            )
+            taxonomy_filter = gr.Dropdown(
+                choices=initial_taxonomy_choices,
+                value="all",
+                label=_tr(initial_ui_lang, "Taxonomy filter", "taxonomy 过滤"),
+                render=False,
+            )
+            transfer_filter = gr.Dropdown(
+                choices=[
+                    ("all", "all"),
+                    ("with_transfer", "with_transfer"),
+                    ("without_transfer", "without_transfer"),
+                ],
+                value="all",
+                label=_tr(initial_ui_lang, "Transfer filter", "transfer 过滤"),
+                render=False,
+            )
+            rejection_filter = gr.Dropdown(
+                choices=initial_rejection_choices,
+                value="all",
+                label=_tr(initial_ui_lang, "Rejection filter", "拒绝原因过滤"),
+                render=False,
+            )
+            chunk_filter = gr.Dropdown(
+                choices=initial_chunk_choices,
+                value="all",
+                label=_tr(initial_ui_lang, "Chunk filter", "chunk 过滤"),
+                render=False,
+            )
+            apply_analysis_filter_btn = gr.Button(
+                _tr(initial_ui_lang, "Apply filters", "应用过滤"),
+                render=False,
+            )
+            run_analysis = gr.Markdown(value=initial_analysis_md, render=False)
+            run_samples = gr.Dataframe(
+                headers=[
+                    "kind",
+                    "chunk_id",
+                    "phrase_types",
+                    "score",
+                    "text",
+                    "expression_transfer",
+                    "reason",
+                ],
+                datatype=["str", "str", "str", "number", "str", "str", "str"],
+                interactive=False,
+                wrap=True,
+                value=initial_samples_rows,
+                label=_tr(initial_ui_lang, "Representative samples", "代表性样例"),
+                render=False,
+            )
 
             def _on_run_start(ui_lang_val: str) -> tuple[str, None]:
                 lang = _normalize_ui_lang(ui_lang_val)
@@ -1378,6 +1885,7 @@ def build_interface() -> gr.Blocks:
                 src,
                 tgt,
                 profile,
+                mode,
                 diff,
                 max_notes_val,
                 input_limit_val,
@@ -1395,6 +1903,7 @@ def build_interface() -> gr.Blocks:
                     source_lang=src,
                     target_lang=tgt,
                     content_profile=profile,
+                    learning_mode=mode,
                     difficulty=diff,
                     max_notes=_to_optional_int(max_notes_val, min_value=1),
                     input_char_limit=_to_optional_int(input_limit_val, min_value=1),
@@ -1412,12 +1921,37 @@ def build_interface() -> gr.Blocks:
                     lang=lang,
                     preferred_run_id=run_id,
                 )
+                analysis_md, sample_rows, taxonomy_choices, rejection_choices, chunk_choices = _build_run_analysis(
+                    run_id,
+                    cfg_now,
+                    lang=lang,
+                    taxonomy_filter="all",
+                    transfer_filter="all",
+                    rejection_filter="all",
+                    chunk_filter="all",
+                )
+                taxonomy_update = gr.update(choices=taxonomy_choices, value="all")
+                rejection_update = gr.update(choices=rejection_choices, value="all")
+                chunk_update = gr.update(choices=chunk_choices, value="all")
+                transfer_update = gr.update(value="all")
 
                 if result.get("status") != "ok":
                     msg = result.get("message") or "Unknown error"
                     run_line = f"- run_id: `{run_id}`\n" if run_id else ""
                     status_md = f"{_tr(lang, 'Failed', 'Failed')}\n\n{run_line}- {_tr(lang, 'Error', 'Error')}: `{msg}`"
-                    return status_md, None, selector_update, detail_md, history_download
+                    return (
+                        status_md,
+                        None,
+                        selector_update,
+                        detail_md,
+                        history_download,
+                        analysis_md,
+                        sample_rows,
+                        taxonomy_update,
+                        transfer_update,
+                        rejection_update,
+                        chunk_update,
+                    )
 
                 cards = result["cards_count"]
                 errors = result["errors_count"]
@@ -1429,17 +1963,100 @@ def build_interface() -> gr.Blocks:
                     f"- errors: **{errors}**\n"
                     f"- output: `{out_path}`"
                 )
-                return status_md, out_path, selector_update, detail_md, history_download
+                return (
+                    status_md,
+                    out_path,
+                    selector_update,
+                    detail_md,
+                    history_download,
+                    analysis_md,
+                    sample_rows,
+                    taxonomy_update,
+                    transfer_update,
+                    rejection_update,
+                    chunk_update,
+                )
 
-            def _on_refresh_runs(ui_lang_val: str, selected_run_id: str | None) -> tuple[Any, str, str | None]:
+            def _on_refresh_runs(
+                ui_lang_val: str,
+                selected_run_id: str | None,
+            ) -> tuple[Any, str, str | None, str, list[list[Any]], Any, Any, Any, Any]:
                 lang = _normalize_ui_lang(ui_lang_val)
                 cfg_now = _load_app_config()
-                return _refresh_recent_runs(cfg_now, lang=lang, preferred_run_id=selected_run_id)
+                selector_update, detail_md, history_download = _refresh_recent_runs(
+                    cfg_now,
+                    lang=lang,
+                    preferred_run_id=selected_run_id,
+                )
+                run_id_next = _as_str(selector_update.get("value") if isinstance(selector_update, dict) else selected_run_id)
+                analysis_md, sample_rows, taxonomy_choices, rejection_choices, chunk_choices = _build_run_analysis(
+                    run_id_next,
+                    cfg_now,
+                    lang=lang,
+                    taxonomy_filter="all",
+                    transfer_filter="all",
+                    rejection_filter="all",
+                    chunk_filter="all",
+                )
+                return (
+                    selector_update,
+                    detail_md,
+                    history_download,
+                    analysis_md,
+                    sample_rows,
+                    gr.update(choices=taxonomy_choices, value="all"),
+                    gr.update(value="all"),
+                    gr.update(choices=rejection_choices, value="all"),
+                    gr.update(choices=chunk_choices, value="all"),
+                )
 
-            def _on_run_selected(run_id_val: str | None, ui_lang_val: str) -> tuple[str, str | None]:
+            def _on_run_selected(
+                run_id_val: str | None,
+                ui_lang_val: str,
+            ) -> tuple[str, str | None, str, list[list[Any]], Any, Any, Any, Any]:
                 lang = _normalize_ui_lang(ui_lang_val)
                 cfg_now = _load_app_config()
-                return _load_run_detail(run_id_val, cfg_now, lang=lang)
+                detail_md, download_path = _load_run_detail(run_id_val, cfg_now, lang=lang)
+                analysis_md, sample_rows, taxonomy_choices, rejection_choices, chunk_choices = _build_run_analysis(
+                    run_id_val,
+                    cfg_now,
+                    lang=lang,
+                    taxonomy_filter="all",
+                    transfer_filter="all",
+                    rejection_filter="all",
+                    chunk_filter="all",
+                )
+                return (
+                    detail_md,
+                    download_path,
+                    analysis_md,
+                    sample_rows,
+                    gr.update(choices=taxonomy_choices, value="all"),
+                    gr.update(value="all"),
+                    gr.update(choices=rejection_choices, value="all"),
+                    gr.update(choices=chunk_choices, value="all"),
+                )
+
+            def _on_apply_analysis_filters(
+                run_id_val: str | None,
+                ui_lang_val: str,
+                taxonomy_val: str,
+                transfer_val: str,
+                rejection_val: str,
+                chunk_val: str,
+            ) -> tuple[str, list[list[Any]]]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                cfg_now = _load_app_config()
+                analysis_md, sample_rows, _, _, _ = _build_run_analysis(
+                    run_id_val,
+                    cfg_now,
+                    lang=lang,
+                    taxonomy_filter=taxonomy_val or "all",
+                    transfer_filter=transfer_val or "all",
+                    rejection_filter=rejection_val or "all",
+                    chunk_filter=chunk_val or "all",
+                )
+                return analysis_md, sample_rows
 
             run_button.click(
                 _on_run_start,
@@ -1454,6 +2071,7 @@ def build_interface() -> gr.Blocks:
                     source_lang,
                     target_lang,
                     content_profile,
+                    learning_mode,
                     difficulty,
                     max_notes,
                     input_char_limit,
@@ -1464,19 +2082,55 @@ def build_interface() -> gr.Blocks:
                     continue_on_error,
                     ui_lang,
                 ],
-                outputs=[run_status, output_file, run_selector, run_detail, run_download_file],
+                outputs=[
+                    run_status,
+                    output_file,
+                    run_selector,
+                    run_detail,
+                    run_download_file,
+                    run_analysis,
+                    run_samples,
+                    taxonomy_filter,
+                    transfer_filter,
+                    rejection_filter,
+                    chunk_filter,
+                ],
             )
 
             refresh_runs_button.click(
                 _on_refresh_runs,
                 inputs=[ui_lang, run_selector],
-                outputs=[run_selector, run_detail, run_download_file],
+                outputs=[
+                    run_selector,
+                    run_detail,
+                    run_download_file,
+                    run_analysis,
+                    run_samples,
+                    taxonomy_filter,
+                    transfer_filter,
+                    rejection_filter,
+                    chunk_filter,
+                ],
             )
 
             run_selector.change(
                 _on_run_selected,
                 inputs=[run_selector, ui_lang],
-                outputs=[run_detail, run_download_file],
+                outputs=[
+                    run_detail,
+                    run_download_file,
+                    run_analysis,
+                    run_samples,
+                    taxonomy_filter,
+                    transfer_filter,
+                    rejection_filter,
+                    chunk_filter,
+                ],
+            )
+            apply_analysis_filter_btn.click(
+                _on_apply_analysis_filters,
+                inputs=[run_selector, ui_lang, taxonomy_filter, transfer_filter, rejection_filter, chunk_filter],
+                outputs=[run_analysis, run_samples],
             )
         with gr.Tab(_tr(initial_ui_lang, "Config", "配置")) as config_tab:
             config_heading = gr.Markdown(_tr(initial_ui_lang, "### Config (.env editor)", "### 配置（.env 编辑器）"))
@@ -1970,6 +2624,17 @@ def build_interface() -> gr.Blocks:
                 outputs=[prompt_editor, prompt_status],
             )
 
+        with gr.Tab(_tr(initial_ui_lang, "Run analytics", "运行统计分析")) as analytics_tab:
+            analytics_heading.render()
+            with gr.Row():
+                taxonomy_filter.render()
+                transfer_filter.render()
+                rejection_filter.render()
+                chunk_filter.render()
+            apply_analysis_filter_btn.render()
+            run_analysis.render()
+            run_samples.render()
+
         def _on_ui_lang_change(
             lang_value: str,
             prompt_lang_current: str,
@@ -2059,6 +2724,7 @@ def build_interface() -> gr.Blocks:
                 gr.update(value=_tr(lang, "Save", "Save")),
                 gr.update(value=_tr(lang, "Load default", "Load default")),
                 gr.update(label=_tr(lang, "Prompt status", "Prompt status"), value=prompt_status_next),
+                gr.update(label=_tr(lang, "Run analytics", "运行统计分析")),
             )
 
         ui_lang.change(
@@ -2130,6 +2796,7 @@ def build_interface() -> gr.Blocks:
                 prompt_save_btn,
                 prompt_load_default_btn,
                 prompt_status,
+                analytics_tab,
             ],
         )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +15,7 @@ from ..anki.media_manager import MediaManager
 from ..anki.template_loader import load_anki_template
 from ..chunking.splitter import split_into_chunks
 from ..config import AppConfig, validate_base_config, validate_runtime_config
-from ..constants import SUPPORTED_CONTENT_PROFILES, SUPPORTED_FILE_SUFFIXES
+from ..constants import SUPPORTED_CONTENT_PROFILES, SUPPORTED_FILE_SUFFIXES, SUPPORTED_LEARNING_MODES
 from ..errors import ClawLinguaError, build_error
 from ..exit_codes import ExitCode
 from ..ingest.epub_reader import read_epub_file
@@ -37,6 +38,7 @@ from ..tts.provider_registry import get_tts_provider
 from ..tts.voice_selector import UniformVoiceSelector
 from ..utils.hash import stable_hash
 from ..utils.jsonx import dump_json, dump_jsonl, load_json
+from ..utils.text import normalize_for_dedupe
 from ..utils.time import utc_now_iso
 from .dedupe import dedupe_candidates
 from .ranking import rank_candidates
@@ -46,6 +48,7 @@ from .validators import classify_rejection_reason, validate_text_candidate, vali
 logger = logging.getLogger(__name__)
 TEXTBOOK_PROFILE_MAX_RECOMMENDED_CLOZE_MIN_CHARS = 120
 TRANSLATION_BATCH_MAX_RETRIES = 3
+CLOZE_MARK_RE = re.compile(r"\{\{c\d+::")
 
 
 @dataclass
@@ -127,6 +130,7 @@ def _save_intermediate(
     output_path: Path,
     material_profile: str,
     learning_mode: str,
+    difficulty: str,
     metrics: dict[str, Any] | None = None,
 ) -> None:
     dump_json(run_dir / "document.json", document.model_dump(mode="json"))
@@ -155,6 +159,7 @@ def _save_intermediate(
             "material_profile": material_profile,
             "content_profile": material_profile,  # backward-compatible summary key
             "learning_mode": learning_mode,
+            "difficulty": difficulty,
             "output_path": str(output_path),
         }
     )
@@ -188,12 +193,13 @@ def _resolve_material_profile(cfg: AppConfig, options: BuildDeckOptions) -> str:
 
 def _resolve_learning_mode(cfg: AppConfig, options: BuildDeckOptions) -> str:
     mode = (options.learning_mode or cfg.learning_mode or "expression_mining").strip().lower()
-    if mode != "expression_mining":
+    if mode not in SUPPORTED_LEARNING_MODES:
+        allowed = ", ".join(sorted(SUPPORTED_LEARNING_MODES))
         raise build_error(
             error_code="ARG_LEARNING_MODE_INVALID",
             cause="Unsupported learning mode in current build.",
             detail=f"learning_mode={mode!r}",
-            next_steps=["Use `expression_mining`"],
+            next_steps=[f"Use one of: {allowed}"],
             exit_code=ExitCode.ARGUMENT_ERROR,
         )
     return mode
@@ -253,6 +259,10 @@ def _apply_per_chunk_cap(items: list[dict[str, Any]], *, max_per_chunk: int | No
     return limited
 
 
+def _count_cloze_marks(text: str) -> int:
+    return len(CLOZE_MARK_RE.findall(str(text or "")))
+
+
 def _build_pipeline_metrics(
     *,
     chunks: list[Any],
@@ -261,6 +271,7 @@ def _build_pipeline_metrics(
     ranked_candidates: list[dict[str, Any]],
     deduped_candidates: list[dict[str, Any]],
     errors: list[dict[str, Any]],
+    learning_mode: str = "expression_mining",
 ) -> dict[str, Any]:
     chunk_ids = {str(getattr(chunk, "chunk_id", "")) for chunk in chunks if str(getattr(chunk, "chunk_id", ""))}
     raw_by_chunk: dict[str, int] = {}
@@ -321,15 +332,54 @@ def _build_pipeline_metrics(
             if str(item.get("expression_transfer", "")).strip()
         ]
     )
+    transfer_total_by_taxonomy: dict[str, int] = {}
+    transfer_non_empty_by_taxonomy: dict[str, int] = {}
+    for item in deduped_candidates:
+        has_transfer = bool(str(item.get("expression_transfer", "")).strip())
+        for ptype in item.get("phrase_types", []) or []:
+            key = str(ptype).strip()
+            if not key:
+                continue
+            transfer_total_by_taxonomy[key] = transfer_total_by_taxonomy.get(key, 0) + 1
+            if has_transfer:
+                transfer_non_empty_by_taxonomy[key] = transfer_non_empty_by_taxonomy.get(key, 0) + 1
+    transfer_non_empty_ratio_by_taxonomy = {
+        key: round(transfer_non_empty_by_taxonomy.get(key, 0) / total, 4)
+        for key, total in transfer_total_by_taxonomy.items()
+        if total > 0
+    }
+
+    avg_clozes_per_candidate = (
+        sum(_count_cloze_marks(str(item.get("text", ""))) for item in deduped_candidates) / len(deduped_candidates)
+        if deduped_candidates
+        else 0.0
+    )
+    avg_target_phrases_per_candidate = (
+        sum(len(item.get("target_phrases", []) or []) for item in deduped_candidates) / len(deduped_candidates)
+        if deduped_candidates
+        else 0.0
+    )
+    selected_by_chunk: dict[str, int] = {}
+    for item in deduped_candidates:
+        cid = str(item.get("chunk_id", "")).strip()
+        if not cid:
+            continue
+        selected_by_chunk[cid] = selected_by_chunk.get(cid, 0) + 1
+    avg_selected_per_chunk = (len(deduped_candidates) / len(chunks)) if chunks else 0.0
 
     avg_raw_per_chunk = (len(raw_candidates) / len(chunks)) if chunks else 0.0
     pass_rate = (len(valid_candidates) / len(raw_candidates)) if raw_candidates else 0.0
     return {
+        "learning_mode": learning_mode,
         "chunks_total": len(chunks),
         "raw_candidates": len(raw_candidates),
         "validated_candidates": len(valid_candidates),
         "deduped_candidates": len(deduped_candidates),
         "avg_raw_candidates_per_chunk": round(avg_raw_per_chunk, 4),
+        "avg_selected_candidates_per_chunk": round(avg_selected_per_chunk, 4),
+        "selected_candidates_per_chunk": selected_by_chunk,
+        "avg_clozes_per_candidate": round(avg_clozes_per_candidate, 4),
+        "avg_target_phrases_per_candidate": round(avg_target_phrases_per_candidate, 4),
         "validation_pass_rate": round(pass_rate, 4),
         "empty_chunk_count": empty_chunk_count,
         "empty_chunk_ratio": round((empty_chunk_count / len(chunks)) if chunks else 0.0, 4),
@@ -347,6 +397,7 @@ def _build_pipeline_metrics(
         )
         if deduped_candidates
         else 0.0,
+        "expression_transfer_non_empty_ratio_by_taxonomy": transfer_non_empty_ratio_by_taxonomy,
     }
 
 
@@ -355,6 +406,7 @@ def _collect_valid_candidates(
     raw_candidates: list[dict[str, Any]],
     cfg: AppConfig,
     material_profile: str,
+    learning_mode: str,
     errors: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int, str | None]:
     valid_candidates: list[dict[str, Any]] = []
@@ -367,6 +419,7 @@ def _collect_valid_candidates(
             min_chars=cfg.cloze_min_chars,
             difficulty=cfg.cloze_difficulty,
             material_profile=material_profile,
+            learning_mode=learning_mode,
         )
         if not ok:
             validation_rejects += 1
@@ -501,6 +554,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         cfg.cloze_min_chars = options.cloze_min_chars
     material_profile = _resolve_material_profile(cfg, options)
     learning_mode = _resolve_learning_mode(cfg, options)
+    options.learning_mode = learning_mode
     _check_textbook_profile_settings(cfg=cfg, options=options, material_profile=material_profile)
 
     run_ctx = create_run_context(cfg, name="build_deck", run_id=options.run_id)
@@ -508,6 +562,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     cloze_prompt_path = cfg.resolve_cloze_prompt_path(
         material_profile=material_profile,
         difficulty=cfg.cloze_difficulty,
+        learning_mode=learning_mode,
     )
     cloze_prompt = load_prompt(cfg.resolve_path(cloze_prompt_path), prompt_lang=cfg.prompt_lang)
     translate_prompt = load_prompt(cfg.resolve_path(cfg.prompt_translate), prompt_lang=cfg.prompt_lang)
@@ -556,6 +611,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 output_path=output_path,
                 material_profile=material_profile,
                 learning_mode=learning_mode,
+                difficulty=cfg.cloze_difficulty,
                 metrics=None,
             )
         except Exception:
@@ -661,6 +717,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         raw_candidates=raw_candidates,
         cfg=cfg,
         material_profile=material_profile,
+        learning_mode=learning_mode,
         errors=errors,
     )
 
@@ -693,6 +750,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             raw_candidates=fallback_raw,
             cfg=cfg,
             material_profile=material_profile,
+            learning_mode=learning_mode,
             errors=errors,
         )
 
@@ -716,6 +774,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             valid_candidates,
             difficulty=cfg.cloze_difficulty,
             material_profile=material_profile,
+            learning_mode=learning_mode,
         )
         deduped = dedupe_candidates(ranked_candidates)
         deduped = _apply_per_chunk_cap(deduped, max_per_chunk=cfg.cloze_max_per_chunk)
@@ -742,12 +801,15 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     def _append_card_from_translation(*, idx: int, item: dict[str, Any], translation: str) -> None:
         card_id = f"card_{idx:06d}_{stable_hash(str(item['original']), length=6)}"
         target_phrases = list(item.get("target_phrases") or [])
+        expression_transfer = str(item.get("expression_transfer", "")).strip()
+        if expression_transfer and normalize_for_dedupe(expression_transfer) == normalize_for_dedupe(translation):
+            expression_transfer = ""
         note = _build_note(
             title=document.title,
             source_url=document.source_url,
             target_phrases=[str(x) for x in target_phrases],
             phrase_types=[str(x) for x in (item.get("phrase_types") or []) if str(x).strip()],
-            expression_transfer=str(item.get("expression_transfer", "")).strip() or None,
+            expression_transfer=expression_transfer or None,
             chunk_id=str(item.get("chunk_id", "")),
             source_lang=document.source_lang,
             target_lang=document.target_lang,
@@ -767,7 +829,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 note=note,
                 target_phrases=[str(x) for x in target_phrases],
                 phrase_types=[str(x) for x in (item.get("phrase_types") or []) if str(x).strip()],
-                expression_transfer=str(item.get("expression_transfer", "")).strip(),
+                expression_transfer=expression_transfer,
             )
         )
 
@@ -1037,6 +1099,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         ranked_candidates=ranked_candidates,
         deduped_candidates=deduped,
         errors=errors,
+        learning_mode=learning_mode,
     )
     pipeline_metrics["prompt_info"] = {
         "cloze_prompt_name": cloze_prompt.name,
@@ -1044,6 +1107,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         "translate_prompt_name": translate_prompt.name,
         "translate_prompt_version": translate_prompt.version,
     }
+    pipeline_metrics["difficulty"] = cfg.cloze_difficulty
 
     if save_intermediate:
         _save_intermediate(
@@ -1057,6 +1121,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             output_path=output_path,
             material_profile=material_profile,
             learning_mode=learning_mode,
+            difficulty=cfg.cloze_difficulty,
             metrics=pipeline_metrics,
         )
 

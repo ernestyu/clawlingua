@@ -58,7 +58,7 @@ def load_anki_template(path: Path) -> AnkiTemplateSpec:
             error_code="TEMPLATE_FIELDS_INVALID",
             cause="模板字段顺序不符合规范。",
             detail=str(exc),
-            next_steps=["将字段顺序调整为 Text, Original, Translation, Note, Audio"],
+            next_steps=["将字段顺序调整为 Text, Original, Translation, ExpressionTransfer, Note, Audio"],
             exit_code=ExitCode.SCHEMA_ERROR,
         ) from exc
     except Exception as exc:
@@ -69,4 +69,3 @@ def load_anki_template(path: Path) -> AnkiTemplateSpec:
             next_steps=["检查模板 JSON 格式"],
             exit_code=ExitCode.SCHEMA_ERROR,
         ) from exc
-

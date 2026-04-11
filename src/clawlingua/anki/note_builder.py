@@ -10,7 +10,7 @@ def build_note_fields(card: CardRecord) -> list[str]:
         card.text,
         card.original,
         card.translation,
+        card.expression_transfer,
         card.note,
         card.audio_field or "",
     ]
-
