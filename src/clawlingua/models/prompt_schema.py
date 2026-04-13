@@ -21,7 +21,7 @@ class PromptSpec(BaseModel):
     name: str
     version: str
     description: str
-    mode: Literal["cloze", "translate"]
+    mode: Literal["extraction", "explanation"]
     # system_prompt/user_prompt_template 支持两种形式：
     # - 旧格式：纯字符串
     # - 新格式：{"en": "...", "zh": "..."}
@@ -42,3 +42,9 @@ class PromptSpec(BaseModel):
                 deduped.append(item)
         return deduped
 
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _normalize_mode(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value

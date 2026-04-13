@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import logging
 import re
 import time
@@ -27,6 +29,7 @@ from ..llm.cloze_generator import (
     generate_cloze_candidates_for_chunk,
 )
 from ..llm.prompt_loader import load_prompt
+from ..llm.response_parser import parse_json_content
 from ..llm.translation_generator import (
     TranslationBatchResult,
     generate_translation_batch,
@@ -49,6 +52,42 @@ logger = logging.getLogger(__name__)
 TEXTBOOK_PROFILE_MAX_RECOMMENDED_CLOZE_MIN_CHARS = 120
 TRANSLATION_BATCH_MAX_RETRIES = 3
 CLOZE_MARK_RE = re.compile(r"\{\{c\d+::")
+_FORMAT_RETRY_TEXT_EXCEEDS_RE = re.compile(r"^format:text exceeds (\d+) sentences$")
+_FORMAT_RETRY_MIN_CHARS_RE = re.compile(r"^format:text chars < (\d+)$")
+_CLOZE_BLOCK_GENERIC_RE = re.compile(r"\{\{c(\d+)::(.*?)\}\}", re.DOTALL)
+_CHUNK_ID_INDEX_RE = re.compile(r"^chunk_(\d+)(?:_|$)", re.IGNORECASE)
+_FORMAT_RETRYABLE_REASONS = (
+    "format:missing cloze marker",
+    "format:cloze style must be {{cN::<b>...</b>}}(hint)",
+    "format:text exceeds ",
+    "format:text chars < ",
+    "format:phrase_types must be in taxonomy:",
+    "format:phrase_types has too many labels",
+    "format:target_phrases is empty or invalid",
+)
+_FORMAT_RETRYABLE_REASONS_LOWER = tuple(prefix.lower() for prefix in _FORMAT_RETRYABLE_REASONS)
+
+
+@dataclass
+class _FormatRetryStats:
+    attempt1_fixed_count: int = 0
+    llm_repair_success_count: int = 0
+    llm_regen_success_count: int = 0
+    total_extra_llm_calls: int = 0
+
+    @property
+    def recovered_candidates(self) -> int:
+        return (
+            self.attempt1_fixed_count
+            + self.llm_repair_success_count
+            + self.llm_regen_success_count
+        )
+
+    def absorb(self, other: "_FormatRetryStats") -> None:
+        self.attempt1_fixed_count += int(other.attempt1_fixed_count)
+        self.llm_repair_success_count += int(other.llm_repair_success_count)
+        self.llm_regen_success_count += int(other.llm_regen_success_count)
+        self.total_extra_llm_calls += int(other.total_extra_llm_calls)
 
 
 @dataclass
@@ -68,6 +107,8 @@ class BuildDeckOptions:
     temperature: float | None = None
     cloze_difficulty: str | None = None
     cloze_min_chars: int | None = None
+    extract_prompt: Path | None = None
+    explain_prompt: Path | None = None
     # Legacy alias of material_profile.
     content_profile: str | None = None
     save_intermediate: bool | None = None
@@ -263,6 +304,19 @@ def _count_cloze_marks(text: str) -> int:
     return len(CLOZE_MARK_RE.findall(str(text or "")))
 
 
+def _extract_chunk_index(chunk_id: str | None) -> int | None:
+    value = str(chunk_id or "").strip()
+    if not value:
+        return None
+    match = _CHUNK_ID_INDEX_RE.match(value)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 def _build_pipeline_metrics(
     *,
     chunks: list[Any],
@@ -272,12 +326,22 @@ def _build_pipeline_metrics(
     deduped_candidates: list[dict[str, Any]],
     errors: list[dict[str, Any]],
     learning_mode: str = "expression_mining",
+    format_retry_stats: _FormatRetryStats | None = None,
 ) -> dict[str, Any]:
     chunk_ids = {str(getattr(chunk, "chunk_id", "")) for chunk in chunks if str(getattr(chunk, "chunk_id", ""))}
     raw_by_chunk: dict[str, int] = {}
+    raw_candidates_unattributed = 0
+    raw_candidates_unknown_chunk_id = 0
+    raw_candidates_missing_chunk_id = 0
     for item in raw_candidates:
         cid = str(item.get("chunk_id", "")).strip()
         if not cid:
+            raw_candidates_unattributed += 1
+            raw_candidates_missing_chunk_id += 1
+            continue
+        if cid not in chunk_ids:
+            raw_candidates_unattributed += 1
+            raw_candidates_unknown_chunk_id += 1
             continue
         raw_by_chunk[cid] = raw_by_chunk.get(cid, 0) + 1
     empty_chunk_count = len([cid for cid in chunk_ids if raw_by_chunk.get(cid, 0) == 0])
@@ -360,21 +424,41 @@ def _build_pipeline_metrics(
         else 0.0
     )
     selected_by_chunk: dict[str, int] = {}
+    selected_candidates_unattributed = 0
+    selected_candidates_unknown_chunk_id = 0
+    selected_candidates_missing_chunk_id = 0
     for item in deduped_candidates:
         cid = str(item.get("chunk_id", "")).strip()
         if not cid:
+            selected_candidates_unattributed += 1
+            selected_candidates_missing_chunk_id += 1
+            continue
+        if cid not in chunk_ids:
+            selected_candidates_unattributed += 1
+            selected_candidates_unknown_chunk_id += 1
             continue
         selected_by_chunk[cid] = selected_by_chunk.get(cid, 0) + 1
-    avg_selected_per_chunk = (len(deduped_candidates) / len(chunks)) if chunks else 0.0
+    raw_candidates_attributed = sum(raw_by_chunk.values())
+    selected_candidates_attributed = sum(selected_by_chunk.values())
+    avg_selected_per_chunk = (selected_candidates_attributed / len(chunks)) if chunks else 0.0
 
-    avg_raw_per_chunk = (len(raw_candidates) / len(chunks)) if chunks else 0.0
+    avg_raw_per_chunk = (raw_candidates_attributed / len(chunks)) if chunks else 0.0
     pass_rate = (len(valid_candidates) / len(raw_candidates)) if raw_candidates else 0.0
+    stats = format_retry_stats or _FormatRetryStats()
     return {
         "learning_mode": learning_mode,
         "chunks_total": len(chunks),
         "raw_candidates": len(raw_candidates),
+        "raw_candidates_attributed": raw_candidates_attributed,
+        "raw_candidates_unattributed": raw_candidates_unattributed,
+        "raw_candidates_unknown_chunk_id": raw_candidates_unknown_chunk_id,
+        "raw_candidates_missing_chunk_id": raw_candidates_missing_chunk_id,
         "validated_candidates": len(valid_candidates),
         "deduped_candidates": len(deduped_candidates),
+        "selected_candidates_attributed": selected_candidates_attributed,
+        "selected_candidates_unattributed": selected_candidates_unattributed,
+        "selected_candidates_unknown_chunk_id": selected_candidates_unknown_chunk_id,
+        "selected_candidates_missing_chunk_id": selected_candidates_missing_chunk_id,
         "avg_raw_candidates_per_chunk": round(avg_raw_per_chunk, 4),
         "avg_selected_candidates_per_chunk": round(avg_selected_per_chunk, 4),
         "selected_candidates_per_chunk": selected_by_chunk,
@@ -398,7 +482,250 @@ def _build_pipeline_metrics(
         if deduped_candidates
         else 0.0,
         "expression_transfer_non_empty_ratio_by_taxonomy": transfer_non_empty_ratio_by_taxonomy,
+        "format_retry": {
+            "attempt1_fixed_count": stats.attempt1_fixed_count,
+            "llm_repair_success_count": stats.llm_repair_success_count,
+            "llm_regen_success_count": stats.llm_regen_success_count,
+            "total_extra_llm_calls": stats.total_extra_llm_calls,
+            "recovered_candidates": stats.recovered_candidates,
+        },
     }
+
+
+def _is_retryable_format_reason(reason: str) -> bool:
+    value = str(reason or "").strip().lower()
+    if not value:
+        return False
+    if not value.startswith("format:"):
+        return False
+    return any(value.startswith(prefix) for prefix in _FORMAT_RETRYABLE_REASONS_LOWER)
+
+
+def _split_sentences(text: str) -> list[str]:
+    value = str(text or "").strip()
+    if not value:
+        return []
+    # Keep this intentionally lightweight; validator remains the source of truth.
+    parts = re.split(r"(?<=[.!?])\s+", value)
+    cleaned = [part.strip() for part in parts if part and part.strip()]
+    return cleaned if cleaned else [value]
+
+
+def _trim_text_to_sentence_cap(text: str, max_sentences: int) -> str:
+    if max_sentences <= 0:
+        return str(text or "").strip()
+    sentences = _split_sentences(text)
+    if len(sentences) <= max_sentences:
+        return " ".join(sentences).strip()
+    cloze_idx = 0
+    for idx, sentence in enumerate(sentences):
+        if "{{c" in sentence.lower():
+            cloze_idx = idx
+            break
+    start = max(0, cloze_idx - (max_sentences - 1))
+    end = min(len(sentences), start + max_sentences)
+    start = max(0, end - max_sentences)
+    return " ".join(sentences[start:end]).strip()
+
+
+def _normalize_cloze_markup(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    normalized = value
+    normalized = re.sub(r"\{\{cN::", "{{c1::", normalized)
+    normalized = re.sub(r"\{\{cN:", "{{c1::", normalized)
+    normalized = re.sub(r"\{cN::", "{{c1::", normalized)
+    normalized = re.sub(r"\{c(\d+)::", r"{{c\1::", normalized)
+    normalized = re.sub(r"\{\{c(\d+)::([^}]+)\}", r"{{c\1::\2}}", normalized)
+
+    def _fmt(match: re.Match[str]) -> str:
+        idx = match.group(1)
+        body = re.sub(r"</?b>", "", match.group(2), flags=re.IGNORECASE).strip()
+        return f"{{{{c{idx}::<b>{body}</b>}}}}(hint)" if body else ""
+
+    normalized = _CLOZE_BLOCK_GENERIC_RE.sub(_fmt, normalized)
+    return normalized.strip()
+
+
+def _extract_cloze_phrases(text: str) -> list[str]:
+    phrases: list[str] = []
+    for match in _CLOZE_BLOCK_GENERIC_RE.finditer(str(text or "")):
+        body = re.sub(r"</?b>", "", match.group(2), flags=re.IGNORECASE).strip()
+        if body:
+            phrases.append(body)
+    return phrases
+
+
+def _normalize_candidate_shape(item: dict[str, Any]) -> dict[str, Any]:
+    normalized = copy.deepcopy(item)
+    target_phrases = normalized.get("target_phrases")
+    if isinstance(target_phrases, list):
+        normalized["target_phrases"] = [str(x).strip() for x in target_phrases if str(x).strip()]
+    elif isinstance(target_phrases, str):
+        normalized["target_phrases"] = [part.strip() for part in target_phrases.split(",") if part.strip()]
+    else:
+        normalized["target_phrases"] = []
+
+    phrase_types = normalized.get("phrase_types")
+    if isinstance(phrase_types, list):
+        normalized["phrase_types"] = [str(x).strip() for x in phrase_types if str(x).strip()]
+    elif isinstance(phrase_types, str):
+        normalized["phrase_types"] = [part.strip() for part in phrase_types.split(",") if part.strip()]
+    elif phrase_types is None:
+        normalized["phrase_types"] = []
+    else:
+        value = str(phrase_types).strip()
+        normalized["phrase_types"] = [value] if value else []
+    return normalized
+
+
+def _attempt_format_canonicalize(
+    *,
+    item: dict[str, Any],
+    reason: str,
+    max_sentences: int,
+) -> dict[str, Any]:
+    candidate = _normalize_candidate_shape(item)
+    reason_value = str(reason or "")
+
+    text = str(candidate.get("text", "")).strip()
+    original = str(candidate.get("original", "")).strip()
+    target_phrases = list(candidate.get("target_phrases") or [])
+
+    if reason_value.startswith("format:phrase_types must be in taxonomy:"):
+        candidate["phrase_types"] = []
+    if reason_value.startswith("format:phrase_types has too many labels"):
+        phrase_types = candidate.get("phrase_types")
+        if isinstance(phrase_types, list):
+            candidate["phrase_types"] = phrase_types[:2]
+        else:
+            candidate["phrase_types"] = []
+
+    if reason_value.startswith("format:target_phrases is empty or invalid"):
+        parsed = _extract_cloze_phrases(text)
+        if parsed:
+            candidate["target_phrases"] = parsed
+
+    if reason_value.startswith("format:missing cloze marker"):
+        if "{{cn:" in text.lower() or "{cn::" in text.lower():
+            text = _normalize_cloze_markup(text)
+        if "{{c" not in text.lower() and original:
+            text = original
+        candidate["text"] = text
+
+    if reason_value.startswith("format:cloze style must be {{cN::<b>...</b>}}(hint)"):
+        candidate["text"] = _normalize_cloze_markup(text)
+
+    match_sent = _FORMAT_RETRY_TEXT_EXCEEDS_RE.match(reason_value)
+    if match_sent:
+        cap = max(1, int(match_sent.group(1)))
+        candidate["text"] = _trim_text_to_sentence_cap(str(candidate.get("text", "")), cap)
+
+    match_min = _FORMAT_RETRY_MIN_CHARS_RE.match(reason_value)
+    if match_min:
+        min_chars = max(1, int(match_min.group(1)))
+        current = str(candidate.get("text", ""))
+        if len(current) < min_chars and original:
+            candidate["text"] = original
+
+    if "{{c" in str(candidate.get("text", "")).lower():
+        candidate["text"] = _normalize_cloze_markup(str(candidate.get("text", "")))
+
+    # Keep text compact if canonicalization expanded context too much.
+    candidate["text"] = _trim_text_to_sentence_cap(str(candidate.get("text", "")), max_sentences)
+
+    if not candidate.get("target_phrases"):
+        parsed = _extract_cloze_phrases(str(candidate.get("text", "")))
+        if parsed:
+            candidate["target_phrases"] = parsed
+
+    return candidate
+
+
+def _build_format_retry_messages(
+    *,
+    mode: str,
+    item: dict[str, Any],
+    reason: str,
+    cfg: AppConfig,
+    material_profile: str,
+    learning_mode: str,
+) -> list[dict[str, str]]:
+    taxonomy = ", ".join(normalize_phrase_types(list(item.get("phrase_types") or []), max_items=8) or [])
+    allowed_taxonomy = (
+        "metaphor_imagery, stance_positioning, concession_contrast, discourse_organizer, "
+        "abstraction_bridge, reusable_high_frequency_chunk, phrasal_verb, strong_collocation"
+    )
+    contract = (
+        "Return ONLY one JSON object. "
+        "Required keys: text, original, target_phrases, note_hint, phrase_types, expression_transfer. "
+        "text must include at least one cloze with style {{cN::<b>...</b>}}(hint). "
+        f"text must be <= {cfg.cloze_max_sentences} sentences. "
+        f"phrase_types must be 0-2 labels from: {allowed_taxonomy}. "
+        "target_phrases must be a non-empty JSON array of strings."
+    )
+    if mode == "regen":
+        task = "Regenerate a compliant candidate from original/chunk context."
+    else:
+        task = "Repair this candidate with minimal semantic change."
+    payload = {
+        "reason": reason,
+        "material_profile": material_profile,
+        "learning_mode": learning_mode,
+        "difficulty": cfg.cloze_difficulty,
+        "candidate": item,
+        "candidate_phrase_types_normalized": taxonomy,
+    }
+    return [
+        {
+            "role": "system",
+            "content": "You are a strict JSON repair assistant for language-learning cloze cards.",
+        },
+        {
+            "role": "user",
+            "content": f"{task}\n{contract}\nInput JSON:\n{json.dumps(payload, ensure_ascii=False)}",
+        },
+    ]
+
+
+def _attempt_llm_format_retry(
+    *,
+    client: OpenAICompatibleClient,
+    item: dict[str, Any],
+    reason: str,
+    cfg: AppConfig,
+    material_profile: str,
+    learning_mode: str,
+    mode: str,
+) -> dict[str, Any] | None:
+    messages = _build_format_retry_messages(
+        mode=mode,
+        item=item,
+        reason=reason,
+        cfg=cfg,
+        material_profile=material_profile,
+        learning_mode=learning_mode,
+    )
+    content = client.chat(messages, temperature=0.0, max_retries=1)
+    data = parse_json_content(content, expect_array=False)
+    if isinstance(data, list):
+        if not data:
+            return None
+        data = data[0]
+    if not isinstance(data, dict):
+        return None
+    repaired = _normalize_candidate_shape(data)
+
+    # Preserve pipeline identity/context fields from the source candidate.
+    for key in ("chunk_id", "chunk_text"):
+        if key in item and key not in repaired:
+            repaired[key] = item[key]
+    if not str(repaired.get("original", "")).strip():
+        repaired["original"] = str(item.get("original", "")).strip()
+    if not str(repaired.get("text", "")).strip():
+        repaired["text"] = str(item.get("text", "")).strip()
+    return repaired
 
 
 def _collect_valid_candidates(
@@ -408,27 +735,137 @@ def _collect_valid_candidates(
     material_profile: str,
     learning_mode: str,
     errors: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], int, str | None]:
+    retry_client: OpenAICompatibleClient | None = None,
+) -> tuple[list[dict[str, Any]], int, str | None, str | None, _FormatRetryStats]:
     valid_candidates: list[dict[str, Any]] = []
     validation_rejects = 0
     first_validation_reason: str | None = None
+    first_final_reject_reason: str | None = None
+    retry_stats = _FormatRetryStats()
+
     for item in raw_candidates:
+        current_item = item
         ok, reason = validate_text_candidate(
-            item,
+            current_item,
             max_sentences=cfg.cloze_max_sentences,
             min_chars=cfg.cloze_min_chars,
             difficulty=cfg.cloze_difficulty,
             material_profile=material_profile,
             learning_mode=learning_mode,
         )
-        if not ok:
-            validation_rejects += 1
-            if first_validation_reason is None:
-                first_validation_reason = reason
-            errors.append({"stage": "validate_text", "reason": reason, "item": item})
+        if ok:
+            valid_candidates.append(current_item)
             continue
-        valid_candidates.append(item)
-    return valid_candidates, validation_rejects, first_validation_reason
+
+        if first_validation_reason is None:
+            first_validation_reason = reason
+        last_reason = reason
+        retry_recovered = False
+        retry_candidate = current_item
+        retry_max = max(0, int(cfg.validate_format_retry_max or 0))
+
+        if cfg.validate_format_retry_enable and _is_retryable_format_reason(reason) and retry_max > 0:
+            for attempt in range(1, retry_max + 1):
+                retry_action = "canonicalize"
+                try:
+                    if attempt == 1:
+                        retry_candidate = _attempt_format_canonicalize(
+                            item=retry_candidate,
+                            reason=last_reason,
+                            max_sentences=cfg.cloze_max_sentences,
+                        )
+                    elif attempt == 2 and cfg.validate_format_retry_llm_enable:
+                        retry_action = "llm_repair"
+                        retry_stats.total_extra_llm_calls += 1
+                        retry_candidate = _attempt_llm_format_retry(
+                            client=retry_client or OpenAICompatibleClient(cfg),
+                            item=retry_candidate,
+                            reason=last_reason,
+                            cfg=cfg,
+                            material_profile=material_profile,
+                            learning_mode=learning_mode,
+                            mode="repair",
+                        ) or retry_candidate
+                    elif attempt >= 3 and cfg.validate_format_retry_llm_enable:
+                        retry_action = "llm_regen"
+                        retry_stats.total_extra_llm_calls += 1
+                        retry_candidate = _attempt_llm_format_retry(
+                            client=retry_client or OpenAICompatibleClient(cfg),
+                            item=retry_candidate,
+                            reason=last_reason,
+                            cfg=cfg,
+                            material_profile=material_profile,
+                            learning_mode=learning_mode,
+                            mode="regen",
+                        ) or retry_candidate
+                    else:
+                        break
+                except ClawLinguaError as exc:
+                    errors.append(
+                        {
+                            "stage": "validate_text_retry_attempt",
+                            "attempt": attempt,
+                            "retry_action": retry_action,
+                            "original_reason": reason,
+                            "error": exc.to_lines(),
+                            "item": copy.deepcopy(retry_candidate),
+                        }
+                    )
+                    continue
+
+                ok_retry, retry_reason = validate_text_candidate(
+                    retry_candidate,
+                    max_sentences=cfg.cloze_max_sentences,
+                    min_chars=cfg.cloze_min_chars,
+                    difficulty=cfg.cloze_difficulty,
+                    material_profile=material_profile,
+                    learning_mode=learning_mode,
+                )
+                if ok_retry:
+                    if attempt == 1:
+                        retry_stats.attempt1_fixed_count += 1
+                    elif retry_action == "llm_repair":
+                        retry_stats.llm_repair_success_count += 1
+                    else:
+                        retry_stats.llm_regen_success_count += 1
+                    errors.append(
+                        {
+                            "stage": "validate_text_retry_recovered",
+                            "attempt": attempt,
+                            "retry_action": retry_action,
+                            "original_reason": reason,
+                            "item": copy.deepcopy(retry_candidate),
+                        }
+                    )
+                    valid_candidates.append(retry_candidate)
+                    retry_recovered = True
+                    break
+                last_reason = retry_reason
+                errors.append(
+                    {
+                        "stage": "validate_text_retry_attempt",
+                        "attempt": attempt,
+                        "retry_action": retry_action,
+                        "original_reason": reason,
+                        "reason": retry_reason,
+                        "item": copy.deepcopy(retry_candidate),
+                    }
+                )
+
+        if retry_recovered:
+            continue
+        validation_rejects += 1
+        if first_final_reject_reason is None:
+            first_final_reject_reason = last_reason
+        errors.append(
+            {
+                "stage": "validate_text",
+                "reason": last_reason,
+                "original_reason": reason,
+                "item": copy.deepcopy(retry_candidate),
+            }
+        )
+    return valid_candidates, validation_rejects, first_validation_reason, first_final_reject_reason, retry_stats
 
 
 def _collect_fallback_raw_candidates(
@@ -559,13 +996,22 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
 
     run_ctx = create_run_context(cfg, name="build_deck", run_id=options.run_id)
     template = load_anki_template(cfg.resolve_path(cfg.anki_template))
-    cloze_prompt_path = cfg.resolve_cloze_prompt_path(
-        material_profile=material_profile,
-        difficulty=cfg.cloze_difficulty,
-        learning_mode=learning_mode,
+    extract_prompt_path = (
+        options.extract_prompt
+        if options.extract_prompt is not None
+        else cfg.resolve_extract_prompt_path(
+            material_profile=material_profile,
+            difficulty=cfg.cloze_difficulty,
+            learning_mode=learning_mode,
+        )
     )
-    cloze_prompt = load_prompt(cfg.resolve_path(cloze_prompt_path), prompt_lang=cfg.prompt_lang)
-    translate_prompt = load_prompt(cfg.resolve_path(cfg.prompt_translate), prompt_lang=cfg.prompt_lang)
+    explain_prompt_path = (
+        options.explain_prompt
+        if options.explain_prompt is not None
+        else cfg.resolve_explain_prompt_path()
+    )
+    extract_prompt = load_prompt(cfg.resolve_path(extract_prompt_path), prompt_lang=cfg.prompt_lang)
+    explain_prompt = load_prompt(cfg.resolve_path(explain_prompt_path), prompt_lang=cfg.prompt_lang)
 
     document = _build_document(cfg, run_ctx.run_id, options)
     logger.info('ingest complete | title="%s"', document.title or "")
@@ -593,6 +1039,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     ranked_candidates: list[dict[str, Any]] = []
     cards: list[CardRecord] = []
     chunks: list = []
+    format_retry_stats = _FormatRetryStats()
 
     def _save_failure_snapshot(exc: ClawLinguaError) -> None:
         if not save_intermediate:
@@ -643,8 +1090,6 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
 
     # LLM chunk batch：一次可以处理多个 chunk。
     batch_size = max(1, int(cfg.llm_chunk_batch_size or 1))
-    if cfg.cloze_difficulty == "advanced" or material_profile == "transcript_dialogue":
-        batch_size = 1
 
     def _iter_batches(items: list[Any], size: int) -> list[list[Any]]:
         if size <= 1:
@@ -653,10 +1098,27 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
 
     def _append_raw_items(batch: list[Any], items: list[dict[str, Any]]) -> None:
         chunk_map = {c.chunk_id: c for c in batch}
+        chunk_index_map: dict[int, Any | None] = {}
+        for chunk in batch:
+            idx = _extract_chunk_index(chunk.chunk_id)
+            if idx is None:
+                continue
+            if idx in chunk_index_map:
+                chunk_index_map[idx] = None
+            else:
+                chunk_index_map[idx] = chunk
         for item in items:
             cid = str(item.get("chunk_id") or "").strip()
             chunk = chunk_map.get(cid) if cid else None
-            if len(batch) > 1 and chunk is None:
+            if chunk is None and cid:
+                idx = _extract_chunk_index(cid)
+                if idx is not None:
+                    mapped = chunk_index_map.get(idx)
+                    if mapped is not None:
+                        chunk = mapped
+            if chunk is None and len(batch) == 1:
+                chunk = batch[0]
+            if chunk is None:
                 errors.append(
                     {
                         "stage": "cloze_batch_mapping",
@@ -676,9 +1138,8 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 )
                 _save_failure_snapshot(err)
                 raise err
-            if chunk is not None:
-                item["chunk_id"] = chunk.chunk_id
-                item["chunk_text"] = chunk.source_text
+            item["chunk_id"] = chunk.chunk_id
+            item["chunk_text"] = chunk.source_text
             raw_candidates.append(item)
 
     for batch in _iter_batches(chunks, batch_size):
@@ -687,7 +1148,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 chunk = batch[0]
                 items = generate_cloze_candidates_for_chunk(
                     client=client,
-                    prompt=cloze_prompt,
+                    prompt=extract_prompt,
                     document=document,
                     chunk=chunk,
                     temperature=options.temperature,
@@ -695,7 +1156,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             else:
                 items = generate_cloze_candidates_for_batch(
                     client=client,
-                    prompt=cloze_prompt,
+                    prompt=extract_prompt,
                     document=document,
                     chunks=batch,
                     temperature=options.temperature,
@@ -713,20 +1174,22 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 }
             )
 
-    valid_candidates, validation_rejects, first_validation_reason = _collect_valid_candidates(
+    valid_candidates, validation_rejects, first_validation_reason, first_final_reject_reason, retry_stats_initial = _collect_valid_candidates(
         raw_candidates=raw_candidates,
         cfg=cfg,
         material_profile=material_profile,
         learning_mode=learning_mode,
         errors=errors,
+        retry_client=client,
     )
+    format_retry_stats.absorb(retry_stats_initial)
 
     if validation_rejects:
         logger.warning(
-            "validation filtered candidates | rejected=%d raw=%d first_reason=%s",
+            "validation filtered candidates | rejected=%d raw=%d first_final_reject_reason=%s",
             validation_rejects,
             len(raw_candidates),
-            first_validation_reason or "",
+            first_final_reject_reason or "",
         )
 
     if not valid_candidates:
@@ -738,7 +1201,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         )
         fallback_raw = _collect_fallback_raw_candidates(
             client=client,
-            prompt=cloze_prompt,
+            prompt=extract_prompt,
             document=document,
             chunks=chunks,
             temperature=0.1 if options.temperature is None else options.temperature,
@@ -746,19 +1209,21 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         )
 
         raw_candidates.extend(fallback_raw)
-        valid_candidates, _, first_validation_reason = _collect_valid_candidates(
+        valid_candidates, _, first_validation_reason, first_final_reject_reason, retry_stats_fallback = _collect_valid_candidates(
             raw_candidates=fallback_raw,
             cfg=cfg,
             material_profile=material_profile,
             learning_mode=learning_mode,
             errors=errors,
+            retry_client=client,
         )
+        format_retry_stats.absorb(retry_stats_fallback)
 
     if not valid_candidates and not (cfg.allow_empty_deck or options.continue_on_error):
         err = build_error(
             error_code="CARD_VALIDATION_FAILED",
             cause="All candidates failed validation.",
-            detail=f"raw={len(raw_candidates)}, first_reason={first_validation_reason or 'unknown'}",
+            detail=f"raw={len(raw_candidates)}, first_final_reject_reason={first_final_reject_reason or 'unknown'}",
             next_steps=[
                 "Adjust prompt constraints",
                 "Lower CLAWLINGUA_CLOZE_MIN_CHARS if needed",
@@ -848,7 +1313,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
             try:
                 batch_results = generate_translation_batch(
                     client=translate_client,
-                    prompt=translate_prompt,
+                    prompt=explain_prompt,
                     document=document,
                     chunk_text="",
                     text_originals=originals,
@@ -1100,12 +1565,20 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         deduped_candidates=deduped,
         errors=errors,
         learning_mode=learning_mode,
+        format_retry_stats=format_retry_stats,
     )
     pipeline_metrics["prompt_info"] = {
-        "cloze_prompt_name": cloze_prompt.name,
-        "cloze_prompt_version": cloze_prompt.version,
-        "translate_prompt_name": translate_prompt.name,
-        "translate_prompt_version": translate_prompt.version,
+        "extraction_prompt_name": extract_prompt.name,
+        "extraction_prompt_version": extract_prompt.version,
+        "extraction_prompt_path": str(cfg.resolve_path(extract_prompt_path)),
+        "explanation_prompt_name": explain_prompt.name,
+        "explanation_prompt_version": explain_prompt.version,
+        "explanation_prompt_path": str(cfg.resolve_path(explain_prompt_path)),
+        # Backward-compatible aliases.
+        "cloze_prompt_name": extract_prompt.name,
+        "cloze_prompt_version": extract_prompt.version,
+        "translate_prompt_name": explain_prompt.name,
+        "translate_prompt_version": explain_prompt.version,
     }
     pipeline_metrics["difficulty"] = cfg.cloze_difficulty
 

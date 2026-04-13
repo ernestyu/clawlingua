@@ -50,7 +50,9 @@ def generate_cloze_candidates_for_chunk(
         original = item.get("original") or item.get("text_original") or ""
         target_phrases = item.get("target_phrases") or []
         note_hint = item.get("note_hint") or item.get("note") or ""
-        chunk_id = item.get("chunk_id") or chunk.chunk_id
+        # Single-chunk generation must always be attributed to that chunk.
+        # Model-supplied chunk_id values are treated as untrusted.
+        chunk_id = chunk.chunk_id
         candidate = {
             "chunk_id": str(chunk_id).strip(),
             "text": str(text).strip(),

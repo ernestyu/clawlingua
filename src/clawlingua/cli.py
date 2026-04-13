@@ -90,6 +90,8 @@ def init(
             Path("./prompts/cloze_transcript_reading_support_intermediate.json"),
             Path("./prompts/cloze_transcript_reading_support_advanced.json"),
             Path("./prompts/translate_rewrite.json"),
+            Path("./prompts/template_extraction.json"),
+            Path("./prompts/template_explanation.json"),
             Path("./templates/anki_cloze_default.json"),
         ]
         missing = [str(path) for path in required if not path.exists()]
@@ -140,22 +142,48 @@ def doctor(
             checks.append(("config:runtime", False, "; ".join(exc.to_lines())))
 
         try:
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_textbook))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_beginner))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_intermediate))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_advanced))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_beginner))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_intermediate))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_advanced))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_beginner))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_intermediate))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_advanced))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_beginner))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_intermediate))
-            load_prompt(cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_advanced))
-            load_prompt(cfg.resolve_path(cfg.prompt_translate))
-            checks.append(("prompt:schema", True, "ok"))
+            prompt_dir = cfg.resolve_path(Path("./prompts"))
+            if not prompt_dir.exists():
+                raise build_error(
+                    error_code="PROMPT_DIR_MISSING",
+                    cause="Prompt directory is missing.",
+                    detail=f"path={prompt_dir}",
+                    next_steps=["Restore the `prompts/` directory from repository defaults"],
+                    exit_code=ExitCode.CONFIG_ERROR,
+                )
+            prompt_files = [
+                path
+                for path in sorted(prompt_dir.glob("*.json"))
+                if path.name not in {"user_prompt_overrides.json"}
+            ]
+            if not prompt_files:
+                raise build_error(
+                    error_code="PROMPT_FILES_MISSING",
+                    cause="No prompt files found.",
+                    detail=f"path={prompt_dir}",
+                    next_steps=["Add at least one extraction and one explanation prompt JSON file"],
+                    exit_code=ExitCode.CONFIG_ERROR,
+                )
+            extraction_count = 0
+            explanation_count = 0
+            for path in prompt_files:
+                spec = load_prompt(path)
+                mode = str(spec.mode).strip().lower()
+                if path.name in {"template_extraction.json", "template_explanation.json"}:
+                    continue
+                if mode == "extraction":
+                    extraction_count += 1
+                elif mode == "explanation":
+                    explanation_count += 1
+            if extraction_count < 1 or explanation_count < 1:
+                raise build_error(
+                    error_code="PROMPT_MODE_COUNT_INVALID",
+                    cause="Prompt mode coverage is incomplete.",
+                    detail=f"extraction={extraction_count}, explanation={explanation_count}",
+                    next_steps=["Keep at least one extraction and one explanation prompt file"],
+                    exit_code=ExitCode.CONFIG_ERROR,
+                )
+            checks.append(("prompt:schema", True, f"files={len(prompt_files)} extraction={extraction_count} explanation={explanation_count}"))
         except ClawLinguaError as exc:
             checks.append(("prompt:schema", False, "; ".join(exc.to_lines())))
 
@@ -319,6 +347,16 @@ def build_deck(
         "--prompt-lang",
         help="Prompt language for multi-lingual prompts (en|zh). Overrides CLAWLINGUA_PROMPT_LANG.",
     ),
+    extract_prompt: Path | None = typer.Option(
+        None,
+        "--extract-prompt",
+        help="Override extraction prompt file path for this run.",
+    ),
+    explain_prompt: Path | None = typer.Option(
+        None,
+        "--explain-prompt",
+        help="Override explanation prompt file path for this run.",
+    ),
     save_intermediate: bool | None = typer.Option(None, "--save-intermediate/--no-save-intermediate"),
     continue_on_error: bool = typer.Option(False, "--continue-on-error"),
     verbose: bool = typer.Option(False, "--verbose"),
@@ -385,6 +423,8 @@ def build_deck(
                 max_notes=max_notes,
                 temperature=temperature,
                 cloze_difficulty=cloze_difficulty,
+                extract_prompt=extract_prompt,
+                explain_prompt=explain_prompt,
                 save_intermediate=save_intermediate,
                 continue_on_error=continue_on_error,
             ),

@@ -1,7 +1,7 @@
 {
-    "name":  "cloze_contextual",
+    "name": "template_extraction",
     "version":  "0.1.0",
-    "description":  "Generate contextual cloze text for Anki Text field.",
+    "description": "Default template prompt for creating extraction prompts.",
     "mode": "extraction",
     "system_prompt":  "You are a language-learning content editor. Output a JSON array only. Do not output explanations or code fences.",
     "user_prompt_template":  {
@@ -28,6 +28,7 @@
                    "expect_json_array":  true
                }
 }
+
 
 
 

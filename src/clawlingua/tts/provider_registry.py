@@ -11,7 +11,12 @@ from .edge_tts_provider import EdgeTTSProvider
 
 def get_tts_provider(cfg: AppConfig) -> BaseTTSProvider:
     if cfg.tts_provider == "edge_tts":
-        return EdgeTTSProvider(rate=cfg.tts_rate, volume=cfg.tts_volume)
+        return EdgeTTSProvider(
+            rate=cfg.tts_rate,
+            volume=cfg.tts_volume,
+            retry_attempts=cfg.tts_retry_attempts,
+            retry_backoff_seconds=cfg.tts_retry_backoff_seconds,
+        )
     raise build_error(
         error_code="TTS_PROVIDER_UNSUPPORTED",
         cause="TTS provider 不支持。",
@@ -19,4 +24,3 @@ def get_tts_provider(cfg: AppConfig) -> BaseTTSProvider:
         next_steps=["将 CLAWLINGUA_TTS_PROVIDER 设置为 edge_tts"],
         exit_code=ExitCode.CONFIG_ERROR,
     )
-

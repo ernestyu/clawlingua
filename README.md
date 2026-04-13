@@ -55,6 +55,8 @@ python -m clawlingua.cli init
   - `./prompts/cloze_transcript_advanced.json`
   - `./prompts/cloze_textbook_examples.json`
   - `./prompts/translate_rewrite.json`
+  - `./prompts/template_extraction.json`
+  - `./prompts/template_explanation.json`
   - `./templates/anki_cloze_default.json`
 
 Edit `.env` (or copy `ENV_EXAMPLE.md` content into your own env file) to point at
@@ -139,13 +141,21 @@ CLAWLINGUA_CLOZE_MAX_PER_CHUNK=4
 
 # LLM chunk batch size: how many chunks to process per LLM call; 1 = per-chunk
 CLAWLINGUA_LLM_CHUNK_BATCH_SIZE=1
+
+# Retry format-only validation failures (recover candidates rejected for format issues).
+CLAWLINGUA_VALIDATE_FORMAT_RETRY_ENABLE=true
+# Retry attempts after initial validation failure (0-3).
+CLAWLINGUA_VALIDATE_FORMAT_RETRY_MAX=3
+# Allow attempts >=2 to call LLM repair/regenerate.
+CLAWLINGUA_VALIDATE_FORMAT_RETRY_LLM_ENABLE=true
 ```
 
-- The LLM decides how many candidates to return per chunk (0–N).
+- The LLM decides how many candidates to return per chunk (0-N).
 - `CLOZE_MAX_PER_CHUNK` is a **safety cap** applied *after* validation and
   dedupe; set to `0` or empty to disable.
 - Difficulty is now a first-class strategy selector (not only a prompt hint):
-  it affects prompt family variant, chunk batching behavior, validation, and ranking.
+  it affects prompt family variant, validation, and ranking.
+- `CLAWLINGUA_LLM_CHUNK_BATCH_SIZE` is always user-respected (no profile/difficulty hard override).
 
 For `material_profile=textbook_examples`, if `CLOZE_MIN_CHARS` is above 120
 and you do not override with `--cloze-min-chars`, the run is rejected.
@@ -184,6 +194,9 @@ CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_BEGINNER=./prompts/cloze_transcript_beginner.
 CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE=./prompts/cloze_transcript_intermediate.json
 CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_ADVANCED=./prompts/cloze_transcript_advanced.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
+# Preferred default prompt files by role (used when no CLI override)
+CLAWLINGUA_EXTRACT_PROMPT=
+CLAWLINGUA_EXPLAIN_PROMPT=
 CLAWLINGUA_PROMPT_LANG=zh
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
@@ -206,6 +219,9 @@ CLAWLINGUA_DEFAULT_DECK_NAME=ClawLingua Default Deck
   - transcript: `cloze_transcript_{beginner|intermediate|advanced}.json`
   - textbook_examples: `cloze_textbook_examples.json`
 - `CLAWLINGUA_CONTENT_PROFILE` is kept as a backward-compatible alias.
+- `CLAWLINGUA_EXTRACT_PROMPT` / `CLAWLINGUA_EXPLAIN_PROMPT` can pin default
+  prompt files directly (higher priority than profile-chain defaults, lower
+  priority than CLI `--extract-prompt` / `--explain-prompt`).
 - `CLAWLINGUA_PROMPT_LANG` controls which language variant is used for multi-lingual prompts (`en` or `zh`), and can be overridden by `--prompt-lang`.
 
 ### 2.7 TTS (edge_tts)
@@ -255,7 +271,7 @@ The expected output is **JSON array**, each element roughly:
 ```json
 {
   "chunk_id": "chunk_0001_abcd12",
-  "text": "The more {{c1::<b>whimsical explanation</b>}}(异想天开的解释) is that maybe RL training makes the models a little too {{c2::<b>single-minded</b>}}(钻牛角尖) and narrowly focused.",
+  "text": "The more {{c1::<b>whimsical explanation</b>}}(target-lang hint) is that maybe RL training makes the models a little too {{c2::<b>single-minded</b>}}(target-lang hint) and narrowly focused.",
   "original": "The more whimsical explanation is that maybe RL training makes the models a little too single-minded and narrowly focused.",
   "target_phrases": ["whimsical explanation", "single-minded"],
   "note_hint": "optional short hint"
@@ -265,17 +281,17 @@ The expected output is **JSON array**, each element roughly:
 Key rules (enforced via prompt + validator):
 
 - `text` must contain at least one cloze:
-  - cloze syntax: `{{cN::...}}` where N = 1, 2, 3…
+  - cloze syntax: `{{cN::...}}` where N = 1, 2, 3...
   - cloze **inside** uses `<b>...</b>` to emphasize the phrase.
   - cloze is immediately followed by a short explanation in parentheses:
-    - `{{c1::<b>whimsical explanation</b>}}(异想天开的解释)`.
+    - `{{c1::<b>whimsical explanation</b>}}(target-lang hint)`.
 - `original` must not contain any cloze markers or HTML.
-- Each chunk may produce 0–4 high-quality cloze candidates.
+- Each chunk may produce 0-4 high-quality cloze candidates.
 - Each candidate may contain multiple clozes (e.g. c1 and c2 in the same sentence).
 
 The validator further:
 
-- normalizes single-brace clozes (`{c1::...}` → `{{c1::...}}`);
+- normalizes single-brace clozes (`{c1::...}` -> `{{c1::...}}`);
 - auto-injects a `{{c1::...}}` cloze from `target_phrases` when text has no clozes
   but phrases are present (fallback only);
 - rejects candidates that are too short (`len(text) < CLOZE_MIN_CHARS`) or exceed
@@ -313,7 +329,7 @@ the LLM should return a JSON array in the same order:
 Validator ensures:
 
 - non-empty `translation`;
-- no `"翻译:"` or `"翻译："` prefixes;
+- no translation-prefix artifacts like `"Translation:"`;
 - no Markdown `**` (HTML `<b>` is allowed).
 
 Error/retry semantics:
@@ -381,6 +397,8 @@ python -m clawlingua.cli build deck INPUT \
   --temperature 0.2 \
   --difficulty beginner|intermediate|advanced \
   --prompt-lang en|zh \
+  --extract-prompt ./prompts/cloze_prose_intermediate.json \
+  --explain-prompt ./prompts/translate_rewrite.json \
   --save-intermediate \
   --continue-on-error \
   --debug
@@ -396,6 +414,8 @@ Where:
 - `--input-char-limit` lets you process only the first N characters for quick tests.
 - `--difficulty` overrides `CLAWLINGUA_CLOZE_DIFFICULTY`.
 - `--prompt-lang` overrides `CLAWLINGUA_PROMPT_LANG` for multi-lingual prompts.
+- `--extract-prompt` overrides extraction prompt file for this run.
+- `--explain-prompt` overrides explanation prompt file for this run.
 - `--max-chars` overrides `CLAWLINGUA_CHUNK_MAX_CHARS` for this run.
 - `--cloze-min-chars` overrides `CLAWLINGUA_CLOZE_MIN_CHARS` for this run.
 - In `textbook_examples` profile, runs are rejected when env `CLOZE_MIN_CHARS > 120`
@@ -511,26 +531,27 @@ This starts a Gradio app bound to `127.0.0.1:7860`. Open
 
 The web UI has three tabs:
 
-- **Run** — upload a `.txt`/`.md`/`.epub` file, select source/target language,
+- **Run** - upload a `.txt`/`.md`/`.epub` file, select source/target language,
   content profile, difficulty, and per-run overrides (max notes, input char
   limit, cloze min chars, chunk max chars, temperature). The backend calls the
   same `run_build_deck` pipeline and writes intermediate data to
   `CLAWLINGUA_OUTPUT_DIR/<run_id>` and the final deck to
   `CLAWLINGUA_EXPORT_DIR/<run_id>/output.apkg`.
-- **Config** — a `.env` editor for common `CLAWLINGUA_*` settings (LLM
+- **Config** - a `.env` editor for common `CLAWLINGUA_*` settings (LLM
   endpoints, chunk/cloze defaults, prompt language, output/log directories,
   default deck name, TTS, etc.). Saving changes writes a new `.env`, validates
   it via `clawlingua.config.validate_base_config` + `validate_runtime_config`,
   and rolls back on failure. The "Load defaults" button loads values from
   `ENV_EXAMPLE.md` into the form without writing to disk. The Config tab also
-  provides "List models" / "Test connectivity" helpers for both the primary
-  LLM and the translation LLM using their `/models` endpoints.
-- **Prompt** — inspect and edit prompt JSON files
-  (`cloze_contextual.json`, `cloze_textbook_examples.json`,
-  `translate_rewrite.json`), switch between them, view multi-lingual prompt
-  content, validate against the expected schema, and save changes when the JSON
-  is valid (with automatic backups of previous versions).
-
+  provides "List models" / "Test connectivity" helpers for both the Extraction
+  LLM and the Explanation LLM using their `/models` endpoints, and includes
+  `CLAWLINGUA_EXTRACT_PROMPT` / `CLAWLINGUA_EXPLAIN_PROMPT` dropdowns.
+- **Prompt** - manage prompt files in `./prompts` with `New / Save / Rename / Delete`.
+  New prompt creation loads role templates (`template_extraction.json` or
+  `template_explanation.json`) based on selected Prompt type
+  (Extraction/Explanation). Save/Delete require explicit confirmation in the UI.
+  Delete is guarded: the app refuses to remove the last Extraction prompt or the
+  last Explanation prompt.
 The web UI is optional; OpenClaw skills and automated usage should continue
 calling the CLI directly.
 
@@ -545,3 +566,4 @@ calling the CLI directly.
   extend the project, consider reintroducing a focused test suite.
 
 For a Chinese overview and usage guide, see [`README_zh.md`](./README_zh.md).
+

@@ -41,6 +41,21 @@ _HTML_BLOCK_TAG_RE = re.compile(
 )
 _HTML_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>[\s\S]*?</\1>", re.IGNORECASE)
 _HTML_COMMENT_RE = re.compile(r"<!--[\s\S]*?-->", re.MULTILINE)
+_REPLACEMENT_CHAR_RE = re.compile(r"\uFFFD+")
+_REPLACEMENT_CONTRACTION_RE = re.compile(
+    r"(?<=[A-Za-z])\uFFFD+(?=(?:s|t|m|d|ll|re|ve)\b)",
+    re.IGNORECASE,
+)
+_LEADING_BROKEN_IM_RE = re.compile(r"(?<!\w)\?['’]?m\b", re.IGNORECASE)
+_BROKEN_APOSTROPHE_SPACING_RE = re.compile(r"\b([A-Za-z]+)[’']\s+(ll|re|ve|d|m|s|t)\b", re.IGNORECASE)
+_BROKEN_YOURE_RE = re.compile(r"\bYoure\b")
+
+_COMMON_MOJIBAKE_REPLACEMENTS = (
+    ("隆炉", "'"),
+    ("隆陋", "—"),
+    ("鈥?", "—"),
+    ("鈥", "—"),
+)
 
 
 @dataclass(frozen=True)
@@ -102,8 +117,31 @@ def _normalize_transcript_line(line: str) -> str:
     return value.strip()
 
 
+def _repair_common_encoding_noise(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+
+    for src, dst in _COMMON_MOJIBAKE_REPLACEMENTS:
+        value = value.replace(src, dst)
+
+    # Keep likely contractions/possessives, e.g. John��s -> John's.
+    value = _REPLACEMENT_CONTRACTION_RE.sub("'", value)
+    # Remaining replacement chars are treated as punctuation separators.
+    value = _REPLACEMENT_CHAR_RE.sub(" — ", value)
+
+    # Common OCR glitches in conversation material.
+    value = _LEADING_BROKEN_IM_RE.sub("I'm", value)
+    value = _BROKEN_APOSTROPHE_SPACING_RE.sub(r"\1'\2", value)
+    value = _BROKEN_YOURE_RE.sub("You're", value)
+    value = re.sub(r"\s*—\s*", " — ", value)
+    value = re.sub(r"[ \t]{2,}", " ", value)
+    return value
+
+
 def strip_markdown_to_text(text: str) -> str:
     value = text.replace("\r\n", "\n").replace("\r", "\n")
+    value = _repair_common_encoding_noise(value)
     value = _MD_FENCE_RE.sub("\n", value)
     value = _MD_IMAGE_RE.sub(r"\1", value)
     value = _MD_LINK_RE.sub(r"\1", value)
@@ -122,6 +160,7 @@ def strip_markdown_to_text(text: str) -> str:
 
 def strip_html_to_text(text: str) -> str:
     value = text.replace("\r\n", "\n").replace("\r", "\n")
+    value = _repair_common_encoding_noise(value)
     value = _HTML_COMMENT_RE.sub("\n", value)
     value = _HTML_SCRIPT_STYLE_RE.sub("\n", value)
     value = _HTML_BLOCK_TAG_RE.sub("\n", value)
@@ -132,6 +171,7 @@ def strip_html_to_text(text: str) -> str:
 
 def normalize_text(text: str, *, options: NormalizeOptions | None = None) -> str:
     cfg = options or NormalizeOptions()
+    text = _repair_common_encoding_noise(text)
     text = normalize_paragraph_text(text)
     raw_lines = [line.strip() for line in text.splitlines()]
 

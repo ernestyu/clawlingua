@@ -1,4 +1,4 @@
-"""Local-only web UI for ClawLingua.
+﻿"""Local-only web UI for ClawLingua.
 
 This module exposes a thin Gradio-based frontend over the existing
 `clawlingua` CLI/pipeline. It does **not** change CLI behavior and is
@@ -43,8 +43,13 @@ logger = logging.getLogger("clawlingua.web")
 
 _SUPPORTED_UI_LANGS = {"en", "zh"}
 _ENV_LINE_RE = re.compile(r"^\s*(CLAWLINGUA_[A-Z0-9_]+)\s*=\s*(.*)\s*$")
-_PROMPT_DEFAULTS_FILE = Path("./prompts/user_prompt_overrides.json")
-_PROMPT_DEFAULTS_VERSION = 1
+_PROMPT_DIR = Path("./prompts")
+_PROMPT_META_FILENAMES = {"user_prompt_overrides.json"}
+_PROMPT_TEMPLATE_FILENAMES = {"template_extraction.json", "template_explanation.json"}
+_PROMPT_TEMPLATE_BY_MODE = {
+    "extraction": Path("./prompts/template_extraction.json"),
+    "explanation": Path("./prompts/template_explanation.json"),
+}
 _ZH_I18N = {
     "UI language": "\u754c\u9762\u8bed\u8a00",
     "Run": "\u8fd0\u884c",
@@ -183,6 +188,32 @@ _ZH_I18N = {
     "Prompt template saved.": "Prompt \u6a21\u677f\u5df2\u4fdd\u5b58\u3002",
     "Prompt template restored from default.": "\u5df2\u4ece\u9ed8\u8ba4\u6a21\u677f\u8fd8\u539f Prompt\u3002",
     "Backup created": "\u5df2\u521b\u5efa\u5907\u4efd",
+    "Prompt type": "\u63d0\u793a\u8bcd\u7c7b\u578b",
+    "New": "\u65b0\u5efa",
+    "Rename": "\u91cd\u547d\u540d",
+    "Delete": "\u5220\u9664",
+    "Confirm save": "\u786e\u8ba4\u4fdd\u5b58",
+    "Confirm delete": "\u786e\u8ba4\u5220\u9664",
+    "Please confirm save first.": "\u8bf7\u5148\u786e\u8ba4\u4fdd\u5b58\u3002",
+    "Please confirm delete first.": "\u8bf7\u5148\u786e\u8ba4\u5220\u9664\u3002",
+    "Prompt file name is empty.": "\u63d0\u793a\u8bcd\u6587\u4ef6\u540d\u4e3a\u7a7a\u3002",
+    "Prompt file already exists.": "\u63d0\u793a\u8bcd\u6587\u4ef6\u5df2\u5b58\u5728\u3002",
+    "Prompt file created.": "\u63d0\u793a\u8bcd\u6587\u4ef6\u5df2\u521b\u5efa\u3002",
+    "Prompt file renamed.": "\u63d0\u793a\u8bcd\u6587\u4ef6\u5df2\u91cd\u547d\u540d\u3002",
+    "Prompt file deleted.": "\u63d0\u793a\u8bcd\u6587\u4ef6\u5df2\u5220\u9664\u3002",
+    "Cannot delete the last Extraction prompt.": "\u4e0d\u80fd\u5220\u9664\u6700\u540e\u4e00\u4e2a\u63d0\u53d6\u63d0\u793a\u8bcd\u3002",
+    "Cannot delete the last Explanation prompt.": "\u4e0d\u80fd\u5220\u9664\u6700\u540e\u4e00\u4e2a\u89e3\u91ca\u63d0\u793a\u8bcd\u3002",
+    "Template prompt file missing.": "\u6a21\u677f\u63d0\u793a\u8bcd\u6587\u4ef6\u4e0d\u5b58\u5728\u3002",
+    "New prompt file name": "\u65b0\u63d0\u793a\u8bcd\u6587\u4ef6\u540d",
+    "Rename to": "\u91cd\u547d\u540d\u4e3a",
+    "Extraction prompt (run override)": "\u63d0\u53d6\u63d0\u793a\u8bcd\uff08\u8fd0\u884c\u8986\u76d6\uff09",
+    "Explanation prompt (run override)": "\u89e3\u91ca\u63d0\u793a\u8bcd\uff08\u8fd0\u884c\u8986\u76d6\uff09",
+    "Equivalent to CLI --extract-prompt.": "\u7b49\u4ef7\u4e8e\u547d\u4ee4\u884c --extract-prompt\u3002",
+    "Equivalent to CLI --explain-prompt.": "\u7b49\u4ef7\u4e8e\u547d\u4ee4\u884c --explain-prompt\u3002",
+    "Default extraction prompt path.": "\u9ed8\u8ba4\u63d0\u53d6\u63d0\u793a\u8bcd\u8def\u5f84\u3002",
+    "Default explanation prompt path.": "\u9ed8\u8ba4\u89e3\u91ca\u63d0\u793a\u8bcd\u8def\u5f84\u3002",
+    "Extraction": "\u63d0\u53d6",
+    "Explanation": "\u89e3\u91ca",
     "TTS voices (Edge)": "\u8bed\u97f3\u914d\u7f6e\uff08Edge\uff09",
     "Configure 4 voice slots used for random selection.": "\u914d\u7f6e 4 \u4e2a\u8bed\u97f3\u69fd\u4f4d\uff0c\u7528\u4e8e\u968f\u673a\u9009\u62e9\u3002",
     "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)": "\u5177\u4f53\u7684\u97f3\u8272\u53ef\u4ee5\u53c2\u8003[Edge TTS Voice Samples](https://tts.travisvn.com/)",
@@ -247,10 +278,15 @@ _EDITABLE_ENV_KEYS = [
     "CLAWLINGUA_CLOZE_MIN_CHARS",
     "CLAWLINGUA_CLOZE_MAX_PER_CHUNK",
     "CLAWLINGUA_LLM_CHUNK_BATCH_SIZE",
+    "CLAWLINGUA_VALIDATE_FORMAT_RETRY_ENABLE",
+    "CLAWLINGUA_VALIDATE_FORMAT_RETRY_MAX",
+    "CLAWLINGUA_VALIDATE_FORMAT_RETRY_LLM_ENABLE",
     "CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS",
     "CLAWLINGUA_CONTENT_PROFILE",
     "CLAWLINGUA_CLOZE_DIFFICULTY",
     "CLAWLINGUA_PROMPT_LANG",
+    "CLAWLINGUA_EXTRACT_PROMPT",
+    "CLAWLINGUA_EXPLAIN_PROMPT",
     # Paths & defaults
     "CLAWLINGUA_OUTPUT_DIR",
     "CLAWLINGUA_EXPORT_DIR",
@@ -360,9 +396,9 @@ def _save_env(updated: Dict[str, str]) -> str:
             env_file.write_text(original_text, encoding="utf-8")
         else:
             env_file.unlink(missing_ok=True)
-        return f"❌ Failed to save config: {exc}"
+        return f"鉂?Failed to save config: {exc}"
 
-    return "✅ Config saved and validated."
+    return "鉁?Config saved and validated."
 
 
 def _run_single_build(
@@ -530,6 +566,8 @@ def _run_single_build_v2(
     save_intermediate: bool,
     continue_on_error: bool,
     prompt_lang: str | None = None,
+    extract_prompt: str | None = None,
+    explain_prompt: str | None = None,
 ) -> Dict[str, Any]:
     if uploaded_file is None:
         return {"status": "error", "message": "No input file provided.", "run_id": None}
@@ -548,12 +586,16 @@ def _run_single_build_v2(
     run_id = make_run_id()
     run_dir = cfg.resolve_path(cfg.output_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    default_output_path = (cfg.resolve_path(cfg.export_dir) / run_id / "output.apkg").resolve()
+    default_output_path = (
+        cfg.resolve_path(cfg.export_dir) / run_id / "output.apkg"
+    ).resolve()
     summary_path = run_dir / "run_summary.json"
 
     source_lang_value = source_lang or cfg.default_source_lang
     target_lang_value = target_lang or cfg.default_target_lang
-    profile_value = content_profile or getattr(cfg, "material_profile", None) or cfg.content_profile
+    profile_value = (
+        content_profile or getattr(cfg, "material_profile", None) or cfg.content_profile
+    )
     learning_mode_value = learning_mode or cfg.learning_mode
     title_value = (deck_title or "").strip() or local_input.stem
     _write_run_summary(
@@ -570,6 +612,8 @@ def _run_single_build_v2(
             "material_profile": profile_value,
             "learning_mode": learning_mode_value,
             "difficulty": difficulty or cfg.cloze_difficulty,
+            "extract_prompt_override": _as_str(extract_prompt),
+            "explain_prompt_override": _as_str(explain_prompt),
             "cards": 0,
             "errors": 0,
             "output_path": str(default_output_path),
@@ -592,6 +636,8 @@ def _run_single_build_v2(
         max_notes=max_notes,
         temperature=temperature,
         cloze_difficulty=difficulty or None,
+        extract_prompt=Path(extract_prompt) if _as_str(extract_prompt) else None,
+        explain_prompt=Path(explain_prompt) if _as_str(explain_prompt) else None,
         save_intermediate=save_intermediate,
         continue_on_error=continue_on_error,
     )
@@ -655,7 +701,9 @@ def _save_env_v2(updated: Dict[str, str], *, lang: str) -> str:
     else:
         current = {}
 
-    new_env: Dict[str, str] = {k: str(v) for k, v in current.items() if k not in _EDITABLE_ENV_KEYS}
+    new_env: Dict[str, str] = {
+        k: str(v) for k, v in current.items() if k not in _EDITABLE_ENV_KEYS
+    }
     for key in _EDITABLE_ENV_KEYS:
         if key not in updated:
             continue
@@ -665,7 +713,9 @@ def _save_env_v2(updated: Dict[str, str], *, lang: str) -> str:
         else:
             new_env.pop(key, None)
 
-    env_file.write_text("".join(f"{k}={v}\n" for k, v in sorted(new_env.items())), encoding="utf-8")
+    env_file.write_text(
+        "".join(f"{k}={v}\n" for k, v in sorted(new_env.items())), encoding="utf-8"
+    )
     try:
         cfg = load_config(env_file=env_file)
         validate_base_config(cfg)
@@ -675,8 +725,12 @@ def _save_env_v2(updated: Dict[str, str], *, lang: str) -> str:
             env_file.write_text(original_text, encoding="utf-8")
         else:
             env_file.unlink(missing_ok=True)
-        return f"❌ {_tr(lang, 'Failed to save config', '保存配置失败')}: {exc}"
-    return f"✅ {_tr(lang, 'Config saved and validated.', '配置已保存并通过校验。')}"
+        return (
+            f"❌ {_tr(lang, 'Failed to save config', 'Failed to save config')}: {exc}"
+        )
+    return (
+        f"✅ {_tr(lang, 'Config saved and validated.', 'Config saved and validated.')}"
+    )
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -695,7 +749,9 @@ def _build_models_url(base_url: str) -> str:
     return f"{root}/models"
 
 
-def _request_models(base_url: str, api_key: str, timeout_seconds: float) -> tuple[str, httpx.Response]:
+def _request_models(
+    base_url: str, api_key: str, timeout_seconds: float
+) -> tuple[str, httpx.Response]:
     endpoint = _build_models_url(base_url)
     if not endpoint:
         raise ValueError("missing base URL")
@@ -708,22 +764,24 @@ def _request_models(base_url: str, api_key: str, timeout_seconds: float) -> tupl
     return endpoint, response
 
 
-def _list_models_markdown(base_url: str, api_key: str, timeout_seconds: float, *, lang: str) -> str:
+def _list_models_markdown(
+    base_url: str, api_key: str, timeout_seconds: float, *, lang: str
+) -> str:
     if not _normalize_base_url(base_url):
-        return f"⚠️ {_tr(lang, 'Missing base URL.', '缺少 base URL。')}"
+        return f"⚠️ {_tr(lang, 'Missing base URL.', 'Missing base URL.')}"
     try:
         endpoint, response = _request_models(base_url, api_key, timeout_seconds)
     except ValueError:
-        return f"⚠️ {_tr(lang, 'Missing base URL.', '缺少 base URL。')}"
+        return f"⚠️ {_tr(lang, 'Missing base URL.', 'Missing base URL.')}"
     except httpx.RequestError as exc:
-        return f"❌ {_tr(lang, 'Request failed', '请求失败')}: `{exc}`"
+        return f"❌ {_tr(lang, 'Request failed', 'Request failed')}: `{exc}`"
     except Exception as exc:
-        return f"❌ {_tr(lang, 'Request failed', '请求失败')}: `{exc}`"
+        return f"❌ {_tr(lang, 'Request failed', 'Request failed')}: `{exc}`"
 
     if response.status_code >= 400:
         body = response.text[:500] if response.text else ""
         return (
-            f"❌ {_tr(lang, 'HTTP error', 'HTTP 错误')}: **{response.status_code}**\n\n"
+            f"❌ {_tr(lang, 'HTTP error', 'HTTP error')}: **{response.status_code}**\n\n"
             f"- endpoint: `{endpoint}`\n"
             f"- body: `{body}`"
         )
@@ -731,13 +789,14 @@ def _list_models_markdown(base_url: str, api_key: str, timeout_seconds: float, *
     try:
         payload = response.json()
     except ValueError:
-        return f"❌ {_tr(lang, 'Response is not valid JSON.', '响应不是有效 JSON。')}"
+        return f"❌ {_tr(lang, 'Response is not valid JSON.', 'Response is not valid JSON.')}"
 
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, list):
         return (
-            f"⚠️ {_tr(lang, 'Response JSON has no list field `data`.', '响应 JSON 中缺少列表字段 `data`。')}\n\n"
-            f"- endpoint: `{endpoint}`"
+            f"⚠️ {_tr(lang, 'Response JSON has no list field `data`.', 'Response JSON has no list field `data`.')}\n\n"
+            f"- endpoint: `{endpoint}`\n"
+            f"- status: `{response.status_code}`"
         )
 
     model_ids: list[str] = []
@@ -745,7 +804,7 @@ def _list_models_markdown(base_url: str, api_key: str, timeout_seconds: float, *
     for item in data:
         if not isinstance(item, dict):
             continue
-        model_id = str(item.get("id", "")).strip()
+        model_id = _as_str(item.get("id"))
         if not model_id or model_id in seen:
             continue
         model_ids.append(model_id)
@@ -753,120 +812,175 @@ def _list_models_markdown(base_url: str, api_key: str, timeout_seconds: float, *
 
     if not model_ids:
         return (
-            f"✅ {_tr(lang, 'Found models', '模型列表')}: **0**\n\n"
+            f"✅ {_tr(lang, 'Found models', 'Found models')}: **0**\n\n"
             f"- endpoint: `{endpoint}`\n"
             f"- status: `{response.status_code}`\n"
-            f"- {_tr(lang, 'No model ids found in `data`.', '`data` 中未找到模型 id。')}"
+            f"- {_tr(lang, 'No model ids found in `data`.', 'No model ids found in `data`.')}"
         )
 
     lines = [f"- `{model_id}`" for model_id in model_ids]
     return (
-        f"✅ {_tr(lang, 'Found models', '模型列表')}: **{len(model_ids)}**\n\n"
+        f"✅ {_tr(lang, 'Found models', 'Found models')}: **{len(model_ids)}**\n\n"
         f"- endpoint: `{endpoint}`\n"
         f"- status: `{response.status_code}`\n\n"
         f"{chr(10).join(lines)}"
     )
 
 
-def _test_models_markdown(base_url: str, api_key: str, timeout_seconds: float, *, lang: str) -> str:
+def _test_models_markdown(
+    base_url: str, api_key: str, timeout_seconds: float, *, lang: str
+) -> str:
     if not _normalize_base_url(base_url):
-        return f"⚠️ {_tr(lang, 'Missing base URL.', '缺少 base URL。')}"
+        return f"⚠️ {_tr(lang, 'Missing base URL.', 'Missing base URL.')}"
     try:
         endpoint, response = _request_models(base_url, api_key, timeout_seconds)
     except ValueError:
-        return f"⚠️ {_tr(lang, 'Missing base URL.', '缺少 base URL。')}"
+        return f"⚠️ {_tr(lang, 'Missing base URL.', 'Missing base URL.')}"
     except httpx.RequestError as exc:
-        return f"❌ {_tr(lang, 'Request failed', '请求失败')}: `{exc}`"
+        return f"❌ {_tr(lang, 'Request failed', 'Request failed')}: `{exc}`"
     except Exception as exc:
-        return f"❌ {_tr(lang, 'Request failed', '请求失败')}: `{exc}`"
+        return f"❌ {_tr(lang, 'Request failed', 'Request failed')}: `{exc}`"
     return (
-        f"✅ {_tr(lang, 'Connectivity OK', '连通性正常')}\n\n"
+        f"✅ {_tr(lang, 'Connectivity OK', 'Connectivity OK')}\n\n"
         f"- endpoint: `{endpoint}`\n"
         f"- status: `{response.status_code}`"
     )
 
 
-def _prompt_file_map(cfg: Any) -> dict[str, Path]:
-    return {
-        "cloze_prose_beginner": cfg.resolve_path(cfg.prompt_cloze_prose_beginner),
-        "cloze_prose_intermediate": cfg.resolve_path(cfg.prompt_cloze_prose_intermediate),
-        "cloze_prose_advanced": cfg.resolve_path(cfg.prompt_cloze_prose_advanced),
-        "cloze_prose_reading_support_beginner": cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_beginner),
-        "cloze_prose_reading_support_intermediate": cfg.resolve_path(
-            cfg.prompt_cloze_prose_reading_support_intermediate
-        ),
-        "cloze_prose_reading_support_advanced": cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_advanced),
-        "cloze_transcript_beginner": cfg.resolve_path(cfg.prompt_cloze_transcript_beginner),
-        "cloze_transcript_intermediate": cfg.resolve_path(cfg.prompt_cloze_transcript_intermediate),
-        "cloze_transcript_advanced": cfg.resolve_path(cfg.prompt_cloze_transcript_advanced),
-        "cloze_transcript_reading_support_beginner": cfg.resolve_path(
-            cfg.prompt_cloze_transcript_reading_support_beginner
-        ),
-        "cloze_transcript_reading_support_intermediate": cfg.resolve_path(
-            cfg.prompt_cloze_transcript_reading_support_intermediate
-        ),
-        "cloze_transcript_reading_support_advanced": cfg.resolve_path(
-            cfg.prompt_cloze_transcript_reading_support_advanced
-        ),
-        "cloze_textbook_examples": cfg.resolve_path(cfg.prompt_cloze_textbook),
-        # Legacy entry kept to support older deployments.
-        "cloze_contextual": cfg.resolve_path(cfg.prompt_cloze),
-        "translate_rewrite": cfg.resolve_path(cfg.prompt_translate),
-    }
+def _normalize_prompt_mode(value: Any) -> str:
+    mode = _as_str(value).lower()
+    if mode == "cloze":
+        return "extraction"
+    if mode == "translate":
+        return "explanation"
+    if mode in {"extraction", "explanation"}:
+        return mode
+    return ""
 
 
-def _prompt_choices(lang: str) -> list[tuple[str, str]]:
-    if _normalize_ui_lang(lang) == "zh":
-        return [
-            ("Prose 初级 (cloze_prose_beginner)", "cloze_prose_beginner"),
-            ("Prose 中级 (cloze_prose_intermediate)", "cloze_prose_intermediate"),
-            ("Prose 高级 (cloze_prose_advanced)", "cloze_prose_advanced"),
-            ("Prose 阅读支持 初级 (cloze_prose_reading_support_beginner)", "cloze_prose_reading_support_beginner"),
-            (
-                "Prose 阅读支持 中级 (cloze_prose_reading_support_intermediate)",
-                "cloze_prose_reading_support_intermediate",
-            ),
-            ("Prose 阅读支持 高级 (cloze_prose_reading_support_advanced)", "cloze_prose_reading_support_advanced"),
-            ("Transcript 初级 (cloze_transcript_beginner)", "cloze_transcript_beginner"),
-            ("Transcript 中级 (cloze_transcript_intermediate)", "cloze_transcript_intermediate"),
-            ("Transcript 高级 (cloze_transcript_advanced)", "cloze_transcript_advanced"),
-            (
-                "Transcript 阅读支持 初级 (cloze_transcript_reading_support_beginner)",
-                "cloze_transcript_reading_support_beginner",
-            ),
-            (
-                "Transcript 阅读支持 中级 (cloze_transcript_reading_support_intermediate)",
-                "cloze_transcript_reading_support_intermediate",
-            ),
-            (
-                "Transcript 阅读支持 高级 (cloze_transcript_reading_support_advanced)",
-                "cloze_transcript_reading_support_advanced",
-            ),
-            ("教材例句模式 (cloze_textbook_examples)", "cloze_textbook_examples"),
-            ("旧版上下文挖空 (cloze_contextual)", "cloze_contextual"),
-            ("翻译改写 (translate_rewrite)", "translate_rewrite"),
-        ]
-    return [
-        ("cloze_prose_beginner", "cloze_prose_beginner"),
-        ("cloze_prose_intermediate", "cloze_prose_intermediate"),
-        ("cloze_prose_advanced", "cloze_prose_advanced"),
-        ("cloze_prose_reading_support_beginner", "cloze_prose_reading_support_beginner"),
-        ("cloze_prose_reading_support_intermediate", "cloze_prose_reading_support_intermediate"),
-        ("cloze_prose_reading_support_advanced", "cloze_prose_reading_support_advanced"),
-        ("cloze_transcript_beginner", "cloze_transcript_beginner"),
-        ("cloze_transcript_intermediate", "cloze_transcript_intermediate"),
-        ("cloze_transcript_advanced", "cloze_transcript_advanced"),
-        ("cloze_transcript_reading_support_beginner", "cloze_transcript_reading_support_beginner"),
-        ("cloze_transcript_reading_support_intermediate", "cloze_transcript_reading_support_intermediate"),
-        ("cloze_transcript_reading_support_advanced", "cloze_transcript_reading_support_advanced"),
-        ("cloze_textbook_examples", "cloze_textbook_examples"),
-        ("cloze_contextual (legacy)", "cloze_contextual"),
-        ("translate_rewrite", "translate_rewrite"),
-    ]
+def _prompt_mode_label(mode: str, *, lang: str) -> str:
+    if _normalize_prompt_mode(mode) == "explanation":
+        return _tr(lang, "Explanation", "瑙ｉ噴")
+    return _tr(lang, "Extraction", "鎻愬彇")
 
 
-def _prompt_defaults_path(cfg: Any) -> Path:
-    return cfg.resolve_path(_PROMPT_DEFAULTS_FILE)
+def _prompt_file_map(
+    cfg: Any,
+    *,
+    mode_filter: str | None = None,
+    include_templates: bool = False,
+) -> dict[str, Path]:
+    prompts_dir = cfg.resolve_path(_PROMPT_DIR)
+    mode_value = _normalize_prompt_mode(mode_filter) if mode_filter else ""
+    if not prompts_dir.exists():
+        return {}
+    result: dict[str, Path] = {}
+    for path in sorted(prompts_dir.glob("*.json")):
+        if path.name in _PROMPT_META_FILENAMES:
+            continue
+        if not include_templates and path.name in _PROMPT_TEMPLATE_FILENAMES:
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            spec = PromptSpec.model_validate(payload)
+        except (OSError, json.JSONDecodeError, ValidationError, ValueError):
+            continue
+        mode = _normalize_prompt_mode(spec.mode)
+        if mode_value and mode != mode_value:
+            continue
+        result[path.name] = path
+    return result
+
+
+def _prompt_choices_from_map(
+    prompt_files: dict[str, Path], *, lang: str
+) -> list[tuple[str, str]]:
+    choices: list[tuple[str, str]] = []
+    for key, path in prompt_files.items():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            spec = PromptSpec.model_validate(payload)
+            mode = _normalize_prompt_mode(spec.mode)
+        except (OSError, json.JSONDecodeError, ValidationError, ValueError):
+            continue
+        mode_text = _prompt_mode_label(mode, lang=lang)
+        choices.append((f"{path.name} ({mode_text})", key))
+    return choices
+
+
+def _prompt_files_for_mode(
+    prompt_files: dict[str, Path], *, mode: str, lang: str
+) -> dict[str, Path]:
+    mode_value = _normalize_prompt_mode(mode)
+    if not mode_value:
+        return dict(prompt_files)
+    filtered: dict[str, Path] = {}
+    for key, path in prompt_files.items():
+        if _load_prompt_mode(key, prompt_files, lang=lang) == mode_value:
+            filtered[key] = path
+    return filtered
+
+
+def _prompt_choices(
+    lang: str, *, mode_filter: str | None = None, include_templates: bool = False
+) -> list[tuple[str, str]]:
+    cfg = _load_app_config()
+    prompt_files = _prompt_file_map(
+        cfg, mode_filter=mode_filter, include_templates=include_templates
+    )
+    return _prompt_choices_from_map(prompt_files, lang=lang)
+
+
+def _prompt_path_value(cfg: Any, path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        rel = resolved.relative_to(cfg.workspace_root.resolve())
+        rel_text = rel.as_posix()
+        if rel_text.startswith("./"):
+            return rel_text
+        return f"./{rel_text}"
+    except ValueError:
+        return str(resolved)
+
+
+def _prompt_path_choices(
+    cfg: Any,
+    *,
+    lang: str,
+    mode_filter: str,
+    include_auto: bool = False,
+) -> list[tuple[str, str]]:
+    prompt_files = _prompt_file_map(
+        cfg, mode_filter=mode_filter, include_templates=False
+    )
+    mode_text = _prompt_mode_label(mode_filter, lang=lang)
+    choices: list[tuple[str, str]] = []
+    if include_auto:
+        choices.append(
+            (_tr(lang, "Auto (default chain)", "鑷姩锛堥粯璁ら摼璺級"), "")
+        )
+    for path in prompt_files.values():
+        choices.append((f"{path.name} ({mode_text})", _prompt_path_value(cfg, path)))
+    return choices
+
+
+def _prompt_template_path(cfg: Any, mode: str) -> Path | None:
+    normalized_mode = _normalize_prompt_mode(mode)
+    if not normalized_mode:
+        return None
+    template_rel = _PROMPT_TEMPLATE_BY_MODE.get(normalized_mode)
+    if template_rel is None:
+        return None
+    return cfg.resolve_path(template_rel)
+
+
+def _sanitize_prompt_filename(raw: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", _as_str(raw))
+    if not safe:
+        return ""
+    if not safe.lower().endswith(".json"):
+        safe += ".json"
+    return safe
 
 
 def _read_prompt_payload(
@@ -877,22 +991,30 @@ def _read_prompt_payload(
 ) -> tuple[Path | None, dict[str, Any] | None, str]:
     path = prompt_files.get(prompt_key)
     if path is None:
-        return None, None, f"❌ {_tr(lang, 'Failed to load prompt file', '加载 prompt 文件失败')}: `{prompt_key}`"
+        return (
+            None,
+            None,
+            f"鉂?{_tr(lang, 'Failed to load prompt file', '鍔犺浇 prompt 鏂囦欢澶辫触')}: `{prompt_key}`",
+        )
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         return (
             path,
             None,
-            f"❌ {_tr(lang, 'Prompt file JSON parse error', 'Prompt 文件 JSON 解析失败')}: {exc.msg} (line {exc.lineno}, col {exc.colno})",
+            f"鉂?{_tr(lang, 'Prompt file JSON parse error', 'Prompt 鏂囦欢 JSON 瑙ｆ瀽澶辫触')}: {exc.msg} (line {exc.lineno}, col {exc.colno})",
         )
     except Exception as exc:
-        return None, None, f"❌ {_tr(lang, 'Failed to load prompt file', '加载 prompt 文件失败')}: `{exc}`"
+        return (
+            None,
+            None,
+            f"鉂?{_tr(lang, 'Failed to load prompt file', '鍔犺浇 prompt 鏂囦欢澶辫触')}: `{exc}`",
+        )
     if not isinstance(payload, dict):
         return (
             path,
             None,
-            f"❌ {_tr(lang, 'Prompt file JSON parse error', 'Prompt 文件 JSON 解析失败')}: root must be a JSON object.",
+            f"鉂?{_tr(lang, 'Prompt file JSON parse error', 'Prompt 鏂囦欢 JSON 瑙ｆ瀽澶辫触')}: root must be a JSON object.",
         )
     return path, payload, ""
 
@@ -930,8 +1052,22 @@ def _load_prompt_template(
     ok, validation_msg = _validate_prompt_payload(payload, lang=lang)
     if not ok:
         return "", validation_msg
-    template = _resolve_template_for_lang(payload.get("user_prompt_template"), lang=lang)
+    template = _resolve_template_for_lang(
+        payload.get("user_prompt_template"), lang=lang
+    )
     return template, ""
+
+
+def _load_prompt_mode(
+    prompt_key: str,
+    prompt_files: dict[str, Path],
+    *,
+    lang: str,
+) -> str:
+    _path, payload, _msg = _read_prompt_payload(prompt_key, prompt_files, lang=lang)
+    if payload is None:
+        return ""
+    return _normalize_prompt_mode(payload.get("mode"))
 
 
 def _format_prompt_validation_error(exc: ValidationError) -> str:
@@ -950,11 +1086,16 @@ def _validate_prompt_payload(payload: dict[str, Any], *, lang: str) -> tuple[boo
     try:
         PromptSpec.model_validate(payload)
     except ValidationError as exc:
-        return False, f"❌ {_tr(lang, 'Schema validation failed', 'Schema 校验失败')}\n\n{_format_prompt_validation_error(exc)}"
+        return (
+            False,
+            f"鉂?{_tr(lang, 'Schema validation failed', 'Schema 鏍￠獙澶辫触')}\n\n{_format_prompt_validation_error(exc)}",
+        )
     return True, ""
 
 
-def _set_user_prompt_template(payload: dict[str, Any], *, lang: str, template: str) -> None:
+def _set_user_prompt_template(
+    payload: dict[str, Any], *, lang: str, template: str
+) -> None:
     current = payload.get("user_prompt_template")
     mapping: dict[str, str] = {}
     if isinstance(current, str):
@@ -975,71 +1116,31 @@ def _set_user_prompt_template(payload: dict[str, Any], *, lang: str, template: s
     payload["user_prompt_template"] = mapping
 
 
-def _write_prompt_payload(path: Path, payload: dict[str, Any], *, lang: str) -> tuple[bool, str]:
+def _write_prompt_payload(
+    path: Path, payload: dict[str, Any], *, lang: str
+) -> tuple[bool, str]:
     ok, msg = _validate_prompt_payload(payload, lang=lang)
     if not ok:
-        return False, f"{msg}\n\n⚠️ {_tr(lang, 'Not saved because validation failed.', '未保存：校验未通过。')}"
+        return (
+            False,
+            f"{msg}\n\n⚠️ {_tr(lang, 'Not saved because validation failed.', 'Not saved because validation failed.')}",
+        )
     backup = path.with_suffix(path.suffix + ".bak")
     try:
         if path.exists():
             shutil.copyfile(path, backup)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    except Exception as exc:
-        return False, f"❌ {_tr(lang, 'Failed to save prompt file', '保存 prompt 文件失败')}: `{exc}`"
-    return True, f"- file: `{path}`\n- {_tr(lang, 'Backup created', '已创建备份')}: `{backup}`"
-
-
-def _load_prompt_defaults(
-    defaults_path: Path,
-    *,
-    lang: str,
-) -> tuple[dict[str, Any] | None, str]:
-    if not defaults_path.exists():
-        return None, f"❌ {_tr(lang, 'Prompt defaults file missing.', 'Prompt 默认模板文件不存在。')}: `{defaults_path}`"
-    try:
-        payload = json.loads(defaults_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return (
-            None,
-            f"❌ {_tr(lang, 'Prompt defaults file invalid.', 'Prompt 默认模板文件格式无效。')}: {exc.msg} (line {exc.lineno}, col {exc.colno})",
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
     except Exception as exc:
-        return None, f"❌ {_tr(lang, 'Prompt defaults file invalid.', 'Prompt 默认模板文件格式无效。')}: `{exc}`"
-    if not isinstance(payload, dict):
-        return None, f"❌ {_tr(lang, 'Prompt defaults file invalid.', 'Prompt 默认模板文件格式无效。')}"
-    # v1 structure:
-    # {
-    #   "version": 1,
-    #   "templates": { "prompt_key": {"en": "...", "zh": "..."} }
-    # }
-    if "version" in payload or "templates" in payload:
-        version_raw = payload.get("version", _PROMPT_DEFAULTS_VERSION)
-        try:
-            version = int(str(version_raw).strip())
-        except (TypeError, ValueError):
-            return None, f"❌ {_tr(lang, 'Prompt defaults file invalid.', 'Prompt 默认模板文件格式无效。')}"
-        if version != _PROMPT_DEFAULTS_VERSION:
-            return (
-                None,
-                f"❌ {_tr(lang, 'Unsupported prompt defaults version.', 'Prompt 默认模板版本不受支持。')}: `{version}`",
-            )
-        templates = payload.get("templates")
-        if not isinstance(templates, dict):
-            return None, f"❌ {_tr(lang, 'Prompt defaults file invalid.', 'Prompt 默认模板文件格式无效。')}"
-        return templates, ""
-
-    # Legacy structure (no version): { "prompt_key": {"en": "...", "zh": "..."} }
-    return payload, ""
-
-
-def _default_template_for_lang(
-    defaults_payload: dict[str, Any],
-    *,
-    prompt_key: str,
-    lang: str,
-) -> str:
-    entry = defaults_payload.get(prompt_key)
-    return _resolve_template_for_lang(entry, lang=lang)
+        return (
+            False,
+            f"❌ {_tr(lang, 'Failed to save prompt file', 'Failed to save prompt file')}: `{exc}`",
+        )
+    return (
+        True,
+        f"- file: `{path}`\n- {_tr(lang, 'Backup created', 'Backup created')}: `{backup}`",
+    )
 
 
 @dataclass
@@ -1107,8 +1208,12 @@ def _status_text(lang: str, status: str) -> str:
 def _build_env_snapshot(cfg: Any) -> dict[str, str]:
     return {
         "CLAWLINGUA_LLM_MODEL": _as_str(getattr(cfg, "llm_model", "")),
-        "CLAWLINGUA_TRANSLATE_LLM_MODEL": _as_str(getattr(cfg, "translate_llm_model", "")),
+        "CLAWLINGUA_TRANSLATE_LLM_MODEL": _as_str(
+            getattr(cfg, "translate_llm_model", "")
+        ),
         "CLAWLINGUA_PROMPT_LANG": _as_str(getattr(cfg, "prompt_lang", "")),
+        "CLAWLINGUA_EXTRACT_PROMPT": _as_str(getattr(cfg, "extract_prompt", "")),
+        "CLAWLINGUA_EXPLAIN_PROMPT": _as_str(getattr(cfg, "explain_prompt", "")),
         "CLAWLINGUA_MATERIAL_PROFILE": _as_str(getattr(cfg, "material_profile", "")),
         "CLAWLINGUA_LEARNING_MODE": _as_str(getattr(cfg, "learning_mode", "")),
     }
@@ -1117,7 +1222,9 @@ def _build_env_snapshot(cfg: Any) -> dict[str, str]:
 def _write_run_summary(path: Path, payload: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
     except Exception:  # pragma: no cover - defensive
         logger.exception("failed to write run summary | path=%s", path)
 
@@ -1162,7 +1269,9 @@ def _run_started_sort_key(value: str) -> float:
 def _run_info_from_dir(cfg: Any, run_dir: Path) -> RunInfo:
     run_id = run_dir.name
     summary = _read_run_summary(run_dir / "run_summary.json")
-    fallback_started = datetime.fromtimestamp(run_dir.stat().st_mtime, tz=timezone.utc).isoformat()
+    fallback_started = datetime.fromtimestamp(
+        run_dir.stat().st_mtime, tz=timezone.utc
+    ).isoformat()
 
     started_at = _as_str(summary.get("started_at"), default=fallback_started)
     finished_at_text = _as_str(summary.get("finished_at"))
@@ -1176,8 +1285,12 @@ def _run_info_from_dir(cfg: Any, run_dir: Path) -> RunInfo:
     learning_mode = _as_str(summary.get("learning_mode"), default="expression_mining")
     cards = max(0, _as_int(summary.get("cards"), default=0))
     errors = max(0, _as_int(summary.get("errors"), default=0))
-    output_path_resolved = _resolve_output_path(cfg, run_dir, summary.get("output_path"))
-    output_path_text = str(output_path_resolved) if output_path_resolved is not None else None
+    output_path_resolved = _resolve_output_path(
+        cfg, run_dir, summary.get("output_path")
+    )
+    output_path_text = (
+        str(output_path_resolved) if output_path_resolved is not None else None
+    )
     output_exists = bool(output_path_resolved and output_path_resolved.exists())
     last_error = _as_str(summary.get("last_error")) or None
 
@@ -1228,7 +1341,9 @@ def _run_choice_label(info: RunInfo, *, lang: str) -> str:
     return f"{info.run_id} | {started} | {_status_text(lang, info.status)} | {title}"
 
 
-def _load_run_detail(run_id: str | None, cfg: Any, *, lang: str) -> tuple[str, str | None]:
+def _load_run_detail(
+    run_id: str | None, cfg: Any, *, lang: str
+) -> tuple[str, str | None]:
     selected = _as_str(run_id)
     if not selected:
         return _tr(lang, "No run selected.", "No run selected."), None
@@ -1245,29 +1360,33 @@ def _load_run_detail(run_id: str | None, cfg: Any, *, lang: str) -> tuple[str, s
             download_path = str(candidate)
 
     lines = [
-        f"### {_tr(lang, 'Run details', '运行详情')}",
+        f"### {_tr(lang, 'Run details', 'Run details')}",
         f"- {_tr(lang, 'Run ID', 'Run ID')}: `{info.run_id}`",
-        f"- {_tr(lang, 'Status', '状态')}: **{_status_text(lang, info.status)}**",
-        f"- {_tr(lang, 'Started at', '开始时间')}: `{info.started_at or '-'}`",
-        f"- {_tr(lang, 'Finished at', '结束时间')}: `{info.finished_at or '-'}`",
-        f"- {_tr(lang, 'Title', '标题')}: `{info.title or '-'}`",
-        f"- {_tr(lang, 'Source language', '源语言')}: `{info.source_lang or '-'}`",
-        f"- {_tr(lang, 'Target language', '目标语言')}: `{info.target_lang or '-'}`",
-        f"- {_tr(lang, 'Learning mode', '学习模式')}: `{info.learning_mode or '-'}`",
-        f"- {_tr(lang, 'Content profile', '内容类型')}: `{info.content_profile or '-'}`",
-        f"- {_tr(lang, 'Material profile', '材料类型')}: `{info.material_profile or '-'}`",
-        f"- {_tr(lang, 'Cards', '卡片数')}: **{info.cards}**",
-        f"- {_tr(lang, 'Errors', '错误数')}: **{info.errors}**",
-        f"- {_tr(lang, 'Output path', '输出文件')}: `{info.output_path or '-'}`",
+        f"- {_tr(lang, 'Status', 'Status')}: **{_status_text(lang, info.status)}**",
+        f"- {_tr(lang, 'Started at', 'Started at')}: `{info.started_at or '-'}`",
+        f"- {_tr(lang, 'Finished at', 'Finished at')}: `{info.finished_at or '-'}`",
+        f"- {_tr(lang, 'Title', 'Title')}: `{info.title or '-'}`",
+        f"- {_tr(lang, 'Source language', 'Source language')}: `{info.source_lang or '-'}`",
+        f"- {_tr(lang, 'Target language', 'Target language')}: `{info.target_lang or '-'}`",
+        f"- {_tr(lang, 'Learning mode', 'Learning mode')}: `{info.learning_mode or '-'}`",
+        f"- {_tr(lang, 'Content profile', 'Content profile')}: `{info.content_profile or '-'}`",
+        f"- {_tr(lang, 'Material profile', 'Material profile')}: `{info.material_profile or '-'}`",
+        f"- {_tr(lang, 'Cards', 'Cards')}: **{info.cards}**",
+        f"- {_tr(lang, 'Errors', 'Errors')}: **{info.errors}**",
+        f"- {_tr(lang, 'Output path', 'Output path')}: `{info.output_path or '-'}`",
     ]
     if info.last_error:
-        lines.append(f"- {_tr(lang, 'Last error', '最后错误')}: `{info.last_error}`")
+        lines.append(f"- {_tr(lang, 'Last error', 'Last error')}: `{info.last_error}`")
     if download_path is None:
-        lines.append(f"- {_tr(lang, 'Output file not available yet.', '尚未生成输出文件。')}")
+        lines.append(
+            f"- {_tr(lang, 'Output file not available yet.', 'Output file not available yet.')}"
+        )
     return "\n".join(lines), download_path
 
 
-def _refresh_recent_runs(cfg: Any, *, lang: str, preferred_run_id: str | None = None) -> tuple[Any, str, str | None]:
+def _refresh_recent_runs(
+    cfg: Any, *, lang: str, preferred_run_id: str | None = None
+) -> tuple[Any, str, str | None]:
     runs = _scan_runs(cfg, limit=30)
     if not runs:
         detail = _tr(lang, "No runs found.", "No runs found.")
@@ -1299,10 +1418,10 @@ def _read_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
 
 def _bar(value: float, max_value: float, *, width: int = 18) -> str:
     if max_value <= 0:
-        return "░" * width
+        return "." * width
     ratio = max(0.0, min(1.0, value / max_value))
     filled = int(round(ratio * width))
-    return ("█" * filled) + ("░" * max(0, width - filled))
+    return ("#" * filled) + ("-" * max(0, width - filled))
 
 
 def _render_count_histogram(title: str, hist: dict[str, int]) -> str:
@@ -1362,7 +1481,9 @@ def _run_analysis_payload(run_id: str | None, cfg: Any) -> dict[str, Any]:
             {
                 "reason": reason,
                 "reason_category": category,
-                "chunk_id": _as_str(item.get("chunk_id") or candidate_map.get("chunk_id")),
+                "chunk_id": _as_str(
+                    item.get("chunk_id") or candidate_map.get("chunk_id")
+                ),
                 "item": candidate_map,
             }
         )
@@ -1380,10 +1501,20 @@ def _run_analysis_payload(run_id: str | None, cfg: Any) -> dict[str, Any]:
     }
 
 
-def _analysis_filter_choices(payload: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
-    metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics"), dict) else {}
-    selected_candidates = payload.get("selected_candidates", []) if isinstance(payload.get("selected_candidates"), list) else []
-    rejected = payload.get("rejected", []) if isinstance(payload.get("rejected"), list) else []
+def _analysis_filter_choices(
+    payload: dict[str, Any],
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
+    metrics = (
+        payload.get("metrics", {}) if isinstance(payload.get("metrics"), dict) else {}
+    )
+    selected_candidates = (
+        payload.get("selected_candidates", [])
+        if isinstance(payload.get("selected_candidates"), list)
+        else []
+    )
+    rejected = (
+        payload.get("rejected", []) if isinstance(payload.get("rejected"), list) else []
+    )
 
     taxonomy_keys: set[str] = set()
     for key in (
@@ -1394,7 +1525,9 @@ def _analysis_filter_choices(payload: dict[str, Any]) -> tuple[list[tuple[str, s
     ):
         value = metrics.get(key)
         if isinstance(value, dict):
-            taxonomy_keys.update(_as_str(item) for item in value.keys() if _as_str(item))
+            taxonomy_keys.update(
+                _as_str(item) for item in value.keys() if _as_str(item)
+            )
     for item in selected_candidates:
         if not isinstance(item, dict):
             continue
@@ -1426,7 +1559,9 @@ def _analysis_filter_choices(payload: dict[str, Any]) -> tuple[list[tuple[str, s
             chunk_keys.add(key)
 
     taxonomy_choices = [("all", "all")] + [(key, key) for key in sorted(taxonomy_keys)]
-    rejection_choices = [("all", "all")] + [(key, key) for key in sorted(rejection_keys)]
+    rejection_choices = [("all", "all")] + [
+        (key, key) for key in sorted(rejection_keys)
+    ]
     chunk_choices = [("all", "all")] + [(key, key) for key in sorted(chunk_keys)]
     return taxonomy_choices, rejection_choices, chunk_choices
 
@@ -1440,16 +1575,30 @@ def _build_run_analysis(
     transfer_filter: str = "all",
     rejection_filter: str = "all",
     chunk_filter: str = "all",
-) -> tuple[str, list[list[Any]], list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
+) -> tuple[
+    str,
+    list[list[Any]],
+    list[tuple[str, str]],
+    list[tuple[str, str]],
+    list[tuple[str, str]],
+]:
     payload = _run_analysis_payload(run_id, cfg)
     if not payload:
-        return _tr(lang, "No run selected.", "No run selected."), [], [("all", "all")], [("all", "all")], [("all", "all")]
+        return (
+            _tr(lang, "No run selected.", "No run selected."),
+            [],
+            [("all", "all")],
+            [("all", "all")],
+            [("all", "all")],
+        )
 
     summary = payload["summary"]
     metrics = payload["metrics"]
     selected_candidates = payload["selected_candidates"]
     rejected = payload["rejected"]
-    taxonomy_choices, rejection_choices, chunk_choices = _analysis_filter_choices(payload)
+    taxonomy_choices, rejection_choices, chunk_choices = _analysis_filter_choices(
+        payload
+    )
 
     taxonomy_filter = _as_str(taxonomy_filter, default="all")
     transfer_filter = _as_str(transfer_filter, default="all")
@@ -1460,7 +1609,9 @@ def _build_run_analysis(
     for item in selected_candidates:
         if not isinstance(item, dict):
             continue
-        item_types = [_as_str(x) for x in (item.get("phrase_types", []) or []) if _as_str(x)]
+        item_types = [
+            _as_str(x) for x in (item.get("phrase_types", []) or []) if _as_str(x)
+        ]
         has_transfer = bool(_as_str(item.get("expression_transfer")))
         item_chunk = _as_str(item.get("chunk_id"))
 
@@ -1486,9 +1637,18 @@ def _build_run_analysis(
             continue
         filtered_rejected.append(item)
 
-    learning_mode = _as_str(summary.get("learning_mode"), default=_as_str(metrics.get("learning_mode"), default="expression_mining"))
-    material_profile = _as_str(summary.get("material_profile"), default=_as_str(summary.get("content_profile"), default="-"))
-    difficulty = _as_str(summary.get("difficulty"), default=_as_str(metrics.get("difficulty"), default="-"))
+    learning_mode = _as_str(
+        summary.get("learning_mode"),
+        default=_as_str(metrics.get("learning_mode"), default="expression_mining"),
+    )
+    material_profile = _as_str(
+        summary.get("material_profile"),
+        default=_as_str(summary.get("content_profile"), default="-"),
+    )
+    difficulty = _as_str(
+        summary.get("difficulty"),
+        default=_as_str(metrics.get("difficulty"), default="-"),
+    )
     chunks_total = _as_int(metrics.get("chunks_total"), default=0)
     raw_total = _as_int(metrics.get("raw_candidates"), default=0)
     valid_total = _as_int(metrics.get("validated_candidates"), default=0)
@@ -1496,47 +1656,87 @@ def _build_run_analysis(
     transfer_ratio = float(metrics.get("expression_transfer_non_empty_ratio") or 0.0)
     avg_clozes = float(metrics.get("avg_clozes_per_candidate") or 0.0)
     avg_phrases = float(metrics.get("avg_target_phrases_per_candidate") or 0.0)
-    avg_selected_per_chunk = float(metrics.get("avg_selected_candidates_per_chunk") or 0.0)
+    avg_selected_per_chunk = float(
+        metrics.get("avg_selected_candidates_per_chunk") or 0.0
+    )
 
-    model_hist = metrics.get("taxonomy_model_histogram") if isinstance(metrics.get("taxonomy_model_histogram"), dict) else {}
+    model_hist = (
+        metrics.get("taxonomy_model_histogram")
+        if isinstance(metrics.get("taxonomy_model_histogram"), dict)
+        else {}
+    )
     candidate_hist = (
-        metrics.get("taxonomy_candidate_histogram") if isinstance(metrics.get("taxonomy_candidate_histogram"), dict) else {}
+        metrics.get("taxonomy_candidate_histogram")
+        if isinstance(metrics.get("taxonomy_candidate_histogram"), dict)
+        else {}
     )
     selected_hist = (
-        metrics.get("taxonomy_selected_histogram") if isinstance(metrics.get("taxonomy_selected_histogram"), dict) else {}
+        metrics.get("taxonomy_selected_histogram")
+        if isinstance(metrics.get("taxonomy_selected_histogram"), dict)
+        else {}
     )
-    avg_score_hist = metrics.get("taxonomy_average_score") if isinstance(metrics.get("taxonomy_average_score"), dict) else {}
+    avg_score_hist = (
+        metrics.get("taxonomy_average_score")
+        if isinstance(metrics.get("taxonomy_average_score"), dict)
+        else {}
+    )
     rejection_hist = (
-        metrics.get("rejection_reason_histogram") if isinstance(metrics.get("rejection_reason_histogram"), dict) else {}
+        metrics.get("rejection_reason_histogram")
+        if isinstance(metrics.get("rejection_reason_histogram"), dict)
+        else {}
     )
     transfer_by_tax = (
         metrics.get("expression_transfer_non_empty_ratio_by_taxonomy")
-        if isinstance(metrics.get("expression_transfer_non_empty_ratio_by_taxonomy"), dict)
+        if isinstance(
+            metrics.get("expression_transfer_non_empty_ratio_by_taxonomy"), dict
+        )
         else {}
     )
 
     lines = [
-        f"### {_tr(lang, 'Run analytics', '运行统计分析')}",
-        f"- {_tr(lang, 'Learning mode', '学习模式')}: `{learning_mode}`",
-        f"- {_tr(lang, 'Material profile', '材料类型')}: `{material_profile}`",
-        f"- {_tr(lang, 'Difficulty', '难度')}: `{difficulty}`",
-        f"- {_tr(lang, 'Chunks', '切块数')}: **{chunks_total}**",
-        f"- {_tr(lang, 'Raw candidates', '原始候选')}: **{raw_total}**",
-        f"- {_tr(lang, 'Validated candidates', '通过验证')}: **{valid_total}**",
-        f"- {_tr(lang, 'Selected cards', '最终保留')}: **{selected_total}**",
-        f"- {_tr(lang, 'Transfer non-empty ratio', 'Transfer 非空比例')}: **{transfer_ratio:.2%}**",
-        f"- {_tr(lang, 'Avg clozes per candidate', '每条平均 cloze 数')}: **{avg_clozes:.2f}**",
-        f"- {_tr(lang, 'Avg target phrases per candidate', '每条平均 target phrase 数')}: **{avg_phrases:.2f}**",
-        f"- {_tr(lang, 'Avg selected per chunk', '每个 chunk 平均保留条数')}: **{avg_selected_per_chunk:.2f}**",
-        f"- {_tr(lang, 'Filtered selected items', '过滤后保留条目')}: **{len(filtered_selected)}**",
-        f"- {_tr(lang, 'Filtered rejected items', '过滤后拒绝条目')}: **{len(filtered_rejected)}**",
+        f"### {_tr(lang, 'Run analytics', 'Run analytics')}",
+        f"- {_tr(lang, 'Learning mode', 'Learning mode')}: `{learning_mode}`",
+        f"- {_tr(lang, 'Material profile', 'Material profile')}: `{material_profile}`",
+        f"- {_tr(lang, 'Difficulty', 'Difficulty')}: `{difficulty}`",
+        f"- {_tr(lang, 'Chunks', 'Chunks')}: **{chunks_total}**",
+        f"- {_tr(lang, 'Raw candidates', 'Raw candidates')}: **{raw_total}**",
+        f"- {_tr(lang, 'Validated candidates', 'Validated candidates')}: **{valid_total}**",
+        f"- {_tr(lang, 'Selected cards', 'Selected cards')}: **{selected_total}**",
+        f"- {_tr(lang, 'Transfer non-empty ratio', 'Transfer non-empty ratio')}: **{transfer_ratio:.2%}**",
+        f"- {_tr(lang, 'Avg clozes per candidate', 'Avg clozes per candidate')}: **{avg_clozes:.2f}**",
+        f"- {_tr(lang, 'Avg target phrases per candidate', 'Avg target phrases per candidate')}: **{avg_phrases:.2f}**",
+        f"- {_tr(lang, 'Avg selected per chunk', 'Avg selected per chunk')}: **{avg_selected_per_chunk:.2f}**",
+        f"- {_tr(lang, 'Filtered selected items', 'Filtered selected items')}: **{len(filtered_selected)}**",
+        f"- {_tr(lang, 'Filtered rejected items', 'Filtered rejected items')}: **{len(filtered_rejected)}**",
         "",
-        _render_count_histogram(_tr(lang, "Model taxonomy histogram", "模型 taxonomy 分布"), model_hist),
-        _render_count_histogram(_tr(lang, "Candidate taxonomy histogram", "候选 taxonomy 分布"), candidate_hist),
-        _render_count_histogram(_tr(lang, "Selected taxonomy histogram", "最终 taxonomy 分布"), selected_hist),
-        _render_score_histogram(_tr(lang, "Taxonomy average score", "taxonomy 平均得分"), avg_score_hist),
-        _render_count_histogram(_tr(lang, "Rejection reason histogram", "拒绝原因分布"), rejection_hist),
-        _render_score_histogram(_tr(lang, "Transfer non-empty ratio by taxonomy", "taxonomy 维度 transfer 非空率"), transfer_by_tax),
+        _render_count_histogram(
+            _tr(lang, "Model taxonomy histogram", "Model taxonomy histogram"),
+            model_hist,
+        ),
+        _render_count_histogram(
+            _tr(lang, "Candidate taxonomy histogram", "Candidate taxonomy histogram"),
+            candidate_hist,
+        ),
+        _render_count_histogram(
+            _tr(lang, "Selected taxonomy histogram", "Selected taxonomy histogram"),
+            selected_hist,
+        ),
+        _render_score_histogram(
+            _tr(lang, "Taxonomy average score", "Taxonomy average score"),
+            avg_score_hist,
+        ),
+        _render_count_histogram(
+            _tr(lang, "Rejection reason histogram", "Rejection reason histogram"),
+            rejection_hist,
+        ),
+        _render_score_histogram(
+            _tr(
+                lang,
+                "Transfer non-empty ratio by taxonomy",
+                "Transfer non-empty ratio by taxonomy",
+            ),
+            transfer_by_tax,
+        ),
     ]
 
     sample_rows: list[list[Any]] = []
@@ -1549,7 +1749,11 @@ def _build_run_analysis(
             reverse=True,
         )[:5]
         for item in top_selected:
-            key = ("top_selected", _as_str(item.get("chunk_id")), _as_str(item.get("text")))
+            key = (
+                "top_selected",
+                _as_str(item.get("chunk_id")),
+                _as_str(item.get("text")),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -1557,7 +1761,13 @@ def _build_run_analysis(
                 [
                     "top_selected",
                     _as_str(item.get("chunk_id")),
-                    " | ".join([_as_str(x) for x in (item.get("phrase_types", []) or []) if _as_str(x)]),
+                    " | ".join(
+                        [
+                            _as_str(x)
+                            for x in (item.get("phrase_types", []) or [])
+                            if _as_str(x)
+                        ]
+                    ),
                     float(item.get("learning_value_score", 0.0)),
                     _short_text(_as_str(item.get("text"))),
                     _short_text(_as_str(item.get("expression_transfer"))),
@@ -1577,7 +1787,11 @@ def _build_run_analysis(
                     continue
                 taxonomy_bucket[key] = item
         for ptype, item in list(taxonomy_bucket.items())[:5]:
-            key = ("taxonomy_example", _as_str(item.get("chunk_id")), _as_str(item.get("text")))
+            key = (
+                "taxonomy_example",
+                _as_str(item.get("chunk_id")),
+                _as_str(item.get("text")),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -1585,7 +1799,13 @@ def _build_run_analysis(
                 [
                     f"taxonomy_example:{ptype}",
                     _as_str(item.get("chunk_id")),
-                    " | ".join([_as_str(x) for x in (item.get("phrase_types", []) or []) if _as_str(x)]),
+                    " | ".join(
+                        [
+                            _as_str(x)
+                            for x in (item.get("phrase_types", []) or [])
+                            if _as_str(x)
+                        ]
+                    ),
                     float(item.get("learning_value_score", 0.0)),
                     _short_text(_as_str(item.get("text"))),
                     _short_text(_as_str(item.get("expression_transfer"))),
@@ -1593,9 +1813,17 @@ def _build_run_analysis(
                 ]
             )
 
-        transfer_examples = [item for item in filtered_selected if _as_str(item.get("expression_transfer"))][:5]
+        transfer_examples = [
+            item
+            for item in filtered_selected
+            if _as_str(item.get("expression_transfer"))
+        ][:5]
         for item in transfer_examples:
-            key = ("transfer_example", _as_str(item.get("chunk_id")), _as_str(item.get("text")))
+            key = (
+                "transfer_example",
+                _as_str(item.get("chunk_id")),
+                _as_str(item.get("text")),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -1603,7 +1831,13 @@ def _build_run_analysis(
                 [
                     "transfer_example",
                     _as_str(item.get("chunk_id")),
-                    " | ".join([_as_str(x) for x in (item.get("phrase_types", []) or []) if _as_str(x)]),
+                    " | ".join(
+                        [
+                            _as_str(x)
+                            for x in (item.get("phrase_types", []) or [])
+                            if _as_str(x)
+                        ]
+                    ),
                     float(item.get("learning_value_score", 0.0)),
                     _short_text(_as_str(item.get("text"))),
                     _short_text(_as_str(item.get("expression_transfer"))),
@@ -1613,7 +1847,11 @@ def _build_run_analysis(
 
     for item in filtered_rejected[:3]:
         candidate = item.get("item") if isinstance(item.get("item"), dict) else {}
-        key = ("rejected_example", _as_str(item.get("chunk_id")), _as_str(candidate.get("text")))
+        key = (
+            "rejected_example",
+            _as_str(item.get("chunk_id")),
+            _as_str(candidate.get("text")),
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -1621,7 +1859,13 @@ def _build_run_analysis(
             [
                 f"rejected:{_as_str(item.get('reason_category'))}",
                 _as_str(item.get("chunk_id")),
-                " | ".join([_as_str(x) for x in (candidate.get("phrase_types", []) or []) if _as_str(x)]),
+                " | ".join(
+                    [
+                        _as_str(x)
+                        for x in (candidate.get("phrase_types", []) or [])
+                        if _as_str(x)
+                    ]
+                ),
                 float(candidate.get("learning_value_score", 0.0)),
                 _short_text(_as_str(candidate.get("text"))),
                 _short_text(_as_str(candidate.get("expression_transfer"))),
@@ -1629,7 +1873,13 @@ def _build_run_analysis(
             ]
         )
 
-    return "\n".join(lines), sample_rows, taxonomy_choices, rejection_choices, chunk_choices
+    return (
+        "\n".join(lines),
+        sample_rows,
+        taxonomy_choices,
+        rejection_choices,
+        chunk_choices,
+    )
 
 
 def build_interface() -> gr.Blocks:
@@ -1644,21 +1894,54 @@ def build_interface() -> gr.Blocks:
     env_file = _resolve_env_file()
     cfg_view = _load_env_view(cfg, env_file)
     prompt_files = _prompt_file_map(cfg)
-    prompt_defaults_file = _prompt_defaults_path(cfg)
     initial_ui_lang = _normalize_ui_lang(getattr(cfg, "prompt_lang", "en"))
-    initial_prompt_key = (
-        "cloze_prose_intermediate"
-        if "cloze_prose_intermediate" in prompt_files
-        else next(iter(prompt_files))
-    )
+    initial_prompt_key = ""
+    for key in prompt_files:
+        if _load_prompt_mode(key, prompt_files, lang=initial_ui_lang) == "extraction":
+            initial_prompt_key = key
+            break
+    if not initial_prompt_key and prompt_files:
+        initial_prompt_key = next(iter(prompt_files))
     initial_prompt_text, initial_prompt_status = _load_prompt_template(
         initial_prompt_key, prompt_files, lang=initial_ui_lang
     )
+    initial_prompt_mode = _load_prompt_mode(
+        initial_prompt_key, prompt_files, lang=initial_ui_lang
+    )
+    run_extract_prompt_choices = _prompt_path_choices(
+        cfg,
+        lang=initial_ui_lang,
+        mode_filter="extraction",
+        include_auto=True,
+    )
+    run_explain_prompt_choices = _prompt_path_choices(
+        cfg,
+        lang=initial_ui_lang,
+        mode_filter="explanation",
+        include_auto=True,
+    )
+    config_extract_prompt_choices = _prompt_path_choices(
+        cfg,
+        lang=initial_ui_lang,
+        mode_filter="extraction",
+        include_auto=True,
+    )
+    config_explain_prompt_choices = _prompt_path_choices(
+        cfg,
+        lang=initial_ui_lang,
+        mode_filter="explanation",
+        include_auto=True,
+    )
     initial_runs = _scan_runs(cfg, limit=30)
     if initial_runs:
-        initial_run_choices = [(_run_choice_label(run, lang=initial_ui_lang), run.run_id) for run in initial_runs]
+        initial_run_choices = [
+            (_run_choice_label(run, lang=initial_ui_lang), run.run_id)
+            for run in initial_runs
+        ]
         initial_run_selected = initial_runs[0].run_id
-        initial_run_detail, initial_run_download = _load_run_detail(initial_run_selected, cfg, lang=initial_ui_lang)
+        initial_run_detail, initial_run_download = _load_run_detail(
+            initial_run_selected, cfg, lang=initial_ui_lang
+        )
     else:
         initial_run_choices = []
         initial_run_selected = None
@@ -1685,92 +1968,146 @@ def build_interface() -> gr.Blocks:
             ui_lang = gr.Dropdown(
                 choices=[("English", "en"), ("中文", "zh")],
                 value=initial_ui_lang,
-                label=_tr(initial_ui_lang, "UI language", "界面语言"),
+                label=_tr(initial_ui_lang, "UI language", "鐣岄潰璇█"),
                 scale=1,
             )
         title_md = gr.Markdown(
             _tr(
                 initial_ui_lang,
                 "# ClawLingua Web UI\nLocal deck builder for text learning.",
-                "# ClawLingua Web UI\n本地化文本学习牌组生成器。",
+                "# ClawLingua Web UI\nLocal deck builder for text learning.",
             )
         )
 
-        with gr.Tab(_tr(initial_ui_lang, "Run", "运行")) as run_tab:
+        with gr.Tab(_tr(initial_ui_lang, "Run", "杩愯")) as run_tab:
             with gr.Row():
                 input_file = gr.File(
-                    label=_tr(initial_ui_lang, "Input file", "输入文件"),
+                    label=_tr(initial_ui_lang, "Input file", "杈撳叆鏂囦欢"),
                     file_types=[".txt", ".md", ".markdown", ".epub"],
                     file_count="single",
                 )
-                deck_title = gr.Textbox(label=_tr(initial_ui_lang, "Deck title (optional)", "牌组名称（可选）"))
+                deck_title = gr.Textbox(
+                    label=_tr(
+                        initial_ui_lang,
+                        "Deck title (optional)",
+                        "鐗岀粍鍚嶇О锛堝彲閫夛級",
+                    )
+                )
 
             with gr.Row():
                 source_lang = gr.Dropdown(
                     choices=["en", "zh", "ja", "de", "fr"],
                     value=cfg.default_source_lang,
-                    label=_tr(initial_ui_lang, "Source language", "源语言"),
+                    label=_tr(initial_ui_lang, "Source language", "婧愯瑷€"),
                 )
                 target_lang = gr.Dropdown(
                     choices=["zh", "en", "ja", "de", "fr"],
                     value=cfg.default_target_lang,
-                    label=_tr(initial_ui_lang, "Target language", "目标语言"),
+                    label=_tr(initial_ui_lang, "Target language", "鐩爣璇█"),
                 )
                 content_profile = gr.Dropdown(
-                    choices=["prose_article", "transcript_dialogue", "textbook_examples"],
+                    choices=[
+                        "prose_article",
+                        "transcript_dialogue",
+                        "textbook_examples",
+                    ],
                     value=cfg.content_profile,
-                    label=_tr(initial_ui_lang, "Content profile", "内容类型"),
+                    label=_tr(initial_ui_lang, "Content profile", "鍐呭绫诲瀷"),
                 )
                 learning_mode = gr.Dropdown(
                     choices=["expression_mining", "reading_support"],
                     value=getattr(cfg, "learning_mode", "expression_mining"),
-                    label=_tr(initial_ui_lang, "Learning mode", "学习模式"),
+                    label=_tr(initial_ui_lang, "Learning mode", "瀛︿範妯″紡"),
                 )
                 difficulty = gr.Dropdown(
                     choices=["beginner", "intermediate", "advanced"],
                     value=cfg.cloze_difficulty,
-                    label=_tr(initial_ui_lang, "Difficulty", "难度"),
+                    label=_tr(initial_ui_lang, "Difficulty", "闅惧害"),
+                )
+
+            with gr.Row():
+                run_extract_prompt = gr.Dropdown(
+                    choices=run_extract_prompt_choices,
+                    value="",
+                    label=_tr(
+                        initial_ui_lang,
+                        "Extraction prompt (run override)",
+                        "Extraction prompt (run override)",
+                    ),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Equivalent to CLI --extract-prompt.",
+                        "Equivalent to CLI --extract-prompt.",
+                    ),
+                )
+                run_explain_prompt = gr.Dropdown(
+                    choices=run_explain_prompt_choices,
+                    value="",
+                    label=_tr(
+                        initial_ui_lang,
+                        "Explanation prompt (run override)",
+                        "Explanation prompt (run override)",
+                    ),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Equivalent to CLI --explain-prompt.",
+                        "Equivalent to CLI --explain-prompt.",
+                    ),
                 )
 
             with gr.Row():
                 max_notes = gr.Number(
-                    label=_tr(initial_ui_lang, "Max notes (0 = no limit)", "最大 note 数（0=不限）"),
+                    label=_tr(
+                        initial_ui_lang,
+                        "Max notes (0 = no limit)",
+                        "Max notes (0 = no limit)",
+                    ),
                     info=_tr(
                         initial_ui_lang,
                         "Maximum notes after dedupe. Empty/0 means no limit.",
-                        "去重后最多生成多少 note。空或 0 表示不限制。",
+                        "Maximum notes after dedupe. Empty/0 means no limit.",
                     ),
                     value=None,
                     precision=0,
                 )
                 input_char_limit = gr.Number(
-                    label=_tr(initial_ui_lang, "Input char limit", "输入字符上限"),
+                    label=_tr(initial_ui_lang, "Input char limit", "Input char limit"),
                     info=_tr(
                         initial_ui_lang,
                         "Only process the first N chars of input. Empty means no limit.",
-                        "仅处理输入前 N 个字符。留空表示不限制。",
+                        "Only process the first N chars of input. Empty means no limit.",
                     ),
                     value=None,
                     precision=0,
                 )
 
-            with gr.Accordion(_tr(initial_ui_lang, "Advanced", "高级参数"), open=False) as run_advanced:
+            with gr.Accordion(
+                _tr(initial_ui_lang, "Advanced", "Advanced"), open=False
+            ) as run_advanced:
                 cloze_min_chars = gr.Number(
-                    label=_tr(initial_ui_lang, "Cloze min chars (override env)", "最小挖空长度（覆盖 env）"),
+                    label=_tr(
+                        initial_ui_lang,
+                        "Cloze min chars (override env)",
+                        "Cloze min chars (override env)",
+                    ),
                     info=_tr(
                         initial_ui_lang,
                         "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.",
-                        "仅本次运行覆盖 CLAWLINGUA_CLOZE_MIN_CHARS。",
+                        "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.",
                     ),
                     value=cfg.cloze_min_chars,
                     precision=0,
                 )
                 chunk_max_chars = gr.Number(
-                    label=_tr(initial_ui_lang, "Chunk max chars (override env)", "chunk 最大字符（覆盖 env）"),
+                    label=_tr(
+                        initial_ui_lang,
+                        "Chunk max chars (override env)",
+                        "Chunk max chars (override env)",
+                    ),
                     info=_tr(
                         initial_ui_lang,
                         "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.",
-                        "仅本次运行覆盖 CLAWLINGUA_CHUNK_MAX_CHARS。",
+                        "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.",
                     ),
                     value=cfg.chunk_max_chars,
                     precision=0,
@@ -1780,24 +2117,38 @@ def build_interface() -> gr.Blocks:
                     maximum=1.0,
                     value=cfg.llm_temperature,
                     step=0.05,
-                    label=_tr(initial_ui_lang, "Temperature (override env)", "温度参数（覆盖 env）"),
-                    info=_tr(initial_ui_lang, "0 is more deterministic; higher values are more random.", "0 更确定，高值更随机。"),
+                    label=_tr(
+                        initial_ui_lang,
+                        "Temperature (override env)",
+                        "Temperature (override env)",
+                    ),
+                    info=_tr(
+                        initial_ui_lang,
+                        "0 is more deterministic; higher values are more random.",
+                        "0 is more deterministic; higher values are more random.",
+                    ),
                 )
                 save_intermediate = gr.Checkbox(
-                    label=_tr(initial_ui_lang, "Save intermediate files", "保存中间文件"),
+                    label=_tr(
+                        initial_ui_lang,
+                        "Save intermediate files",
+                        "Save intermediate files",
+                    ),
                     info=_tr(
                         initial_ui_lang,
                         "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.",
-                        "将中间 JSONL/media 写入 OUTPUT_DIR/<run_id>。",
+                        "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.",
                     ),
                     value=cfg.save_intermediate,
                 )
                 continue_on_error = gr.Checkbox(
-                    label=_tr(initial_ui_lang, "Continue on error", "遇错继续"),
+                    label=_tr(
+                        initial_ui_lang, "Continue on error", "Continue on error"
+                    ),
                     info=_tr(
                         initial_ui_lang,
                         "If enabled, continue processing after per-item failures.",
-                        "勾选后遇到局部错误仍继续处理后续内容。",
+                        "If enabled, continue processing after per-item failures.",
                     ),
                     value=False,
                 )
@@ -1805,10 +2156,17 @@ def build_interface() -> gr.Blocks:
             run_button = gr.Button(_tr(initial_ui_lang, "Run", "Run"))
 
             run_status = gr.Markdown(label=_tr(initial_ui_lang, "Status", "Status"))
-            output_file = gr.File(label=_tr(initial_ui_lang, "Download .apkg", "Download .apkg"), interactive=False)
-            recent_runs_heading = gr.Markdown(_tr(initial_ui_lang, "### Recent runs", "### Recent runs"))
+            output_file = gr.File(
+                label=_tr(initial_ui_lang, "Download .apkg", "Download .apkg"),
+                interactive=False,
+            )
+            recent_runs_heading = gr.Markdown(
+                _tr(initial_ui_lang, "### Recent runs", "### Recent runs")
+            )
             with gr.Row():
-                refresh_runs_button = gr.Button(_tr(initial_ui_lang, "Refresh runs", "Refresh runs"))
+                refresh_runs_button = gr.Button(
+                    _tr(initial_ui_lang, "Refresh runs", "Refresh runs")
+                )
                 run_selector = gr.Dropdown(
                     choices=initial_run_choices,
                     value=initial_run_selected,
@@ -1821,13 +2179,13 @@ def build_interface() -> gr.Blocks:
                 value=initial_run_download,
             )
             analytics_heading = gr.Markdown(
-                _tr(initial_ui_lang, "### Run analytics", "### 运行统计分析"),
+                _tr(initial_ui_lang, "### Run analytics", "### 杩愯缁熻鍒嗘瀽"),
                 render=False,
             )
             taxonomy_filter = gr.Dropdown(
                 choices=initial_taxonomy_choices,
                 value="all",
-                label=_tr(initial_ui_lang, "Taxonomy filter", "taxonomy 过滤"),
+                label=_tr(initial_ui_lang, "Taxonomy filter", "taxonomy 杩囨护"),
                 render=False,
             )
             transfer_filter = gr.Dropdown(
@@ -1837,23 +2195,23 @@ def build_interface() -> gr.Blocks:
                     ("without_transfer", "without_transfer"),
                 ],
                 value="all",
-                label=_tr(initial_ui_lang, "Transfer filter", "transfer 过滤"),
+                label=_tr(initial_ui_lang, "Transfer filter", "transfer 杩囨护"),
                 render=False,
             )
             rejection_filter = gr.Dropdown(
                 choices=initial_rejection_choices,
                 value="all",
-                label=_tr(initial_ui_lang, "Rejection filter", "拒绝原因过滤"),
+                label=_tr(initial_ui_lang, "Rejection filter", "鎷掔粷鍘熷洜杩囨护"),
                 render=False,
             )
             chunk_filter = gr.Dropdown(
                 choices=initial_chunk_choices,
                 value="all",
-                label=_tr(initial_ui_lang, "Chunk filter", "chunk 过滤"),
+                label=_tr(initial_ui_lang, "Chunk filter", "chunk 杩囨护"),
                 render=False,
             )
             apply_analysis_filter_btn = gr.Button(
-                _tr(initial_ui_lang, "Apply filters", "应用过滤"),
+                _tr(initial_ui_lang, "Apply filters", "搴旂敤杩囨护"),
                 render=False,
             )
             run_analysis = gr.Markdown(value=initial_analysis_md, render=False)
@@ -1871,7 +2229,9 @@ def build_interface() -> gr.Blocks:
                 interactive=False,
                 wrap=True,
                 value=initial_samples_rows,
-                label=_tr(initial_ui_lang, "Representative samples", "代表性样例"),
+                label=_tr(
+                    initial_ui_lang, "Representative samples", "Representative samples"
+                ),
                 render=False,
             )
 
@@ -1887,6 +2247,8 @@ def build_interface() -> gr.Blocks:
                 profile,
                 mode,
                 diff,
+                extract_prompt_val,
+                explain_prompt_val,
                 max_notes_val,
                 input_limit_val,
                 cloze_min_val,
@@ -1913,6 +2275,8 @@ def build_interface() -> gr.Blocks:
                     save_intermediate=bool(save_inter_val),
                     continue_on_error=bool(continue_on_error_val),
                     prompt_lang=lang,
+                    extract_prompt=_as_str(extract_prompt_val),
+                    explain_prompt=_as_str(explain_prompt_val),
                 )
                 cfg_now = _load_app_config()
                 run_id = _as_str(result.get("run_id")) or None
@@ -1921,7 +2285,13 @@ def build_interface() -> gr.Blocks:
                     lang=lang,
                     preferred_run_id=run_id,
                 )
-                analysis_md, sample_rows, taxonomy_choices, rejection_choices, chunk_choices = _build_run_analysis(
+                (
+                    analysis_md,
+                    sample_rows,
+                    taxonomy_choices,
+                    rejection_choices,
+                    chunk_choices,
+                ) = _build_run_analysis(
                     run_id,
                     cfg_now,
                     lang=lang,
@@ -1988,8 +2358,18 @@ def build_interface() -> gr.Blocks:
                     lang=lang,
                     preferred_run_id=selected_run_id,
                 )
-                run_id_next = _as_str(selector_update.get("value") if isinstance(selector_update, dict) else selected_run_id)
-                analysis_md, sample_rows, taxonomy_choices, rejection_choices, chunk_choices = _build_run_analysis(
+                run_id_next = _as_str(
+                    selector_update.get("value")
+                    if isinstance(selector_update, dict)
+                    else selected_run_id
+                )
+                (
+                    analysis_md,
+                    sample_rows,
+                    taxonomy_choices,
+                    rejection_choices,
+                    chunk_choices,
+                ) = _build_run_analysis(
                     run_id_next,
                     cfg_now,
                     lang=lang,
@@ -2016,8 +2396,16 @@ def build_interface() -> gr.Blocks:
             ) -> tuple[str, str | None, str, list[list[Any]], Any, Any, Any, Any]:
                 lang = _normalize_ui_lang(ui_lang_val)
                 cfg_now = _load_app_config()
-                detail_md, download_path = _load_run_detail(run_id_val, cfg_now, lang=lang)
-                analysis_md, sample_rows, taxonomy_choices, rejection_choices, chunk_choices = _build_run_analysis(
+                detail_md, download_path = _load_run_detail(
+                    run_id_val, cfg_now, lang=lang
+                )
+                (
+                    analysis_md,
+                    sample_rows,
+                    taxonomy_choices,
+                    rejection_choices,
+                    chunk_choices,
+                ) = _build_run_analysis(
                     run_id_val,
                     cfg_now,
                     lang=lang,
@@ -2073,6 +2461,8 @@ def build_interface() -> gr.Blocks:
                     content_profile,
                     learning_mode,
                     difficulty,
+                    run_extract_prompt,
+                    run_explain_prompt,
                     max_notes,
                     input_char_limit,
                     cloze_min_chars,
@@ -2129,80 +2519,182 @@ def build_interface() -> gr.Blocks:
             )
             apply_analysis_filter_btn.click(
                 _on_apply_analysis_filters,
-                inputs=[run_selector, ui_lang, taxonomy_filter, transfer_filter, rejection_filter, chunk_filter],
+                inputs=[
+                    run_selector,
+                    ui_lang,
+                    taxonomy_filter,
+                    transfer_filter,
+                    rejection_filter,
+                    chunk_filter,
+                ],
                 outputs=[run_analysis, run_samples],
             )
-        with gr.Tab(_tr(initial_ui_lang, "Config", "配置")) as config_tab:
-            config_heading = gr.Markdown(_tr(initial_ui_lang, "### Config (.env editor)", "### 配置（.env 编辑器）"))
+        with gr.Tab(_tr(initial_ui_lang, "Config", "閰嶇疆")) as config_tab:
+            config_heading = gr.Markdown(
+                _tr(
+                    initial_ui_lang,
+                    "### Config (.env editor)",
+                    "### 閰嶇疆锛?env 缂栬緫鍣級",
+                )
+            )
 
-            with gr.Accordion(_tr(initial_ui_lang, "LLM (primary)", "主 LLM"), open=True) as llm_accordion:
+            with gr.Accordion(
+                _tr(initial_ui_lang, "Extraction LLM", "Extraction LLM"), open=True
+            ) as llm_accordion:
                 llm_base_url = gr.Textbox(
                     label="CLAWLINGUA_LLM_BASE_URL",
                     value=cfg_view.get("CLAWLINGUA_LLM_BASE_URL", ""),
                     info=_tr(
                         initial_ui_lang,
                         "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).",
-                        "OpenAI 兼容接口基础地址（/chat/completions 之前的部分，如 .../v1）。",
+                        "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).",
                     ),
                 )
                 llm_api_key = gr.Textbox(
                     label="CLAWLINGUA_LLM_API_KEY",
                     value=cfg_view.get("CLAWLINGUA_LLM_API_KEY", ""),
                     type="password",
-                    info=_tr(initial_ui_lang, "API key for primary LLM, when required.", "主 LLM 的 API Key（如需要）。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "API key for extraction LLM, when required.",
+                        "API key for extraction LLM, when required.",
+                    ),
                 )
                 llm_model = gr.Textbox(
                     label="CLAWLINGUA_LLM_MODEL",
                     value=cfg_view.get("CLAWLINGUA_LLM_MODEL", ""),
-                    info=_tr(initial_ui_lang, "Model name for primary LLM.", "主 LLM 的模型名。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Model name for extraction LLM.",
+                        "Model name for extraction LLM.",
+                    ),
                 )
                 llm_timeout = gr.Textbox(
                     label="CLAWLINGUA_LLM_TIMEOUT_SECONDS",
                     value=cfg_view.get("CLAWLINGUA_LLM_TIMEOUT_SECONDS", "120"),
-                    info=_tr(initial_ui_lang, "Request timeout in seconds.", "请求超时（秒）。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Request timeout in seconds.",
+                        "Request timeout in seconds.",
+                    ),
                 )
                 llm_temperature_env = gr.Textbox(
                     label="CLAWLINGUA_LLM_TEMPERATURE",
                     value=cfg_view.get("CLAWLINGUA_LLM_TEMPERATURE", "0.2"),
-                    info=_tr(initial_ui_lang, "Default temperature for primary LLM.", "主 LLM 默认温度参数。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Default temperature for extraction LLM.",
+                        "Default temperature for extraction LLM.",
+                    ),
+                )
+                llm_chunk_batch_size_env = gr.Textbox(
+                    label="CLAWLINGUA_LLM_CHUNK_BATCH_SIZE",
+                    value=cfg_view.get("CLAWLINGUA_LLM_CHUNK_BATCH_SIZE", "1"),
+                    info="Chunk batch size for cloze LLM calls; 1 means per-chunk requests.",
+                )
+                extract_prompt_env = gr.Dropdown(
+                    choices=config_extract_prompt_choices,
+                    value=cfg_view.get("CLAWLINGUA_EXTRACT_PROMPT", ""),
+                    label="CLAWLINGUA_EXTRACT_PROMPT",
+                    info=_tr(
+                        initial_ui_lang,
+                        "Default extraction prompt path.",
+                        "Default extraction prompt path.",
+                    ),
                 )
                 with gr.Row():
-                    llm_list_models_btn = gr.Button(_tr(initial_ui_lang, "List models", "列出模型"))
-                    llm_test_btn = gr.Button(_tr(initial_ui_lang, "Test", "测试连通"))
-                llm_status = gr.Markdown(label=_tr(initial_ui_lang, "Primary LLM status", "主 LLM 状态"))
+                    llm_list_models_btn = gr.Button(
+                        _tr(initial_ui_lang, "List models", "鍒楀嚭妯″瀷")
+                    )
+                    llm_test_btn = gr.Button(_tr(initial_ui_lang, "Test", "Test"))
+                llm_status = gr.Markdown(
+                    label=_tr(
+                        initial_ui_lang,
+                        "Extraction LLM status",
+                        "Extraction LLM status",
+                    )
+                )
 
-            with gr.Accordion(_tr(initial_ui_lang, "Translation LLM", "翻译 LLM"), open=False) as translate_accordion:
+            with gr.Accordion(
+                _tr(initial_ui_lang, "Explanation LLM", "Explanation LLM"), open=False
+            ) as translate_accordion:
                 translate_base_url = gr.Textbox(
                     label="CLAWLINGUA_TRANSLATE_LLM_BASE_URL",
                     value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_BASE_URL", ""),
-                    info=_tr(initial_ui_lang, "Optional base URL for translation model.", "翻译模型可选基础地址。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Optional base URL for explanation model.",
+                        "Optional base URL for explanation model.",
+                    ),
                 )
                 translate_api_key = gr.Textbox(
                     label="CLAWLINGUA_TRANSLATE_LLM_API_KEY",
                     value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_API_KEY", ""),
                     type="password",
-                    info=_tr(initial_ui_lang, "API key for translation LLM, when required.", "翻译 LLM 的 API Key（如需要）。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "API key for explanation LLM, when required.",
+                        "API key for explanation LLM, when required.",
+                    ),
                 )
                 translate_model = gr.Textbox(
                     label="CLAWLINGUA_TRANSLATE_LLM_MODEL",
                     value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_MODEL", ""),
-                    info=_tr(initial_ui_lang, "Model name for translation LLM.", "翻译 LLM 的模型名。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Model name for explanation LLM.",
+                        "Model name for explanation LLM.",
+                    ),
                 )
                 translate_temperature = gr.Textbox(
                     label="CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE",
                     value=cfg_view.get("CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE", ""),
-                    info=_tr(initial_ui_lang, "Default temperature for translation LLM.", "翻译 LLM 默认温度参数。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Default temperature for explanation LLM.",
+                        "Default temperature for explanation LLM.",
+                    ),
+                )
+                explain_prompt_env = gr.Dropdown(
+                    choices=config_explain_prompt_choices,
+                    value=cfg_view.get("CLAWLINGUA_EXPLAIN_PROMPT", ""),
+                    label="CLAWLINGUA_EXPLAIN_PROMPT",
+                    info=_tr(
+                        initial_ui_lang,
+                        "Default explanation prompt path.",
+                        "Default explanation prompt path.",
+                    ),
                 )
                 with gr.Row():
-                    translate_list_models_btn = gr.Button(_tr(initial_ui_lang, "List models (translate)", "列出翻译模型"))
-                    translate_test_btn = gr.Button(_tr(initial_ui_lang, "Test (translate)", "测试翻译连通"))
-                translate_status = gr.Markdown(label=_tr(initial_ui_lang, "Translation LLM status", "翻译 LLM 状态"))
+                    translate_list_models_btn = gr.Button(
+                        _tr(
+                            initial_ui_lang,
+                            "List models (explanation)",
+                            "鍒楀嚭瑙ｉ噴妯″瀷",
+                        )
+                    )
+                    translate_test_btn = gr.Button(
+                        _tr(initial_ui_lang, "Test (explanation)", "Test (explanation)")
+                    )
+                translate_status = gr.Markdown(
+                    label=_tr(
+                        initial_ui_lang,
+                        "Explanation LLM status",
+                        "Explanation LLM status",
+                    )
+                )
 
-            with gr.Accordion(_tr(initial_ui_lang, "Chunk & Cloze", "切块与挖空"), open=False) as chunk_accordion:
+            with gr.Accordion(
+                _tr(initial_ui_lang, "Chunk & Cloze", "Chunk & Cloze"), open=False
+            ) as chunk_accordion:
                 chunk_max_chars_env = gr.Textbox(
                     label="CLAWLINGUA_CHUNK_MAX_CHARS",
                     value=cfg_view.get("CLAWLINGUA_CHUNK_MAX_CHARS", "1800"),
-                    info=_tr(initial_ui_lang, "Default max chars per chunk.", "默认每个 chunk 的最大字符数。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Default max chars per chunk.",
+                        "Default max chars per chunk.",
+                    ),
                 )
                 chunk_min_chars_env = gr.Textbox(
                     label="CLAWLINGUA_CHUNK_MIN_CHARS",
@@ -2211,7 +2703,11 @@ def build_interface() -> gr.Blocks:
                 cloze_min_chars_env = gr.Textbox(
                     label="CLAWLINGUA_CLOZE_MIN_CHARS",
                     value=cfg_view.get("CLAWLINGUA_CLOZE_MIN_CHARS", "0"),
-                    info=_tr(initial_ui_lang, "Minimum chars required for cloze text.", "挖空文本最小字符数。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Minimum chars required for cloze text.",
+                        "Minimum chars required for cloze text.",
+                    ),
                 )
                 cloze_max_per_chunk_env = gr.Textbox(
                     label="CLAWLINGUA_CLOZE_MAX_PER_CHUNK",
@@ -2219,7 +2715,23 @@ def build_interface() -> gr.Blocks:
                     info=_tr(
                         initial_ui_lang,
                         "Max cards per chunk after dedupe. Empty/0 means unlimited.",
-                        "去重后每个 chunk 最多卡片数。空或 0 表示不限制。",
+                        "Max cards per chunk after dedupe. Empty/0 means unlimited.",
+                    ),
+                )
+                validate_retry_enable_env = gr.Textbox(
+                    label="CLAWLINGUA_VALIDATE_FORMAT_RETRY_ENABLE",
+                    value=cfg_view.get(
+                        "CLAWLINGUA_VALIDATE_FORMAT_RETRY_ENABLE", "true"
+                    ),
+                )
+                validate_retry_max_env = gr.Textbox(
+                    label="CLAWLINGUA_VALIDATE_FORMAT_RETRY_MAX",
+                    value=cfg_view.get("CLAWLINGUA_VALIDATE_FORMAT_RETRY_MAX", "3"),
+                )
+                validate_retry_llm_enable_env = gr.Textbox(
+                    label="CLAWLINGUA_VALIDATE_FORMAT_RETRY_LLM_ENABLE",
+                    value=cfg_view.get(
+                        "CLAWLINGUA_VALIDATE_FORMAT_RETRY_LLM_ENABLE", "true"
                     ),
                 )
                 content_profile_env = gr.Textbox(
@@ -2233,36 +2745,59 @@ def build_interface() -> gr.Blocks:
                 prompt_lang_env = gr.Textbox(
                     label="CLAWLINGUA_PROMPT_LANG",
                     value=cfg_view.get("CLAWLINGUA_PROMPT_LANG", "zh"),
-                    info=_tr(initial_ui_lang, "Prompt language for multi-lingual prompts (en/zh).", "多语言 prompt 选择（en/zh）。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Prompt language for multi-lingual prompts (en/zh).",
+                        "Prompt language for multi-lingual prompts (en/zh).",
+                    ),
                 )
 
-            with gr.Accordion(_tr(initial_ui_lang, "Paths & defaults", "路径与默认值"), open=False) as paths_accordion:
+            with gr.Accordion(
+                _tr(initial_ui_lang, "Paths & defaults", "Paths & defaults"), open=False
+            ) as paths_accordion:
                 output_dir_env = gr.Textbox(
                     label="CLAWLINGUA_OUTPUT_DIR",
                     value=cfg_view.get("CLAWLINGUA_OUTPUT_DIR", "./runs"),
-                    info=_tr(initial_ui_lang, "Directory for intermediate run data (JSONL, media).", "中间运行数据目录（JSONL、media）。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Directory for intermediate run data (JSONL, media).",
+                        "Directory for intermediate run data (JSONL, media).",
+                    ),
                 )
                 export_dir_env = gr.Textbox(
                     label="CLAWLINGUA_EXPORT_DIR",
                     value=cfg_view.get("CLAWLINGUA_EXPORT_DIR", "./outputs"),
-                    info=_tr(initial_ui_lang, "Default directory for exported decks.", "默认牌组导出目录。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Default directory for exported decks.",
+                        "Default directory for exported decks.",
+                    ),
                 )
                 log_dir_env = gr.Textbox(
                     label="CLAWLINGUA_LOG_DIR",
                     value=cfg_view.get("CLAWLINGUA_LOG_DIR", "./logs"),
-                    info=_tr(initial_ui_lang, "Directory for log files.", "日志目录。"),
+                    info=_tr(
+                        initial_ui_lang,
+                        "Directory for log files.",
+                        "Directory for log files.",
+                    ),
                 )
                 default_deck_name_env = gr.Textbox(
                     label="CLAWLINGUA_DEFAULT_DECK_NAME",
-                    value=cfg_view.get("CLAWLINGUA_DEFAULT_DECK_NAME", cfg.default_deck_name),
+                    value=cfg_view.get(
+                        "CLAWLINGUA_DEFAULT_DECK_NAME", cfg.default_deck_name
+                    ),
                 )
 
-            with gr.Accordion(_tr(initial_ui_lang, "TTS voices (Edge)", "语音配置（Edge）"), open=False) as tts_accordion:
+            with gr.Accordion(
+                _tr(initial_ui_lang, "TTS voices (Edge)", "TTS voices (Edge)"),
+                open=False,
+            ) as tts_accordion:
                 tts_hint_md = gr.Markdown(
                     _tr(
                         initial_ui_lang,
                         "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)",
-                        "具体的音色可以参考[Edge TTS Voice Samples](https://tts.travisvn.com/)",
+                        "鍏蜂綋鐨勯煶鑹插彲浠ュ弬鑰僛Edge TTS Voice Samples](https://tts.travisvn.com/)",
                     )
                 )
                 tts_voice1_env = gr.Textbox(
@@ -2271,7 +2806,7 @@ def build_interface() -> gr.Blocks:
                     info=_tr(
                         initial_ui_lang,
                         "Configure 4 voice slots used for random selection.",
-                        "配置 4 个语音槽位，用于随机选择。",
+                        "Configure 4 voice slots used for random selection.",
                     ),
                 )
                 tts_voice2_env = gr.Textbox(
@@ -2288,11 +2823,21 @@ def build_interface() -> gr.Blocks:
                 )
 
             with gr.Row():
-                load_defaults_btn = gr.Button(_tr(initial_ui_lang, "Load defaults from ENV_EXAMPLE.md", "从 ENV_EXAMPLE.md 载入默认值"))
-                save_config_btn = gr.Button(_tr(initial_ui_lang, "Save config", "保存配置"))
+                load_defaults_btn = gr.Button(
+                    _tr(
+                        initial_ui_lang,
+                        "Load defaults from ENV_EXAMPLE.md",
+                        "Load defaults from ENV_EXAMPLE.md",
+                    )
+                )
+                save_config_btn = gr.Button(
+                    _tr(initial_ui_lang, "Save config", "淇濆瓨閰嶇疆")
+                )
             save_config_status = gr.Markdown()
 
-            def _on_list_models(base_url: str, api_key: str, timeout_raw: Any, ui_lang_val: str) -> str:
+            def _on_list_models(
+                base_url: str, api_key: str, timeout_raw: Any, ui_lang_val: str
+            ) -> str:
                 return _list_models_markdown(
                     base_url=base_url,
                     api_key=api_key,
@@ -2300,7 +2845,9 @@ def build_interface() -> gr.Blocks:
                     lang=_normalize_ui_lang(ui_lang_val),
                 )
 
-            def _on_test_models(base_url: str, api_key: str, timeout_raw: Any, ui_lang_val: str) -> str:
+            def _on_test_models(
+                base_url: str, api_key: str, timeout_raw: Any, ui_lang_val: str
+            ) -> str:
                 return _test_models_markdown(
                     base_url=base_url,
                     api_key=api_key,
@@ -2335,6 +2882,7 @@ def build_interface() -> gr.Blocks:
                 llm_model_val: str,
                 llm_timeout_val: str,
                 llm_temperature_val: str,
+                llm_chunk_batch_size_val: str,
                 translate_base_url_val: str,
                 translate_api_key_val: str,
                 translate_model_val: str,
@@ -2343,9 +2891,14 @@ def build_interface() -> gr.Blocks:
                 chunk_min_chars_val: str,
                 cloze_min_chars_val: str,
                 cloze_max_per_chunk_val: str,
+                validate_retry_enable_val: str,
+                validate_retry_max_val: str,
+                validate_retry_llm_enable_val: str,
                 content_profile_val: str,
                 cloze_difficulty_val: str,
                 prompt_lang_val: str,
+                extract_prompt_env_val: str,
+                explain_prompt_env_val: str,
                 output_dir_val: str,
                 export_dir_val: str,
                 log_dir_val: str,
@@ -2368,17 +2921,32 @@ def build_interface() -> gr.Blocks:
                     dv("CLAWLINGUA_LLM_MODEL", llm_model_val),
                     dv("CLAWLINGUA_LLM_TIMEOUT_SECONDS", llm_timeout_val),
                     dv("CLAWLINGUA_LLM_TEMPERATURE", llm_temperature_val),
+                    dv("CLAWLINGUA_LLM_CHUNK_BATCH_SIZE", llm_chunk_batch_size_val),
                     dv("CLAWLINGUA_TRANSLATE_LLM_BASE_URL", translate_base_url_val),
                     dv("CLAWLINGUA_TRANSLATE_LLM_API_KEY", translate_api_key_val),
                     dv("CLAWLINGUA_TRANSLATE_LLM_MODEL", translate_model_val),
-                    dv("CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE", translate_temperature_val),
+                    dv(
+                        "CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE",
+                        translate_temperature_val,
+                    ),
                     dv("CLAWLINGUA_CHUNK_MAX_CHARS", chunk_max_chars_val),
                     dv("CLAWLINGUA_CHUNK_MIN_CHARS", chunk_min_chars_val),
                     dv("CLAWLINGUA_CLOZE_MIN_CHARS", cloze_min_chars_val),
                     dv("CLAWLINGUA_CLOZE_MAX_PER_CHUNK", cloze_max_per_chunk_val),
+                    dv(
+                        "CLAWLINGUA_VALIDATE_FORMAT_RETRY_ENABLE",
+                        validate_retry_enable_val,
+                    ),
+                    dv("CLAWLINGUA_VALIDATE_FORMAT_RETRY_MAX", validate_retry_max_val),
+                    dv(
+                        "CLAWLINGUA_VALIDATE_FORMAT_RETRY_LLM_ENABLE",
+                        validate_retry_llm_enable_val,
+                    ),
                     dv("CLAWLINGUA_CONTENT_PROFILE", content_profile_val),
                     dv("CLAWLINGUA_CLOZE_DIFFICULTY", cloze_difficulty_val),
                     dv("CLAWLINGUA_PROMPT_LANG", prompt_lang_val),
+                    dv("CLAWLINGUA_EXTRACT_PROMPT", extract_prompt_env_val),
+                    dv("CLAWLINGUA_EXPLAIN_PROMPT", explain_prompt_env_val),
                     dv("CLAWLINGUA_OUTPUT_DIR", output_dir_val),
                     dv("CLAWLINGUA_EXPORT_DIR", export_dir_val),
                     dv("CLAWLINGUA_LOG_DIR", log_dir_val),
@@ -2387,7 +2955,7 @@ def build_interface() -> gr.Blocks:
                     dv("CLAWLINGUA_TTS_EDGE_VOICE2", tts_voice2_val),
                     dv("CLAWLINGUA_TTS_EDGE_VOICE3", tts_voice3_val),
                     dv("CLAWLINGUA_TTS_EDGE_VOICE4", tts_voice4_val),
-                    f"✅ {_tr(lang, 'Loaded defaults from ENV_EXAMPLE.md (not yet saved).', '已载入 ENV_EXAMPLE.md 默认值（尚未保存）。')}",
+                    f"✅ {_tr(lang, 'Loaded defaults from ENV_EXAMPLE.md (not yet saved).', 'Loaded defaults from ENV_EXAMPLE.md (not yet saved).')}",
                 )
 
             load_defaults_btn.click(
@@ -2398,6 +2966,7 @@ def build_interface() -> gr.Blocks:
                     llm_model,
                     llm_timeout,
                     llm_temperature_env,
+                    llm_chunk_batch_size_env,
                     translate_base_url,
                     translate_api_key,
                     translate_model,
@@ -2406,9 +2975,14 @@ def build_interface() -> gr.Blocks:
                     chunk_min_chars_env,
                     cloze_min_chars_env,
                     cloze_max_per_chunk_env,
+                    validate_retry_enable_env,
+                    validate_retry_max_env,
+                    validate_retry_llm_enable_env,
                     content_profile_env,
                     cloze_difficulty_env,
                     prompt_lang_env,
+                    extract_prompt_env,
+                    explain_prompt_env,
                     output_dir_env,
                     export_dir_env,
                     log_dir_env,
@@ -2425,6 +2999,7 @@ def build_interface() -> gr.Blocks:
                     llm_model,
                     llm_timeout,
                     llm_temperature_env,
+                    llm_chunk_batch_size_env,
                     translate_base_url,
                     translate_api_key,
                     translate_model,
@@ -2433,9 +3008,14 @@ def build_interface() -> gr.Blocks:
                     chunk_min_chars_env,
                     cloze_min_chars_env,
                     cloze_max_per_chunk_env,
+                    validate_retry_enable_env,
+                    validate_retry_max_env,
+                    validate_retry_llm_enable_env,
                     content_profile_env,
                     cloze_difficulty_env,
                     prompt_lang_env,
+                    extract_prompt_env,
+                    explain_prompt_env,
                     output_dir_env,
                     export_dir_env,
                     log_dir_env,
@@ -2454,6 +3034,7 @@ def build_interface() -> gr.Blocks:
                 llm_model_val,
                 llm_timeout_val,
                 llm_temperature_val,
+                llm_chunk_batch_size_val,
                 translate_base_url_val,
                 translate_api_key_val,
                 translate_model_val,
@@ -2462,9 +3043,14 @@ def build_interface() -> gr.Blocks:
                 chunk_min_chars_val,
                 cloze_min_chars_val,
                 cloze_max_per_chunk_val,
+                validate_retry_enable_val,
+                validate_retry_max_val,
+                validate_retry_llm_enable_val,
                 content_profile_val,
                 cloze_difficulty_val,
                 prompt_lang_val,
+                extract_prompt_env_val,
+                explain_prompt_env_val,
                 output_dir_val,
                 export_dir_val,
                 log_dir_val,
@@ -2481,17 +3067,27 @@ def build_interface() -> gr.Blocks:
                     "CLAWLINGUA_LLM_MODEL": llm_model_val or "",
                     "CLAWLINGUA_LLM_TIMEOUT_SECONDS": llm_timeout_val or "",
                     "CLAWLINGUA_LLM_TEMPERATURE": llm_temperature_val or "",
+                    "CLAWLINGUA_LLM_CHUNK_BATCH_SIZE": llm_chunk_batch_size_val or "",
                     "CLAWLINGUA_TRANSLATE_LLM_BASE_URL": translate_base_url_val or "",
                     "CLAWLINGUA_TRANSLATE_LLM_API_KEY": translate_api_key_val or "",
                     "CLAWLINGUA_TRANSLATE_LLM_MODEL": translate_model_val or "",
-                    "CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE": translate_temperature_val or "",
+                    "CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE": translate_temperature_val
+                    or "",
                     "CLAWLINGUA_CHUNK_MAX_CHARS": chunk_max_chars_val or "",
                     "CLAWLINGUA_CHUNK_MIN_CHARS": chunk_min_chars_val or "",
                     "CLAWLINGUA_CLOZE_MIN_CHARS": cloze_min_chars_val or "",
                     "CLAWLINGUA_CLOZE_MAX_PER_CHUNK": cloze_max_per_chunk_val or "",
+                    "CLAWLINGUA_VALIDATE_FORMAT_RETRY_ENABLE": validate_retry_enable_val
+                    or "",
+                    "CLAWLINGUA_VALIDATE_FORMAT_RETRY_MAX": validate_retry_max_val
+                    or "",
+                    "CLAWLINGUA_VALIDATE_FORMAT_RETRY_LLM_ENABLE": validate_retry_llm_enable_val
+                    or "",
                     "CLAWLINGUA_CONTENT_PROFILE": content_profile_val or "",
                     "CLAWLINGUA_CLOZE_DIFFICULTY": cloze_difficulty_val or "",
                     "CLAWLINGUA_PROMPT_LANG": prompt_lang_val or "",
+                    "CLAWLINGUA_EXTRACT_PROMPT": extract_prompt_env_val or "",
+                    "CLAWLINGUA_EXPLAIN_PROMPT": explain_prompt_env_val or "",
                     "CLAWLINGUA_OUTPUT_DIR": output_dir_val or "",
                     "CLAWLINGUA_EXPORT_DIR": export_dir_val or "",
                     "CLAWLINGUA_LOG_DIR": log_dir_val or "",
@@ -2512,6 +3108,7 @@ def build_interface() -> gr.Blocks:
                     llm_model,
                     llm_timeout,
                     llm_temperature_env,
+                    llm_chunk_batch_size_env,
                     translate_base_url,
                     translate_api_key,
                     translate_model,
@@ -2520,9 +3117,14 @@ def build_interface() -> gr.Blocks:
                     chunk_min_chars_env,
                     cloze_min_chars_env,
                     cloze_max_per_chunk_env,
+                    validate_retry_enable_env,
+                    validate_retry_max_env,
+                    validate_retry_llm_enable_env,
                     content_profile_env,
                     cloze_difficulty_env,
                     prompt_lang_env,
+                    extract_prompt_env,
+                    explain_prompt_env,
                     output_dir_env,
                     export_dir_env,
                     log_dir_env,
@@ -2536,95 +3138,955 @@ def build_interface() -> gr.Blocks:
                 outputs=[save_config_status],
             )
 
-        with gr.Tab(_tr(initial_ui_lang, "Prompt", "提示词")) as prompt_tab:
-            prompt_heading = gr.Markdown(_tr(initial_ui_lang, "### Prompt template editor", "### Prompt 模板编辑器"))
-            prompt_file_selector = gr.Dropdown(
-                choices=_prompt_choices(initial_ui_lang),
-                value=initial_prompt_key,
-                label=_tr(initial_ui_lang, "Prompt file", "Prompt 文件"),
+        with gr.Tab(_tr(initial_ui_lang, "Prompt", "Prompt")) as prompt_tab:
+            prompt_heading = gr.Markdown(
+                _tr(
+                    initial_ui_lang,
+                    "### Prompt template editor",
+                    "### Prompt template editor",
+                )
             )
+            with gr.Row():
+                prompt_file_selector = gr.Dropdown(
+                    choices=_prompt_choices(
+                        initial_ui_lang, mode_filter=initial_prompt_mode or "extraction"
+                    ),
+                    value=initial_prompt_key,
+                    label=_tr(initial_ui_lang, "Prompt file", "Prompt 鏂囦欢"),
+                    scale=2,
+                )
+                prompt_mode_selector = gr.Dropdown(
+                    choices=[
+                        (
+                            _prompt_mode_label("extraction", lang=initial_ui_lang),
+                            "extraction",
+                        ),
+                        (
+                            _prompt_mode_label("explanation", lang=initial_ui_lang),
+                            "explanation",
+                        ),
+                    ],
+                    value=initial_prompt_mode or "extraction",
+                    label=_tr(initial_ui_lang, "Prompt type", "Prompt type"),
+                    scale=1,
+                )
+            with gr.Row():
+                prompt_new_name = gr.Textbox(
+                    label=_tr(
+                        initial_ui_lang, "New prompt file name", "New prompt file name"
+                    ),
+                    placeholder="my_prompt.json",
+                )
+                prompt_rename_name = gr.Textbox(
+                    label=_tr(initial_ui_lang, "Rename to", "閲嶅懡鍚嶄负"),
+                    placeholder="renamed_prompt.json",
+                )
             prompt_editor = gr.Textbox(
-                label=_tr(initial_ui_lang, "Prompt template", "Prompt 模板"),
+                label=_tr(initial_ui_lang, "Prompt template", "Prompt 妯℃澘"),
                 value=initial_prompt_text,
                 lines=24,
             )
             with gr.Row():
-                prompt_save_btn = gr.Button(_tr(initial_ui_lang, "Save", "保存"))
-                prompt_load_default_btn = gr.Button(_tr(initial_ui_lang, "Load default", "载入默认"))
+                prompt_new_btn = gr.Button(_tr(initial_ui_lang, "New", "鏂板缓"))
+                prompt_save_btn = gr.Button(_tr(initial_ui_lang, "Save", "淇濆瓨"))
+                prompt_rename_btn = gr.Button(_tr(initial_ui_lang, "Rename", "Rename"))
+                prompt_load_default_btn = gr.Button(
+                    _tr(initial_ui_lang, "Delete", "鍒犻櫎"), variant="stop"
+                )
+            prompt_save_confirm = gr.Checkbox(value=False, visible=False)
+            prompt_delete_confirm = gr.Checkbox(value=False, visible=False)
             prompt_status = gr.Markdown(
-                label=_tr(initial_ui_lang, "Prompt status", "Prompt 状态"),
+                label=_tr(initial_ui_lang, "Prompt status", "Prompt status"),
                 value=initial_prompt_status,
             )
 
-            def _on_prompt_file_change(prompt_key: str, ui_lang_val: str) -> tuple[str, str]:
-                lang = _normalize_ui_lang(ui_lang_val)
-                return _load_prompt_template(prompt_key, prompt_files, lang=lang)
+            def _prompt_mode_choices_for_ui(lang: str) -> list[tuple[str, str]]:
+                return [
+                    (_prompt_mode_label("extraction", lang=lang), "extraction"),
+                    (_prompt_mode_label("explanation", lang=lang), "explanation"),
+                ]
 
-            def _on_prompt_save(prompt_key: str, prompt_template: str, ui_lang_val: str) -> str:
+            def _normalize_dropdown_value(
+                current: str, choices: list[tuple[str, str]]
+            ) -> str:
+                valid_values = {value for _label, value in choices}
+                current_value = _as_str(current)
+                return current_value if current_value in valid_values else ""
+
+            def _pick_prompt_key(
+                prompt_files_now: dict[str, Path],
+                *,
+                lang: str,
+                preferred_key: str = "",
+                preferred_mode: str = "",
+            ) -> str:
+                if preferred_key in prompt_files_now:
+                    return preferred_key
+                mode_value = _normalize_prompt_mode(preferred_mode)
+                if mode_value:
+                    for key in prompt_files_now:
+                        if (
+                            _load_prompt_mode(key, prompt_files_now, lang=lang)
+                            == mode_value
+                        ):
+                            return key
+                if prompt_files_now:
+                    return next(iter(prompt_files_now))
+                return ""
+
+            def _refresh_prompt_controls(
+                *,
+                lang: str,
+                prompt_key: str,
+                preferred_mode: str,
+                status: str,
+                editor_override: str | None,
+                run_extract_current: str,
+                run_explain_current: str,
+                config_extract_current: str,
+                config_explain_current: str,
+            ) -> tuple[Any, ...]:
+                cfg_now = _load_app_config()
+                prompt_files_now = _prompt_file_map(cfg_now)
+                selected_mode = _normalize_prompt_mode(preferred_mode)
+                if not selected_mode and prompt_key in prompt_files_now:
+                    selected_mode = _load_prompt_mode(
+                        prompt_key, prompt_files_now, lang=lang
+                    )
+                if not selected_mode:
+                    selected_mode = "extraction"
+                prompt_files_for_mode = _prompt_files_for_mode(
+                    prompt_files_now, mode=selected_mode, lang=lang
+                )
+                selected_key = _pick_prompt_key(
+                    prompt_files_for_mode,
+                    lang=lang,
+                    preferred_key=prompt_key,
+                    preferred_mode=selected_mode,
+                )
+                if not selected_key and prompt_files_now:
+                    selected_key = _pick_prompt_key(
+                        prompt_files_now,
+                        lang=lang,
+                        preferred_key=prompt_key,
+                        preferred_mode=selected_mode,
+                    )
+                    fallback_mode = _load_prompt_mode(
+                        selected_key, prompt_files_now, lang=lang
+                    )
+                    if fallback_mode:
+                        selected_mode = fallback_mode
+                        prompt_files_for_mode = _prompt_files_for_mode(
+                            prompt_files_now,
+                            mode=selected_mode,
+                            lang=lang,
+                        )
+                prompt_text = ""
+                load_msg = ""
+                if selected_key:
+                    prompt_text, load_msg = _load_prompt_template(
+                        selected_key, prompt_files_now, lang=lang
+                    )
+                    file_mode = _load_prompt_mode(
+                        selected_key, prompt_files_now, lang=lang
+                    )
+                    if file_mode:
+                        selected_mode = file_mode
+                        prompt_files_for_mode = _prompt_files_for_mode(
+                            prompt_files_now,
+                            mode=selected_mode,
+                            lang=lang,
+                        )
+                if editor_override is not None:
+                    prompt_text = editor_override
+
+                prompt_choices_now = _prompt_choices_from_map(
+                    prompt_files_for_mode, lang=lang
+                )
+                selected_key = _normalize_dropdown_value(
+                    selected_key, prompt_choices_now
+                )
+                if not selected_key and editor_override is None:
+                    prompt_text = ""
+                mode_choices_now = _prompt_mode_choices_for_ui(lang)
+                run_extract_choices_now = _prompt_path_choices(
+                    cfg_now,
+                    lang=lang,
+                    mode_filter="extraction",
+                    include_auto=True,
+                )
+                run_explain_choices_now = _prompt_path_choices(
+                    cfg_now,
+                    lang=lang,
+                    mode_filter="explanation",
+                    include_auto=True,
+                )
+                config_extract_choices_now = _prompt_path_choices(
+                    cfg_now,
+                    lang=lang,
+                    mode_filter="extraction",
+                    include_auto=True,
+                )
+                config_explain_choices_now = _prompt_path_choices(
+                    cfg_now,
+                    lang=lang,
+                    mode_filter="explanation",
+                    include_auto=True,
+                )
+                status_text = status or load_msg
+                return (
+                    gr.update(choices=prompt_choices_now, value=selected_key),
+                    gr.update(choices=mode_choices_now, value=selected_mode),
+                    gr.update(value=prompt_text),
+                    gr.update(value=status_text),
+                    gr.update(
+                        choices=run_extract_choices_now,
+                        value=_normalize_dropdown_value(
+                            run_extract_current, run_extract_choices_now
+                        ),
+                    ),
+                    gr.update(
+                        choices=run_explain_choices_now,
+                        value=_normalize_dropdown_value(
+                            run_explain_current, run_explain_choices_now
+                        ),
+                    ),
+                    gr.update(
+                        choices=config_extract_choices_now,
+                        value=_normalize_dropdown_value(
+                            config_extract_current, config_extract_choices_now
+                        ),
+                    ),
+                    gr.update(
+                        choices=config_explain_choices_now,
+                        value=_normalize_dropdown_value(
+                            config_explain_current, config_explain_choices_now
+                        ),
+                    ),
+                )
+
+            def _append_prompt_aux_updates(
+                updates: tuple[Any, ...],
+                *,
+                new_name_value: str = "",
+                rename_name_value: str = "",
+            ) -> tuple[Any, ...]:
+                return (
+                    *updates,
+                    gr.update(value=new_name_value),
+                    gr.update(value=rename_name_value),
+                    gr.update(value=False),
+                    gr.update(value=False),
+                )
+
+            def _on_prompt_file_change(
+                prompt_key: str,
+                prompt_mode: str,
+                run_extract_val: str,
+                run_explain_val: str,
+                config_extract_val: str,
+                config_explain_val: str,
+                ui_lang_val: str,
+            ) -> tuple[Any, ...]:
                 lang = _normalize_ui_lang(ui_lang_val)
-                raw_template = prompt_template or ""
-                if not raw_template.strip():
-                    return f"❌ {_tr(lang, 'Prompt template is empty.', 'Prompt 模板为空。')}"
-                template = raw_template.rstrip()
-                path, payload, msg = _read_prompt_payload(prompt_key, prompt_files, lang=lang)
+                return _refresh_prompt_controls(
+                    lang=lang,
+                    prompt_key=prompt_key,
+                    preferred_mode=prompt_mode,
+                    status="",
+                    editor_override=None,
+                    run_extract_current=run_extract_val,
+                    run_explain_current=run_explain_val,
+                    config_extract_current=config_extract_val,
+                    config_explain_current=config_explain_val,
+                )
+
+            def _on_prompt_mode_change(
+                prompt_mode: str,
+                prompt_key: str,
+                run_extract_val: str,
+                run_explain_val: str,
+                config_extract_val: str,
+                config_explain_val: str,
+                ui_lang_val: str,
+            ) -> tuple[Any, ...]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                return _refresh_prompt_controls(
+                    lang=lang,
+                    prompt_key=prompt_key,
+                    preferred_mode=prompt_mode,
+                    status="",
+                    editor_override=None,
+                    run_extract_current=run_extract_val,
+                    run_explain_current=run_explain_val,
+                    config_extract_current=config_extract_val,
+                    config_explain_current=config_explain_val,
+                )
+
+            def _on_prompt_new(
+                prompt_key: str,
+                new_name: str,
+                prompt_mode: str,
+                run_extract_val: str,
+                run_explain_val: str,
+                config_extract_val: str,
+                config_explain_val: str,
+                ui_lang_val: str,
+            ) -> tuple[Any, ...]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                mode = _normalize_prompt_mode(prompt_mode) or "extraction"
+                file_name = _sanitize_prompt_filename(new_name)
+                if not file_name:
+                    file_name = f"{mode}_prompt_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+                if (
+                    file_name in _PROMPT_META_FILENAMES
+                    or file_name in _PROMPT_TEMPLATE_FILENAMES
+                ):
+                    status = f"❌ {_tr(lang, 'Prompt file already exists.', 'Prompt file already exists.')}: `{file_name}`"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates, new_name_value=file_name)
+
+                cfg_now = _load_app_config()
+                prompts_dir = cfg_now.resolve_path(_PROMPT_DIR)
+                prompts_dir.mkdir(parents=True, exist_ok=True)
+                target_path = prompts_dir / file_name
+                if target_path.exists():
+                    status = f"❌ {_tr(lang, 'Prompt file already exists.', 'Prompt file already exists.')}: `{target_path}`"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates, new_name_value=file_name)
+
+                template_path = _prompt_template_path(cfg_now, mode)
+                if template_path is None or not template_path.exists():
+                    status = f"❌ {_tr(lang, 'Template prompt file missing.', 'Template prompt file missing.')}: `{template_path}`"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates, new_name_value=file_name)
+
+                try:
+                    template_payload = json.loads(
+                        template_path.read_text(encoding="utf-8")
+                    )
+                    template_spec = PromptSpec.model_validate(template_payload)
+                    payload = template_spec.model_dump(mode="json")
+                    payload["name"] = Path(file_name).stem
+                    payload["mode"] = mode
+                    target_path.write_text(
+                        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                except (
+                    OSError,
+                    json.JSONDecodeError,
+                    ValidationError,
+                    ValueError,
+                ) as exc:
+                    status = f"❌ {_tr(lang, 'Failed to save prompt file', 'Failed to save prompt file')}: `{exc}`"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates, new_name_value=file_name)
+
+                status = (
+                    f"✅ {_tr(lang, 'Prompt file created.', 'Prompt file created.')}\n\n"
+                    f"- file: `{target_path}`"
+                )
+                updates = _refresh_prompt_controls(
+                    lang=lang,
+                    prompt_key=file_name,
+                    preferred_mode=mode,
+                    status=status,
+                    editor_override=None,
+                    run_extract_current=run_extract_val,
+                    run_explain_current=run_explain_val,
+                    config_extract_current=config_extract_val,
+                    config_explain_current=config_explain_val,
+                )
+                return _append_prompt_aux_updates(updates)
+
+            def _on_prompt_save(
+                prompt_key: str,
+                prompt_mode: str,
+                prompt_template: str,
+                save_confirmed: bool,
+                run_extract_val: str,
+                run_explain_val: str,
+                config_extract_val: str,
+                config_explain_val: str,
+                ui_lang_val: str,
+            ) -> tuple[Any, ...]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                mode = _normalize_prompt_mode(prompt_mode) or "extraction"
+                template = (prompt_template or "").rstrip()
+                if not save_confirmed:
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status="",
+                        editor_override=template,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates)
+                if not template.strip():
+                    status = f"❌ {_tr(lang, 'Prompt template is empty.', 'Prompt template is empty.')}"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status=status,
+                        editor_override=template,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates)
+
+                prompt_files_now = _prompt_file_map(_load_app_config())
+                path, payload, msg = _read_prompt_payload(
+                    prompt_key, prompt_files_now, lang=lang
+                )
                 if payload is None or path is None:
-                    return msg
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status=msg,
+                        editor_override=template,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates)
+
+                payload["mode"] = mode
                 _set_user_prompt_template(payload, lang=lang, template=template)
                 ok, details = _write_prompt_payload(path, payload, lang=lang)
                 if not ok:
-                    return details
-                return (
-                    f"✅ {_tr(lang, 'Prompt template saved.', 'Prompt 模板已保存。')}\n\n"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status=details,
+                        editor_override=template,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates)
+
+                status = (
+                    f"✅ {_tr(lang, 'Prompt template saved.', 'Prompt template saved.')}\n\n"
                     f"{details}"
                 )
-
-            def _on_prompt_load_default(
-                prompt_key: str,
-                current_template: str,
-                ui_lang_val: str,
-            ) -> tuple[str, str]:
-                lang = _normalize_ui_lang(ui_lang_val)
-                defaults_payload, msg = _load_prompt_defaults(prompt_defaults_file, lang=lang)
-                if defaults_payload is None:
-                    return current_template, msg
-                default_template = _default_template_for_lang(
-                    defaults_payload,
-                    prompt_key=prompt_key,
+                updates = _refresh_prompt_controls(
                     lang=lang,
+                    prompt_key=prompt_key,
+                    preferred_mode=mode,
+                    status=status,
+                    editor_override=template,
+                    run_extract_current=run_extract_val,
+                    run_explain_current=run_explain_val,
+                    config_extract_current=config_extract_val,
+                    config_explain_current=config_explain_val,
                 )
-                if not default_template.strip():
-                    return current_template, f"❌ {_tr(lang, 'Default template not found.', '未找到当前提示词的默认模板。')}"
-                default_template = default_template.rstrip()
+                return _append_prompt_aux_updates(updates)
 
-                path, payload, load_msg = _read_prompt_payload(prompt_key, prompt_files, lang=lang)
-                if payload is None or path is None:
-                    return current_template, load_msg
-                _set_user_prompt_template(payload, lang=lang, template=default_template)
-                ok, details = _write_prompt_payload(path, payload, lang=lang)
-                if not ok:
-                    return current_template, details
-                return (
-                    default_template,
-                    f"✅ {_tr(lang, 'Prompt template restored from default.', '已从默认模板还原 Prompt。')}\n\n{details}",
+            def _on_prompt_rename(
+                prompt_key: str,
+                rename_name: str,
+                run_extract_val: str,
+                run_explain_val: str,
+                config_extract_val: str,
+                config_explain_val: str,
+                ui_lang_val: str,
+            ) -> tuple[Any, ...]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                prompt_files_now = _prompt_file_map(_load_app_config())
+                current_path = prompt_files_now.get(prompt_key)
+                if current_path is None:
+                    status = f"❌ {_tr(lang, 'Failed to load prompt file', 'Failed to load prompt file')}: `{prompt_key}`"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode="",
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(
+                        updates, rename_name_value=rename_name
+                    )
+
+                target_name = _sanitize_prompt_filename(rename_name)
+                if not target_name:
+                    status = f"❌ {_tr(lang, 'Prompt file name is empty.', 'Prompt file name is empty.')}"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode="",
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(
+                        updates, rename_name_value=rename_name
+                    )
+
+                if (
+                    target_name in _PROMPT_META_FILENAMES
+                    or target_name in _PROMPT_TEMPLATE_FILENAMES
+                ):
+                    status = f"❌ {_tr(lang, 'Prompt file already exists.', 'Prompt file already exists.')}: `{target_name}`"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode="",
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(
+                        updates, rename_name_value=rename_name
+                    )
+
+                target_path = current_path.with_name(target_name)
+                if target_path.exists():
+                    status = f"❌ {_tr(lang, 'Prompt file already exists.', 'Prompt file already exists.')}: `{target_path}`"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode="",
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(
+                        updates, rename_name_value=rename_name
+                    )
+
+                path, payload, msg = _read_prompt_payload(
+                    prompt_key, prompt_files_now, lang=lang
                 )
+                if payload is None or path is None:
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode="",
+                        status=msg,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(
+                        updates, rename_name_value=rename_name
+                    )
+
+                payload["name"] = target_path.stem
+                ok, details = _write_prompt_payload(target_path, payload, lang=lang)
+                if not ok:
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=_normalize_prompt_mode(payload.get("mode")),
+                        status=details,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(
+                        updates, rename_name_value=rename_name
+                    )
+
+                try:
+                    path.unlink()
+                except OSError as exc:
+                    status = f"⚠️ {_tr(lang, 'Prompt file renamed.', 'Prompt file renamed.')} `{target_path}`; old file cleanup failed: `{exc}`"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=target_name,
+                        preferred_mode=_normalize_prompt_mode(payload.get("mode")),
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates)
+
+                status = (
+                    f"✅ {_tr(lang, 'Prompt file renamed.', 'Prompt file renamed.')}\n\n"
+                    f"- from: `{path}`\n"
+                    f"- to: `{target_path}`\n"
+                    f"{details}"
+                )
+                updates = _refresh_prompt_controls(
+                    lang=lang,
+                    prompt_key=target_name,
+                    preferred_mode=_normalize_prompt_mode(payload.get("mode")),
+                    status=status,
+                    editor_override=None,
+                    run_extract_current=run_extract_val,
+                    run_explain_current=run_explain_val,
+                    config_extract_current=config_extract_val,
+                    config_explain_current=config_explain_val,
+                )
+                return _append_prompt_aux_updates(updates)
+
+            def _on_prompt_delete(
+                prompt_key: str,
+                delete_confirmed: bool,
+                run_extract_val: str,
+                run_explain_val: str,
+                config_extract_val: str,
+                config_explain_val: str,
+                ui_lang_val: str,
+            ) -> tuple[Any, ...]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                if not delete_confirmed:
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode="",
+                        status="",
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates)
+
+                prompt_files_now = _prompt_file_map(_load_app_config())
+                path = prompt_files_now.get(prompt_key)
+                if path is None:
+                    status = f"❌ {_tr(lang, 'Failed to load prompt file', 'Failed to load prompt file')}: `{prompt_key}`"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode="",
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates)
+
+                mode = _load_prompt_mode(prompt_key, prompt_files_now, lang=lang)
+                mode_counts = {"extraction": 0, "explanation": 0}
+                for key in prompt_files_now:
+                    key_mode = _load_prompt_mode(key, prompt_files_now, lang=lang)
+                    if key_mode in mode_counts:
+                        mode_counts[key_mode] += 1
+                if mode == "extraction" and mode_counts["extraction"] <= 1:
+                    status = f"❌ {_tr(lang, 'Cannot delete the last Extraction prompt.', 'Cannot delete the last Extraction prompt.')}"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates)
+                if mode == "explanation" and mode_counts["explanation"] <= 1:
+                    status = f"❌ {_tr(lang, 'Cannot delete the last Explanation prompt.', 'Cannot delete the last Explanation prompt.')}"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates)
+
+                try:
+                    path.unlink()
+                except OSError as exc:
+                    status = f"❌ {_tr(lang, 'Failed to save prompt file', 'Failed to save prompt file')}: `{exc}`"
+                    updates = _refresh_prompt_controls(
+                        lang=lang,
+                        prompt_key=prompt_key,
+                        preferred_mode=mode,
+                        status=status,
+                        editor_override=None,
+                        run_extract_current=run_extract_val,
+                        run_explain_current=run_explain_val,
+                        config_extract_current=config_extract_val,
+                        config_explain_current=config_explain_val,
+                    )
+                    return _append_prompt_aux_updates(updates)
+
+                status = (
+                    f"✅ {_tr(lang, 'Prompt file deleted.', 'Prompt file deleted.')}\n\n"
+                    f"- file: `{path}`"
+                )
+                updates = _refresh_prompt_controls(
+                    lang=lang,
+                    prompt_key="",
+                    preferred_mode=mode,
+                    status=status,
+                    editor_override=None,
+                    run_extract_current=run_extract_val,
+                    run_explain_current=run_explain_val,
+                    config_extract_current=config_extract_val,
+                    config_explain_current=config_explain_val,
+                )
+                return _append_prompt_aux_updates(updates)
 
             prompt_file_selector.change(
                 _on_prompt_file_change,
-                inputs=[prompt_file_selector, ui_lang],
-                outputs=[prompt_editor, prompt_status],
+                inputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    ui_lang,
+                ],
+                outputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    prompt_editor,
+                    prompt_status,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                ],
+            )
+            prompt_mode_selector.change(
+                _on_prompt_mode_change,
+                inputs=[
+                    prompt_mode_selector,
+                    prompt_file_selector,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    ui_lang,
+                ],
+                outputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    prompt_editor,
+                    prompt_status,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                ],
+            )
+            prompt_new_btn.click(
+                _on_prompt_new,
+                inputs=[
+                    prompt_file_selector,
+                    prompt_new_name,
+                    prompt_mode_selector,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    ui_lang,
+                ],
+                outputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    prompt_editor,
+                    prompt_status,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    prompt_new_name,
+                    prompt_rename_name,
+                    prompt_save_confirm,
+                    prompt_delete_confirm,
+                ],
             )
             prompt_save_btn.click(
                 _on_prompt_save,
-                inputs=[prompt_file_selector, prompt_editor, ui_lang],
-                outputs=[prompt_status],
+                inputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    prompt_editor,
+                    prompt_save_confirm,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    ui_lang,
+                ],
+                outputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    prompt_editor,
+                    prompt_status,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    prompt_new_name,
+                    prompt_rename_name,
+                    prompt_save_confirm,
+                    prompt_delete_confirm,
+                ],
+                js="""
+(prompt_key, prompt_mode, prompt_template, _save_confirmed, run_extract_val, run_explain_val, config_extract_val, config_explain_val, ui_lang_val) => {
+    const message = ui_lang_val === "zh" ? "确认保存当前提示词文件？" : "Confirm saving the current prompt file?";
+    return [
+        prompt_key,
+        prompt_mode,
+        prompt_template,
+        window.confirm(message),
+        run_extract_val,
+        run_explain_val,
+        config_extract_val,
+        config_explain_val,
+        ui_lang_val,
+    ];
+}
+""",
+            )
+            prompt_rename_btn.click(
+                _on_prompt_rename,
+                inputs=[
+                    prompt_file_selector,
+                    prompt_rename_name,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    ui_lang,
+                ],
+                outputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    prompt_editor,
+                    prompt_status,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    prompt_new_name,
+                    prompt_rename_name,
+                    prompt_save_confirm,
+                    prompt_delete_confirm,
+                ],
             )
             prompt_load_default_btn.click(
-                _on_prompt_load_default,
-                inputs=[prompt_file_selector, prompt_editor, ui_lang],
-                outputs=[prompt_editor, prompt_status],
+                _on_prompt_delete,
+                inputs=[
+                    prompt_file_selector,
+                    prompt_delete_confirm,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    ui_lang,
+                ],
+                outputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    prompt_editor,
+                    prompt_status,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    prompt_new_name,
+                    prompt_rename_name,
+                    prompt_save_confirm,
+                    prompt_delete_confirm,
+                ],
+                js="""
+(prompt_key, _delete_confirmed, run_extract_val, run_explain_val, config_extract_val, config_explain_val, ui_lang_val) => {
+    const message = ui_lang_val === "zh" ? "确认删除当前提示词文件？" : "Confirm deleting the current prompt file?";
+    return [
+        prompt_key,
+        window.confirm(message),
+        run_extract_val,
+        run_explain_val,
+        config_extract_val,
+        config_explain_val,
+        ui_lang_val,
+    ];
+}
+""",
             )
 
-        with gr.Tab(_tr(initial_ui_lang, "Run analytics", "运行统计分析")) as analytics_tab:
+        with gr.Tab(
+            _tr(initial_ui_lang, "Run analytics", "杩愯缁熻鍒嗘瀽")
+        ) as analytics_tab:
             analytics_heading.render()
             with gr.Row():
                 taxonomy_filter.render()
@@ -2639,97 +4101,445 @@ def build_interface() -> gr.Blocks:
             lang_value: str,
             prompt_lang_current: str,
             prompt_key_current: str,
+            prompt_mode_current: str,
             run_id_current: str | None,
         ) -> tuple[Any, ...]:
             lang = _normalize_ui_lang(lang_value)
             _ = prompt_lang_current
             prompt_lang_next = lang
-            prompt_key_next = prompt_key_current if prompt_key_current in prompt_files else initial_prompt_key
-            prompt_template_next, prompt_status_next = _load_prompt_template(
-                prompt_key_next,
-                prompt_files,
+            cfg_now = _load_app_config()
+            prompt_files_now = _prompt_file_map(cfg_now)
+            prompt_mode_pref = _normalize_prompt_mode(prompt_mode_current)
+            if not prompt_mode_pref and prompt_key_current in prompt_files_now:
+                prompt_mode_pref = _load_prompt_mode(
+                    prompt_key_current, prompt_files_now, lang=lang
+                )
+            if not prompt_mode_pref:
+                prompt_mode_pref = "extraction"
+            prompt_files_filtered_next = _prompt_files_for_mode(
+                prompt_files_now,
+                mode=prompt_mode_pref,
                 lang=lang,
             )
-            cfg_now = _load_app_config()
-            run_selector_next, run_detail_next, run_download_next = _refresh_recent_runs(
+            prompt_key_next = _pick_prompt_key(
+                prompt_files_filtered_next,
+                lang=lang,
+                preferred_key=prompt_key_current,
+                preferred_mode=prompt_mode_pref,
+            )
+            if not prompt_key_next and prompt_files_now:
+                prompt_key_next = _pick_prompt_key(
+                    prompt_files_now,
+                    lang=lang,
+                    preferred_key=prompt_key_current,
+                    preferred_mode=prompt_mode_pref,
+                )
+            prompt_mode_next = (
+                _load_prompt_mode(prompt_key_next, prompt_files_now, lang=lang)
+                or prompt_mode_pref
+            )
+            prompt_files_filtered_next = _prompt_files_for_mode(
+                prompt_files_now,
+                mode=prompt_mode_next,
+                lang=lang,
+            )
+            if prompt_key_next:
+                prompt_template_next, prompt_status_next = _load_prompt_template(
+                    prompt_key_next,
+                    prompt_files_now,
+                    lang=lang,
+                )
+            else:
+                prompt_template_next, prompt_status_next = "", ""
+            prompt_mode_choices_next = _prompt_mode_choices_for_ui(lang)
+            run_extract_prompt_choices_next = _prompt_path_choices(
                 cfg_now,
                 lang=lang,
-                preferred_run_id=run_id_current,
+                mode_filter="extraction",
+                include_auto=True,
+            )
+            run_explain_prompt_choices_next = _prompt_path_choices(
+                cfg_now,
+                lang=lang,
+                mode_filter="explanation",
+                include_auto=True,
+            )
+            config_extract_prompt_choices_next = _prompt_path_choices(
+                cfg_now,
+                lang=lang,
+                mode_filter="extraction",
+                include_auto=True,
+            )
+            config_explain_prompt_choices_next = _prompt_path_choices(
+                cfg_now,
+                lang=lang,
+                mode_filter="explanation",
+                include_auto=True,
+            )
+            run_selector_next, run_detail_next, run_download_next = (
+                _refresh_recent_runs(
+                    cfg_now,
+                    lang=lang,
+                    preferred_run_id=run_id_current,
+                )
             )
             selector_choices = run_selector_next.get("choices", [])
             selector_value = run_selector_next.get("value")
             return (
                 gr.update(label=_tr(lang, "UI language", "UI language")),
-                gr.update(value=_tr(lang, "# ClawLingua Web UI\nLocal deck builder for text learning.", "# ClawLingua Web UI\nLocal deck builder for text learning.")),
+                gr.update(
+                    value=_tr(
+                        lang,
+                        "# ClawLingua Web UI\nLocal deck builder for text learning.",
+                        "# ClawLingua Web UI\nLocal deck builder for text learning.",
+                    )
+                ),
                 gr.update(label=_tr(lang, "Run", "Run")),
                 gr.update(label=_tr(lang, "Config", "Config")),
                 gr.update(label=_tr(lang, "Prompt", "Prompt")),
                 gr.update(label=_tr(lang, "Input file", "Input file")),
-                gr.update(label=_tr(lang, "Deck title (optional)", "Deck title (optional)")),
+                gr.update(
+                    label=_tr(lang, "Deck title (optional)", "Deck title (optional)")
+                ),
                 gr.update(label=_tr(lang, "Source language", "Source language")),
                 gr.update(label=_tr(lang, "Target language", "Target language")),
                 gr.update(label=_tr(lang, "Content profile", "Content profile")),
                 gr.update(label=_tr(lang, "Difficulty", "Difficulty")),
-                gr.update(label=_tr(lang, "Max notes (0 = no limit)", "Max notes (0 = no limit)"), info=_tr(lang, "Maximum notes after dedupe. Empty/0 means no limit.", "Maximum notes after dedupe. Empty/0 means no limit.")),
-                gr.update(label=_tr(lang, "Input char limit", "Input char limit"), info=_tr(lang, "Only process the first N chars of input. Empty means no limit.", "Only process the first N chars of input. Empty means no limit.")),
+                gr.update(
+                    label=_tr(
+                        lang,
+                        "Extraction prompt (run override)",
+                        "Extraction prompt (run override)",
+                    ),
+                    info=_tr(
+                        lang,
+                        "Equivalent to CLI --extract-prompt.",
+                        "Equivalent to CLI --extract-prompt.",
+                    ),
+                    choices=run_extract_prompt_choices_next,
+                ),
+                gr.update(
+                    label=_tr(
+                        lang,
+                        "Explanation prompt (run override)",
+                        "Explanation prompt (run override)",
+                    ),
+                    info=_tr(
+                        lang,
+                        "Equivalent to CLI --explain-prompt.",
+                        "Equivalent to CLI --explain-prompt.",
+                    ),
+                    choices=run_explain_prompt_choices_next,
+                ),
+                gr.update(
+                    label=_tr(
+                        lang, "Max notes (0 = no limit)", "Max notes (0 = no limit)"
+                    ),
+                    info=_tr(
+                        lang,
+                        "Maximum notes after dedupe. Empty/0 means no limit.",
+                        "Maximum notes after dedupe. Empty/0 means no limit.",
+                    ),
+                ),
+                gr.update(
+                    label=_tr(lang, "Input char limit", "Input char limit"),
+                    info=_tr(
+                        lang,
+                        "Only process the first N chars of input. Empty means no limit.",
+                        "Only process the first N chars of input. Empty means no limit.",
+                    ),
+                ),
                 gr.update(label=_tr(lang, "Advanced", "Advanced")),
-                gr.update(label=_tr(lang, "Cloze min chars (override env)", "Cloze min chars (override env)"), info=_tr(lang, "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.", "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.")),
-                gr.update(label=_tr(lang, "Chunk max chars (override env)", "Chunk max chars (override env)"), info=_tr(lang, "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.", "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.")),
-                gr.update(label=_tr(lang, "Temperature (override env)", "Temperature (override env)"), info=_tr(lang, "0 is more deterministic; higher values are more random.", "0 is more deterministic; higher values are more random.")),
-                gr.update(label=_tr(lang, "Save intermediate files", "Save intermediate files"), info=_tr(lang, "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.", "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.")),
-                gr.update(label=_tr(lang, "Continue on error", "Continue on error"), info=_tr(lang, "If enabled, continue processing after per-item failures.", "If enabled, continue processing after per-item failures.")),
+                gr.update(
+                    label=_tr(
+                        lang,
+                        "Cloze min chars (override env)",
+                        "Cloze min chars (override env)",
+                    ),
+                    info=_tr(
+                        lang,
+                        "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.",
+                        "One-run override for CLAWLINGUA_CLOZE_MIN_CHARS.",
+                    ),
+                ),
+                gr.update(
+                    label=_tr(
+                        lang,
+                        "Chunk max chars (override env)",
+                        "Chunk max chars (override env)",
+                    ),
+                    info=_tr(
+                        lang,
+                        "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.",
+                        "One-run override for CLAWLINGUA_CHUNK_MAX_CHARS.",
+                    ),
+                ),
+                gr.update(
+                    label=_tr(
+                        lang, "Temperature (override env)", "Temperature (override env)"
+                    ),
+                    info=_tr(
+                        lang,
+                        "0 is more deterministic; higher values are more random.",
+                        "0 is more deterministic; higher values are more random.",
+                    ),
+                ),
+                gr.update(
+                    label=_tr(
+                        lang, "Save intermediate files", "Save intermediate files"
+                    ),
+                    info=_tr(
+                        lang,
+                        "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.",
+                        "Write intermediate JSONL/media into OUTPUT_DIR/<run_id>.",
+                    ),
+                ),
+                gr.update(
+                    label=_tr(lang, "Continue on error", "Continue on error"),
+                    info=_tr(
+                        lang,
+                        "If enabled, continue processing after per-item failures.",
+                        "If enabled, continue processing after per-item failures.",
+                    ),
+                ),
                 gr.update(value=_tr(lang, "Run", "Run")),
                 gr.update(label=_tr(lang, "Status", "Status")),
                 gr.update(label=_tr(lang, "Download .apkg", "Download .apkg")),
                 gr.update(value=_tr(lang, "### Recent runs", "### Recent runs")),
                 gr.update(value=_tr(lang, "Refresh runs", "Refresh runs")),
-                gr.update(label=_tr(lang, "Run ID", "Run ID"), choices=selector_choices, value=selector_value),
+                gr.update(
+                    label=_tr(lang, "Run ID", "Run ID"),
+                    choices=selector_choices,
+                    value=selector_value,
+                ),
                 gr.update(value=run_detail_next),
-                gr.update(label=_tr(lang, "Download .apkg", "Download .apkg"), value=run_download_next),
-                gr.update(value=_tr(lang, "### Config (.env editor)", "### Config (.env editor)")),
-                gr.update(label=_tr(lang, "LLM (primary)", "LLM (primary)")),
-                gr.update(info=_tr(lang, "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).", "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).")),
-                gr.update(info=_tr(lang, "API key for primary LLM, when required.", "API key for primary LLM, when required.")),
-                gr.update(info=_tr(lang, "Model name for primary LLM.", "Model name for primary LLM.")),
-                gr.update(info=_tr(lang, "Request timeout in seconds.", "Request timeout in seconds.")),
-                gr.update(info=_tr(lang, "Default temperature for primary LLM.", "Default temperature for primary LLM.")),
+                gr.update(
+                    label=_tr(lang, "Download .apkg", "Download .apkg"),
+                    value=run_download_next,
+                ),
+                gr.update(
+                    value=_tr(
+                        lang, "### Config (.env editor)", "### Config (.env editor)"
+                    )
+                ),
+                gr.update(label=_tr(lang, "Extraction LLM", "Extraction LLM")),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).",
+                        "OpenAI-compatible base URL before /chat/completions (e.g. .../v1).",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "API key for extraction LLM, when required.",
+                        "API key for extraction LLM, when required.",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Model name for extraction LLM.",
+                        "Model name for extraction LLM.",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Request timeout in seconds.",
+                        "Request timeout in seconds.",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Default temperature for extraction LLM.",
+                        "Default temperature for extraction LLM.",
+                    )
+                ),
                 gr.update(value=_tr(lang, "List models", "List models")),
                 gr.update(value=_tr(lang, "Test", "Test")),
-                gr.update(label=_tr(lang, "Primary LLM status", "Primary LLM status")),
-                gr.update(label=_tr(lang, "Translation LLM", "Translation LLM")),
-                gr.update(info=_tr(lang, "Optional base URL for translation model.", "Optional base URL for translation model.")),
-                gr.update(info=_tr(lang, "API key for translation LLM, when required.", "API key for translation LLM, when required.")),
-                gr.update(info=_tr(lang, "Model name for translation LLM.", "Model name for translation LLM.")),
-                gr.update(info=_tr(lang, "Default temperature for translation LLM.", "Default temperature for translation LLM.")),
-                gr.update(value=_tr(lang, "List models (translate)", "List models (translate)")),
-                gr.update(value=_tr(lang, "Test (translate)", "Test (translate)")),
-                gr.update(label=_tr(lang, "Translation LLM status", "Translation LLM status")),
+                gr.update(
+                    label=_tr(lang, "Extraction LLM status", "Extraction LLM status")
+                ),
+                gr.update(label=_tr(lang, "Explanation LLM", "Explanation LLM")),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Optional base URL for explanation model.",
+                        "Optional base URL for explanation model.",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "API key for explanation LLM, when required.",
+                        "API key for explanation LLM, when required.",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Model name for explanation LLM.",
+                        "Model name for explanation LLM.",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Default temperature for explanation LLM.",
+                        "Default temperature for explanation LLM.",
+                    )
+                ),
+                gr.update(
+                    value=_tr(
+                        lang, "List models (explanation)", "List models (explanation)"
+                    )
+                ),
+                gr.update(value=_tr(lang, "Test (explanation)", "Test (explanation)")),
+                gr.update(
+                    label=_tr(lang, "Explanation LLM status", "Explanation LLM status")
+                ),
                 gr.update(label=_tr(lang, "Chunk & Cloze", "Chunk & Cloze")),
-                gr.update(info=_tr(lang, "Default max chars per chunk.", "Default max chars per chunk.")),
-                gr.update(info=_tr(lang, "Minimum chars required for cloze text.", "Minimum chars required for cloze text.")),
-                gr.update(info=_tr(lang, "Max cards per chunk after dedupe. Empty/0 means unlimited.", "Max cards per chunk after dedupe. Empty/0 means unlimited.")),
-                gr.update(label="CLAWLINGUA_PROMPT_LANG", info=_tr(lang, "Prompt language for multi-lingual prompts (en/zh).", "Prompt language for multi-lingual prompts (en/zh)."), value=prompt_lang_next),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Default max chars per chunk.",
+                        "Default max chars per chunk.",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Minimum chars required for cloze text.",
+                        "Minimum chars required for cloze text.",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Max cards per chunk after dedupe. Empty/0 means unlimited.",
+                        "Max cards per chunk after dedupe. Empty/0 means unlimited.",
+                    )
+                ),
+                gr.update(
+                    label="CLAWLINGUA_PROMPT_LANG",
+                    info=_tr(
+                        lang,
+                        "Prompt language for multi-lingual prompts (en/zh).",
+                        "Prompt language for multi-lingual prompts (en/zh).",
+                    ),
+                    value=prompt_lang_next,
+                ),
+                gr.update(
+                    label="CLAWLINGUA_EXTRACT_PROMPT",
+                    info=_tr(
+                        lang,
+                        "Default extraction prompt path.",
+                        "Default extraction prompt path.",
+                    ),
+                    choices=config_extract_prompt_choices_next,
+                ),
+                gr.update(
+                    label="CLAWLINGUA_EXPLAIN_PROMPT",
+                    info=_tr(
+                        lang,
+                        "Default explanation prompt path.",
+                        "Default explanation prompt path.",
+                    ),
+                    choices=config_explain_prompt_choices_next,
+                ),
                 gr.update(label=_tr(lang, "Paths & defaults", "Paths & defaults")),
-                gr.update(info=_tr(lang, "Directory for intermediate run data (JSONL, media).", "Directory for intermediate run data (JSONL, media).")),
-                gr.update(info=_tr(lang, "Default directory for exported decks.", "Default directory for exported decks.")),
-                gr.update(info=_tr(lang, "Directory for log files.", "Directory for log files.")),
-                gr.update(value=_tr(lang, "Load defaults from ENV_EXAMPLE.md", "Load defaults from ENV_EXAMPLE.md")),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Directory for intermediate run data (JSONL, media).",
+                        "Directory for intermediate run data (JSONL, media).",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Default directory for exported decks.",
+                        "Default directory for exported decks.",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang, "Directory for log files.", "Directory for log files."
+                    )
+                ),
+                gr.update(
+                    value=_tr(
+                        lang,
+                        "Load defaults from ENV_EXAMPLE.md",
+                        "Load defaults from ENV_EXAMPLE.md",
+                    )
+                ),
                 gr.update(value=_tr(lang, "Save config", "Save config")),
                 gr.update(label=_tr(lang, "TTS voices (Edge)", "TTS voices (Edge)")),
-                gr.update(value=_tr(lang, "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)", "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)")),
-                gr.update(info=_tr(lang, "Configure 4 voice slots used for random selection.", "Configure 4 voice slots used for random selection.")),
-                gr.update(value=_tr(lang, "### Prompt template editor", "### Prompt template editor")),
-                gr.update(label=_tr(lang, "Prompt file", "Prompt file"), choices=_prompt_choices(lang), value=prompt_key_next),
-                gr.update(label=_tr(lang, "Prompt template", "Prompt template"), value=prompt_template_next),
+                gr.update(
+                    value=_tr(
+                        lang,
+                        "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)",
+                        "Voice reference: [Edge TTS Voice Samples](https://tts.travisvn.com/)",
+                    )
+                ),
+                gr.update(
+                    info=_tr(
+                        lang,
+                        "Configure 4 voice slots used for random selection.",
+                        "Configure 4 voice slots used for random selection.",
+                    )
+                ),
+                gr.update(
+                    value=_tr(
+                        lang, "### Prompt template editor", "### Prompt template editor"
+                    )
+                ),
+                gr.update(
+                    label=_tr(lang, "Prompt file", "Prompt file"),
+                    choices=_prompt_choices_from_map(
+                        prompt_files_filtered_next, lang=lang
+                    ),
+                    value=prompt_key_next,
+                ),
+                gr.update(
+                    label=_tr(lang, "Prompt type", "Prompt type"),
+                    choices=prompt_mode_choices_next,
+                    value=prompt_mode_next,
+                ),
+                gr.update(
+                    label=_tr(lang, "New prompt file name", "New prompt file name")
+                ),
+                gr.update(label=_tr(lang, "Rename to", "Rename to")),
+                gr.update(
+                    label=_tr(lang, "Prompt template", "Prompt template"),
+                    value=prompt_template_next,
+                ),
+                gr.update(value=_tr(lang, "New", "New")),
                 gr.update(value=_tr(lang, "Save", "Save")),
-                gr.update(value=_tr(lang, "Load default", "Load default")),
-                gr.update(label=_tr(lang, "Prompt status", "Prompt status"), value=prompt_status_next),
-                gr.update(label=_tr(lang, "Run analytics", "运行统计分析")),
+                gr.update(value=_tr(lang, "Rename", "Rename")),
+                gr.update(value=_tr(lang, "Delete", "Delete")),
+                gr.update(value=False, visible=False),
+                gr.update(value=False, visible=False),
+                gr.update(
+                    label=_tr(lang, "Prompt status", "Prompt status"),
+                    value=prompt_status_next,
+                ),
+                gr.update(label=_tr(lang, "Run analytics", "杩愯缁熻鍒嗘瀽")),
             )
 
         ui_lang.change(
             _on_ui_lang_change,
-            inputs=[ui_lang, prompt_lang_env, prompt_file_selector, run_selector],
+            inputs=[
+                ui_lang,
+                prompt_lang_env,
+                prompt_file_selector,
+                prompt_mode_selector,
+                run_selector,
+            ],
             outputs=[
                 ui_lang,
                 title_md,
@@ -2742,6 +4552,8 @@ def build_interface() -> gr.Blocks:
                 target_lang,
                 content_profile,
                 difficulty,
+                run_extract_prompt,
+                run_explain_prompt,
                 max_notes,
                 input_char_limit,
                 run_advanced,
@@ -2781,6 +4593,8 @@ def build_interface() -> gr.Blocks:
                 cloze_min_chars_env,
                 cloze_max_per_chunk_env,
                 prompt_lang_env,
+                extract_prompt_env,
+                explain_prompt_env,
                 paths_accordion,
                 output_dir_env,
                 export_dir_env,
@@ -2792,14 +4606,20 @@ def build_interface() -> gr.Blocks:
                 tts_voice1_env,
                 prompt_heading,
                 prompt_file_selector,
+                prompt_mode_selector,
+                prompt_new_name,
+                prompt_rename_name,
                 prompt_editor,
+                prompt_new_btn,
                 prompt_save_btn,
+                prompt_rename_btn,
                 prompt_load_default_btn,
+                prompt_save_confirm,
+                prompt_delete_confirm,
                 prompt_status,
                 analytics_tab,
             ],
         )
-
 
     return demo
 
@@ -2816,7 +4636,9 @@ def launch(*, server_port: int | None = None, server_host: str | None = None) ->
     if port_value is None:
         env_port = _to_optional_int(os.getenv("CLAWLINGUA_WEB_PORT"), min_value=1)
         port_value = env_port or 7860
-    host_value = (server_host or os.getenv("CLAWLINGUA_WEB_HOST") or "0.0.0.0").strip() or "0.0.0.0"
+    host_value = (
+        server_host or os.getenv("CLAWLINGUA_WEB_HOST") or "0.0.0.0"
+    ).strip() or "0.0.0.0"
 
     logger.info("starting ClawLingua web UI | host=%s port=%d", host_value, port_value)
     demo = build_interface()

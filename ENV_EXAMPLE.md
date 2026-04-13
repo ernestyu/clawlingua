@@ -24,6 +24,13 @@ CLAWLINGUA_CLOZE_DIFFICULTY=intermediate
 CLAWLINGUA_CLOZE_MAX_PER_CHUNK=4
 CLAWLINGUA_LLM_CHUNK_BATCH_SIZE=1
 
+# Format-only validation retry controls.
+CLAWLINGUA_VALIDATE_FORMAT_RETRY_ENABLE=true
+# Retry attempts after initial validation failure (0-3).
+CLAWLINGUA_VALIDATE_FORMAT_RETRY_MAX=3
+# If true, attempts >=2 may call LLM repair/regenerate.
+CLAWLINGUA_VALIDATE_FORMAT_RETRY_LLM_ENABLE=true
+
 # Prompt language: en | zh
 CLAWLINGUA_PROMPT_LANG=zh
 
@@ -51,6 +58,9 @@ CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_BEGINNER=./prompts/cloze_transcript_beginner.
 CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE=./prompts/cloze_transcript_intermediate.json
 CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_ADVANCED=./prompts/cloze_transcript_advanced.json
 CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
+# Preferred default prompt files by role (used when no CLI override).
+CLAWLINGUA_EXTRACT_PROMPT=
+CLAWLINGUA_EXPLAIN_PROMPT=
 CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
 # Intermediate run data (JSONL, media snapshots)

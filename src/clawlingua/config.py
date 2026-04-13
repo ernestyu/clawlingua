@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from .constants import (
     DEFAULT_ANKI_TEMPLATE,
@@ -37,6 +38,7 @@ from .constants import (
 )
 from .errors import build_error
 from .exit_codes import ExitCode
+from .models.prompt_schema import PromptSpec
 
 _VOICE_ENV_RE = re.compile(r"^CLAWLINGUA_TTS_EDGE_([A-Z0-9_]+)_VOICES$")
 _VOICE_SLOT_ENV_KEYS = (
@@ -45,6 +47,8 @@ _VOICE_SLOT_ENV_KEYS = (
     "CLAWLINGUA_TTS_EDGE_VOICE3",
     "CLAWLINGUA_TTS_EDGE_VOICE4",
 )
+_PROMPT_META_FILENAMES = {"user_prompt_overrides.json"}
+_PROMPT_TEMPLATE_FILENAMES = {"template_extraction.json", "template_explanation.json"}
 
 
 def _normalize_profile(value: str | None) -> str:
@@ -90,9 +94,18 @@ class AppConfig(BaseModel):
     cloze_max_per_chunk: int | None = None
     # LLM chunk-level batch size; 1 means per-chunk requests.
     llm_chunk_batch_size: int = 1
+    # Format-only validation retry controls.
+    validate_format_retry_enable: bool = True
+    # Retry attempts after initial validation failure.
+    validate_format_retry_max: int = Field(default=3, ge=0, le=3)
+    # Whether attempts >=2 are allowed to call LLM repair/regenerate.
+    validate_format_retry_llm_enable: bool = True
 
     # Prompt language: en|zh.
     prompt_lang: str = "zh"
+    # Prompt override paths (default layer, lower priority than CLI args).
+    extract_prompt: Path | None = None
+    explain_prompt: Path | None = None
 
     # Translation LLM (small LLM) settings; fallback to main LLM when empty.
     translate_llm_base_url: str | None = None
@@ -150,6 +163,10 @@ class AppConfig(BaseModel):
     tts_rate: str = "+0%"
     tts_volume: str = "+0%"
     tts_random_seed: int | None = None
+    # Retries after the first failed TTS request (e.g., transient 503/network jitter).
+    tts_retry_attempts: int = Field(default=3, ge=0, le=10)
+    # Base seconds for exponential backoff between TTS retries.
+    tts_retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
 
     tts_edge_voices: list[str] = Field(default_factory=list)
     tts_edge_voice_map: dict[str, list[str]] = Field(default_factory=dict)
@@ -258,6 +275,62 @@ class AppConfig(BaseModel):
             }[diff]
         # Fallback for unexpected/legacy values.
         return self.prompt_cloze
+
+    def _scan_prompt_files_by_mode(self, mode: str) -> list[Path]:
+        normalized_mode = (mode or "").strip().lower()
+        if normalized_mode not in {"extraction", "explanation"}:
+            return []
+        prompts_dir = self.resolve_path(Path("./prompts"))
+        if not prompts_dir.exists():
+            return []
+        matched: list[Path] = []
+        for path in sorted(prompts_dir.glob("*.json")):
+            if path.name in _PROMPT_META_FILENAMES:
+                continue
+            if path.name in _PROMPT_TEMPLATE_FILENAMES:
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                spec = PromptSpec.model_validate(payload)
+            except (OSError, json.JSONDecodeError, ValidationError, ValueError):
+                continue
+            if str(spec.mode).strip().lower() == normalized_mode:
+                matched.append(path)
+        return matched
+
+    def resolve_extract_prompt_path(
+        self,
+        *,
+        material_profile: str | None = None,
+        difficulty: str | None = None,
+        learning_mode: str | None = None,
+    ) -> Path:
+        if self.extract_prompt is not None:
+            return self.extract_prompt
+        resolved = self.resolve_cloze_prompt_path(
+            material_profile=material_profile,
+            difficulty=difficulty,
+            learning_mode=learning_mode,
+        )
+        resolved_path = self.resolve_path(resolved)
+        if resolved_path.exists():
+            return resolved
+        fallback = self._scan_prompt_files_by_mode("extraction")
+        if fallback:
+            return fallback[0]
+        return resolved
+
+    def resolve_explain_prompt_path(self) -> Path:
+        if self.explain_prompt is not None:
+            return self.explain_prompt
+        resolved = self.prompt_translate
+        resolved_path = self.resolve_path(resolved)
+        if resolved_path.exists():
+            return resolved
+        fallback = self._scan_prompt_files_by_mode("explanation")
+        if fallback:
+            return fallback[0]
+        return resolved
 
     def get_source_voices(self, source_lang: str) -> list[str]:
         if self.tts_edge_voices:
@@ -383,7 +456,15 @@ def load_config(
         "cloze_difficulty": _env_value(merged.get("CLAWLINGUA_CLOZE_DIFFICULTY"), "intermediate"),
         "cloze_max_per_chunk": _env_value(merged.get("CLAWLINGUA_CLOZE_MAX_PER_CHUNK"), None),
         "llm_chunk_batch_size": _env_value(merged.get("CLAWLINGUA_LLM_CHUNK_BATCH_SIZE"), 1),
+        "validate_format_retry_enable": _env_value(merged.get("CLAWLINGUA_VALIDATE_FORMAT_RETRY_ENABLE"), True),
+        "validate_format_retry_max": _env_value(merged.get("CLAWLINGUA_VALIDATE_FORMAT_RETRY_MAX"), 3),
+        "validate_format_retry_llm_enable": _env_value(
+            merged.get("CLAWLINGUA_VALIDATE_FORMAT_RETRY_LLM_ENABLE"),
+            True,
+        ),
         "prompt_lang": _env_value(merged.get("CLAWLINGUA_PROMPT_LANG"), "zh"),
+        "extract_prompt": _env_value(merged.get("CLAWLINGUA_EXTRACT_PROMPT"), None),
+        "explain_prompt": _env_value(merged.get("CLAWLINGUA_EXPLAIN_PROMPT"), None),
         "translate_llm_base_url": _env_value(merged.get("CLAWLINGUA_TRANSLATE_LLM_BASE_URL"), None),
         "translate_llm_api_key": _env_value(merged.get("CLAWLINGUA_TRANSLATE_LLM_API_KEY"), None),
         "translate_llm_model": _env_value(merged.get("CLAWLINGUA_TRANSLATE_LLM_MODEL"), None),
@@ -459,6 +540,11 @@ def load_config(
         "tts_rate": _env_value(merged.get("CLAWLINGUA_TTS_RATE"), "+0%"),
         "tts_volume": _env_value(merged.get("CLAWLINGUA_TTS_VOLUME"), "+0%"),
         "tts_random_seed": _env_value(merged.get("CLAWLINGUA_TTS_RANDOM_SEED"), None),
+        "tts_retry_attempts": _env_value(merged.get("CLAWLINGUA_TTS_RETRY_ATTEMPTS"), 3),
+        "tts_retry_backoff_seconds": _env_value(
+            merged.get("CLAWLINGUA_TTS_RETRY_BACKOFF_SECONDS"),
+            1.0,
+        ),
         "tts_edge_voices": voice_slots,
         "tts_edge_voice_map": voice_map,
     }
@@ -471,39 +557,8 @@ def load_config(
 
 def validate_base_config(cfg: AppConfig) -> None:
     required_paths = [
-        ("CLAWLINGUA_PROMPT_CLOZE", cfg.resolve_path(cfg.prompt_cloze)),
-        ("CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK", cfg.resolve_path(cfg.prompt_cloze_textbook)),
-        ("CLAWLINGUA_PROMPT_CLOZE_PROSE_BEGINNER", cfg.resolve_path(cfg.prompt_cloze_prose_beginner)),
-        ("CLAWLINGUA_PROMPT_CLOZE_PROSE_INTERMEDIATE", cfg.resolve_path(cfg.prompt_cloze_prose_intermediate)),
-        ("CLAWLINGUA_PROMPT_CLOZE_PROSE_ADVANCED", cfg.resolve_path(cfg.prompt_cloze_prose_advanced)),
-        (
-            "CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER",
-            cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_beginner),
-        ),
-        (
-            "CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE",
-            cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_intermediate),
-        ),
-        (
-            "CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED",
-            cfg.resolve_path(cfg.prompt_cloze_prose_reading_support_advanced),
-        ),
-        ("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_BEGINNER", cfg.resolve_path(cfg.prompt_cloze_transcript_beginner)),
-        ("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE", cfg.resolve_path(cfg.prompt_cloze_transcript_intermediate)),
-        ("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_ADVANCED", cfg.resolve_path(cfg.prompt_cloze_transcript_advanced)),
-        (
-            "CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER",
-            cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_beginner),
-        ),
-        (
-            "CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE",
-            cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_intermediate),
-        ),
-        (
-            "CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED",
-            cfg.resolve_path(cfg.prompt_cloze_transcript_reading_support_advanced),
-        ),
-        ("CLAWLINGUA_PROMPT_TRANSLATE", cfg.resolve_path(cfg.prompt_translate)),
+        ("CLAWLINGUA_EFFECTIVE_EXTRACT_PROMPT", cfg.resolve_path(cfg.resolve_extract_prompt_path())),
+        ("CLAWLINGUA_EFFECTIVE_EXPLAIN_PROMPT", cfg.resolve_path(cfg.resolve_explain_prompt_path())),
         ("CLAWLINGUA_ANKI_TEMPLATE", cfg.resolve_path(cfg.anki_template)),
     ]
     for key, path in required_paths:

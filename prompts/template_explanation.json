@@ -1,7 +1,7 @@
 {
-  "name": "translate_rewrite",
+  "name": "template_explanation",
   "version": "0.1.0",
-  "description": "Generate learning-oriented translation for Anki Translation field.",
+  "description": "Default template prompt for creating explanation prompts.",
   "mode": "explanation",
   "system_prompt": "You are a language-learning translator. Output a JSON array only. Do not output explanations or code fences.",
   "user_prompt_template": {
@@ -27,4 +27,5 @@
     "expect_json_array": true
   }
 }
+
 
