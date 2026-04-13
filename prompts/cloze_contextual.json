@@ -1,34 +1,30 @@
 {
-    "name":  "cloze_contextual",
-    "version":  "0.1.0",
-    "description":  "Generate contextual cloze text for Anki Text field.",
-    "mode": "extraction",
-    "system_prompt":  "You are a language-learning content editor. Output a JSON array only. Do not output explanations or code fences.",
-    "user_prompt_template":  {
-                                 "en":  "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\ndifficulty={difficulty}\ncloze_max_sentences={cloze_max_sentences}\ncloze_min_chars={cloze_min_chars}\ncloze_max_per_chunk={cloze_max_per_chunk}\n\nYou will be given one or more chunks. Each chunk looks like:\nchunk_id=chunk_0001\nchunk_text=\n\u003cthe full text of this chunk\u003e\n\nGenerate Anki Cloze candidates across all chunks.\nYour output MUST be a JSON array. Each item MUST have this shape:\n{{\n  \"chunk_id\": \"the corresponding chunk_id\",\n  \"text\": \"cloze text (\u003c= {cloze_max_sentences} sentences; \u003e= {cloze_min_chars} chars)\",\n  \"original\": \"plain text without cloze markers or HTML\",\n  \"target_phrases\": [\"phrase 1\", \"phrase 2\"],\n  \"note_hint\": \"optional short hint\"\n}}\n\nRequirements:\n1) `text` must include at least one cloze deletion, close to: {{cN::\u003cb\u003eENGLISH PHRASE\u003c/b\u003e}}(hint in target language).\n2) Cloze indices must increase by appearance order (c1, c2, c3...). Do not repeat multiple c1 in the same `text`.\n3) `original` must NOT contain any cloze markers or HTML.\n4) You may use \u003cb\u003e...\u003c/b\u003e for emphasis. Do NOT use Markdown **.\n5) Omit any candidate whose `text` is shorter than {cloze_min_chars} characters or whose sentence count exceeds {cloze_max_sentences}.\n6) Difficulty policy:\n   - beginner: prefer concrete, common collocations; usually 1 cloze per candidate.\n   - intermediate: prefer idiomatic collocations; usually 1-2 clozes per candidate.\n   - advanced: prefer advanced collocations / abstract wording / semantic turns; usually 2-3 clozes per candidate; avoid overly basic expressions.\n7) For difficulty=advanced, avoid low-value targets such as \"think if\", \"this data or that data\", or a single very common verb (e.g., suggest/introduce).\n8) For each chunk, try to produce 0-{cloze_max_per_chunk} high-quality candidates.\n9) If nothing is suitable, return an empty array.\n\nHigh-quality example:\nThe more {{c1::\u003cb\u003ewhimsical explanation\u003c/b\u003e}}(target-lang hint) is that maybe RL training makes the models a little too {{c2::\u003cb\u003esingle-minded\u003c/b\u003e}}(target-lang hint) and narrowly focused.\n\nchunk_text:\n{chunk_text}",
-                                 "zh":  "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\ndifficulty={difficulty}\ncloze_max_sentences={cloze_max_sentences}\ncloze_min_chars={cloze_min_chars}\ncloze_max_per_chunk={cloze_max_per_chunk}\n\n你将收到丈多个 chunk。每?chunk 的格式下：\nchunk_id=chunk_0001\nchunk_text=\n\u003c?chunk 的完整文本\u003e\n\n请基于所?chunk 生成 Anki Cloze 候\n输出必须?JSON 数组。每丅素必须合以下结构：\n{{\n  \"chunk_id\": \"对应?chunk_id\",\n  \"text\": \"cloze 文本（\u003c= {cloze_max_sentences} 句；\u003e= {cloze_min_chars} 字）\",\n  \"original\": \"不含 cloze 标?HTML 的纯文本\",\n  \"target_phrases\": [\"1\", \"2\"],\n  \"note_hint\": \"叉的矏示\"\n}}\n\n要求：\n1) `text` 至少包含?cloze，格式接近：{{cN::\u003cb\u003e英文\u003c/b\u003e}}(盠诨提示)。\n2) Cloze 序号按出现顺序（c1, c2, c3...）；同一 `text` 内不要重复?c1。\n3) `original` 不得包含任何 cloze 标?HTML。\n4) 叻使用 \u003cb\u003e...\u003c/b\u003e 强调；不要使?Markdown **。\n5) 若某候?`text` 长度小于 {cloze_min_chars} 或句子数超过 {cloze_max_sentences}，则省略该\n6) 难度策略：\n   - beginner：优先具体常见搭配；通常每条 1 ?cloze。\n   - intermediate：优先地道搭配；通常每条 1-2 ?cloze。\n   - advanced：优先高级搭?抽象表达/诹轊；常每条 2-3 ?cloze；避免过于基表达。\n7) ?difficulty=advanced 时，避免低价值目标，?\"think if\"、\"this data or that data\"，或单个过于常的动词（?suggest/introduce）\n8) 每个 chunk 尽量生成 0-{cloze_max_per_chunk} 条高质量候\n9) 若没有合适内容，返回空数组\n\n高质量示例：\nThe more {{c1::\u003cb\u003ewhimsical explanation\u003c/b\u003e}}(盠诨提示) is that maybe RL training makes the models a little too {{c2::\u003cb\u003esingle-minded\u003c/b\u003e}}(盠诨提示) and narrowly focused.\n\nchunk_text:\n{chunk_text}"
-                             },
-    "placeholders":  [
-                         "source_lang",
-                         "target_lang",
-                         "document_title",
-                         "source_url",
-                         "chunk_text",
-                         "difficulty",
-                         "cloze_max_sentences",
-                         "cloze_min_chars",
-                         "cloze_max_per_chunk"
-                     ],
-    "output_format":  {
-                          "type":  "json",
-                          "schema_name":  "cloze_cards_v1"
-                      },
-    "parser":  {
-                   "strip_code_fences":  true,
-                   "expect_json_array":  true
-               }
+  "name": "cloze_contextual",
+  "version": "0.1.0",
+  "description": "Generate contextual cloze text for Anki Text field.",
+  "mode": "extraction",
+  "system_prompt": "You are a language-learning content editor. Output a JSON array only. Do not output explanations or code fences.",
+  "user_prompt_template": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\ndifficulty={difficulty}\ncloze_max_sentences={cloze_max_sentences}\ncloze_min_chars={cloze_min_chars}\ncloze_max_per_chunk={cloze_max_per_chunk}\n\n你将收到丈多个 chunk。每?chunk 的格式下：\nchunk_id=chunk_0001\nchunk_text=\n<?chunk 的完整文本>\n\n请基于所?chunk 生成 Anki Cloze 候\n输出必须?JSON 数组。每丅素必须合以下结构：\n{{\n  \"chunk_id\": \"对应?chunk_id\",\n  \"text\": \"cloze 文本（<= {cloze_max_sentences} 句；>= {cloze_min_chars} 字）\",\n  \"original\": \"不含 cloze 标?HTML 的纯文本\",\n  \"target_phrases\": [\"1\", \"2\"],\n  \"note_hint\": \"叉的矏示\"\n}}\n\n要求：\n1) `text` 至少包含?cloze，格式接近：{{cN::<b>英文</b>}}(盠诨提示)。\n2) Cloze 序号按出现顺序（c1, c2, c3...）；同一 `text` 内不要重复?c1。\n3) `original` 不得包含任何 cloze 标?HTML。\n4) 叻使用 <b>...</b> 强调；不要使?Markdown **。\n5) 若某候?`text` 长度小于 {cloze_min_chars} 或句子数超过 {cloze_max_sentences}，则省略该\n6) 难度策略：\n   - beginner：优先具体常见搭配；通常每条 1 ?cloze。\n   - intermediate：优先地道搭配；通常每条 1-2 ?cloze。\n   - advanced：优先高级搭?抽象表达/诹轊；常每条 2-3 ?cloze；避免过于基表达。\n7) ?difficulty=advanced 时，避免低价值目标，?\"think if\"、\"this data or that data\"，或单个过于常的动词（?suggest/introduce）\n8) 每个 chunk 尽量生成 0-{cloze_max_per_chunk} 条高质量候\n9) 若没有合适内容，返回空数组\n\n高质量示例：\nThe more {{c1::<b>whimsical explanation</b>}}(盠诨提示) is that maybe RL training makes the models a little too {{c2::<b>single-minded</b>}}(盠诨提示) and narrowly focused.\n\nchunk_text:\n{chunk_text}",
+  "placeholders": [
+    "source_lang",
+    "target_lang",
+    "document_title",
+    "source_url",
+    "chunk_text",
+    "difficulty",
+    "cloze_max_sentences",
+    "cloze_min_chars",
+    "cloze_max_per_chunk"
+  ],
+  "output_format": {
+    "type": "json",
+    "schema_name": "cloze_cards_v1"
+  },
+  "parser": {
+    "strip_code_fences": true,
+    "expect_json_array": true
+  },
+  "content_type": "all",
+  "learning_mode": "expression_mining",
+  "difficulty_level": "all"
 }
-
-
-
-

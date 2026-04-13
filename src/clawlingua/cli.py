@@ -74,25 +74,25 @@ def init(
             env_file.write_text(env_example.read_text(encoding="utf-8"), encoding="utf-8")
             typer.echo("INFO | created .env from .env.example")
 
+        cfg = load_config(workspace_root=Path.cwd())
+        extract_prompt = cfg.resolve_path(
+            cfg.resolve_extract_prompt_path(
+                material_profile=cfg.material_profile,
+                difficulty=cfg.cloze_difficulty,
+                learning_mode=cfg.learning_mode,
+            )
+        )
+        explain_prompt = cfg.resolve_path(
+            cfg.resolve_explain_prompt_path(
+                material_profile=cfg.material_profile,
+                difficulty=cfg.cloze_difficulty,
+                learning_mode=cfg.learning_mode,
+            )
+        )
         required = [
-            Path("./prompts/cloze_contextual.json"),
-            Path("./prompts/cloze_textbook_examples.json"),
-            Path("./prompts/cloze_prose_beginner.json"),
-            Path("./prompts/cloze_prose_intermediate.json"),
-            Path("./prompts/cloze_prose_advanced.json"),
-            Path("./prompts/cloze_prose_reading_support_beginner.json"),
-            Path("./prompts/cloze_prose_reading_support_intermediate.json"),
-            Path("./prompts/cloze_prose_reading_support_advanced.json"),
-            Path("./prompts/cloze_transcript_beginner.json"),
-            Path("./prompts/cloze_transcript_intermediate.json"),
-            Path("./prompts/cloze_transcript_advanced.json"),
-            Path("./prompts/cloze_transcript_reading_support_beginner.json"),
-            Path("./prompts/cloze_transcript_reading_support_intermediate.json"),
-            Path("./prompts/cloze_transcript_reading_support_advanced.json"),
-            Path("./prompts/translate_rewrite.json"),
-            Path("./prompts/template_extraction.json"),
-            Path("./prompts/template_explanation.json"),
-            Path("./templates/anki_cloze_default.json"),
+            extract_prompt,
+            explain_prompt,
+            cfg.resolve_path(cfg.anki_template),
         ]
         missing = [str(path) for path in required if not path.exists()]
         if missing:
@@ -100,9 +100,11 @@ def init(
                 error_code="INIT_REQUIRED_FILE_MISSING",
                 cause="Initialization check failed.",
                 detail=f"missing={missing}",
-                next_steps=["Add missing prompts/templates files and retry"],
+                next_steps=["Fix prompt/template files and retry"],
                 exit_code=ExitCode.SCHEMA_ERROR,
             )
+        typer.echo(f"INFO | extraction prompt ready | path={extract_prompt}")
+        typer.echo(f"INFO | explanation prompt ready | path={explain_prompt}")
 
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -142,6 +144,17 @@ def doctor(
             checks.append(("config:runtime", False, "; ".join(exc.to_lines())))
 
         try:
+            # Ensure at least one prompt per mode exists; missing sets are auto-seeded.
+            cfg.resolve_extract_prompt_path(
+                material_profile=cfg.material_profile,
+                difficulty=cfg.cloze_difficulty,
+                learning_mode=cfg.learning_mode,
+            )
+            cfg.resolve_explain_prompt_path(
+                material_profile=cfg.material_profile,
+                difficulty=cfg.cloze_difficulty,
+                learning_mode=cfg.learning_mode,
+            )
             prompt_dir = cfg.resolve_path(Path("./prompts"))
             if not prompt_dir.exists():
                 raise build_error(

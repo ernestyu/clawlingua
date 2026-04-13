@@ -1,13 +1,10 @@
 {
   "name": "template_explanation",
-  "version": "0.1.0",
+  "version": "2026-04-13",
   "description": "Default template prompt for creating explanation prompts.",
   "mode": "explanation",
   "system_prompt": "You are a language-learning translator. Output a JSON array only. Do not output explanations or code fences.",
-  "user_prompt_template": {
-    "en": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\n\nTranslate each item in `text_originals_json` into the target language.\nInput is a JSON array, and output must be a JSON array with exactly {batch_size} items in the same order.\n\nOutput format (strict):\n[\n  {\"translation\": \"...\"},\n  {\"translation\": \"...\"}\n]\n\nRequirements:\n1) Keep one-to-one mapping by position; do not merge/split/reorder items.\n2) Use natural and idiomatic target language.\n3) Do not add prefixes like \"Translation:\".\n4) You may use <b>...</b> for emphasis. Do NOT use Markdown **.\n5) If one item cannot be translated, return that item as {\"translation\": \"\"} and continue.\n6) Return JSON only. No prose, no code fences.\n\ntext_originals_json:\n{text_originals_json}\n\nThe following `chunk_text` is for disambiguation only; do NOT translate it as a whole:\n{chunk_text}",
-    "zh": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\n\n请将 `text_originals_json` 中的每一项翻译为目标语言。\n输入是 JSON 数组，输出也必须是 JSON 数组，且长度必须与 {batch_size} 完全一致，并保持原顺序。\n\n输出格式（严格）：\n[\n  {\"translation\": \"...\"},\n  {\"translation\": \"...\"}\n]\n\n要求：\n1) 必须按位置一一对应，不要合并、拆分或重排条目。\n2) 译文自然、地道。\n3) 不要添加如 \"Translation:\" 的前缀。\n4) 可以使用 <b>...</b> 强调；不要使用 Markdown **。\n5) 如果某一项无法翻译，请对该项返回 {\"translation\": \"\"}，其余项继续正常输出。\n6) 只返回 JSON，不要解释文字，不要代码块。\n\ntext_originals_json:\n{text_originals_json}\n\n下面的 `chunk_text` 仅用于消歧；不要整体翻译它：\n{chunk_text}"
-  },
+  "user_prompt_template": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\n\n请将 `text_originals_json` 中的每一项翻译为目标语言。\n输入是 JSON 数组，输出也必须是 JSON 数组，且长度必须与 {batch_size} 完全一致，并保持原顺序。\n\n输出格式（严格）：\n[\n  {\"translation\": \"...\"},\n  {\"translation\": \"...\"}\n]\n\n要求：\n1) 必须按位置一一对应，不要合并、拆分或重排条目。\n2) 译文自然、地道。\n3) 不要添加如 \"Translation:\" 的前缀。\n4) 可以使用 <b>...</b> 强调；不要使用 Markdown **。\n5) 如果某一项无法翻译，请对该项返回 {\"translation\": \"\"}，其余项继续正常输出。\n6) 只返回 JSON，不要解释文字，不要代码块。\n\ntext_originals_json:\n{text_originals_json}\n\n下面的 `chunk_text` 仅用于消歧；不要整体翻译它：\n{chunk_text}",
   "placeholders": [
     "source_lang",
     "target_lang",
@@ -25,7 +22,8 @@
   "parser": {
     "strip_code_fences": true,
     "expect_json_array": true
-  }
+  },
+  "content_type": "all",
+  "learning_mode": "all",
+  "difficulty_level": "all"
 }
-
-

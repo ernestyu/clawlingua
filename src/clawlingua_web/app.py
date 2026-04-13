@@ -50,6 +50,14 @@ _PROMPT_TEMPLATE_BY_MODE = {
     "extraction": Path("./prompts/template_extraction.json"),
     "explanation": Path("./prompts/template_explanation.json"),
 }
+_PROMPT_CONTENT_TYPE_OPTIONS = [
+    "all",
+    "prose_article",
+    "transcript_dialogue",
+    "textbook_examples",
+]
+_PROMPT_LEARNING_MODE_OPTIONS = ["all", "expression_mining", "reading_support"]
+_PROMPT_DIFFICULTY_OPTIONS = ["all", "beginner", "intermediate", "advanced"]
 _ZH_I18N = {
     "UI language": "\u754c\u9762\u8bed\u8a00",
     "Run": "\u8fd0\u884c",
@@ -189,6 +197,9 @@ _ZH_I18N = {
     "Prompt template restored from default.": "\u5df2\u4ece\u9ed8\u8ba4\u6a21\u677f\u8fd8\u539f Prompt\u3002",
     "Backup created": "\u5df2\u521b\u5efa\u5907\u4efd",
     "Prompt type": "\u63d0\u793a\u8bcd\u7c7b\u578b",
+    "Prompt content type": "\u63d0\u793a\u8bcd\u5185\u5bb9\u7c7b\u578b",
+    "Prompt learning mode": "\u63d0\u793a\u8bcd\u5b66\u4e60\u6a21\u5f0f",
+    "Prompt difficulty": "\u63d0\u793a\u8bcd\u96be\u5ea6",
     "New": "\u65b0\u5efa",
     "Rename": "\u91cd\u547d\u540d",
     "Delete": "\u5220\u9664",
@@ -858,6 +869,64 @@ def _normalize_prompt_mode(value: Any) -> str:
     return ""
 
 
+def _normalize_prompt_content_type(value: Any) -> str:
+    content_type = _as_str(value).lower()
+    if content_type in {"", "auto"}:
+        return "all"
+    if content_type == "general":
+        return "prose_article"
+    if content_type in {"prose", "article"}:
+        return "prose_article"
+    if content_type in {"transcript", "dialogue"}:
+        return "transcript_dialogue"
+    if content_type in {"textbook", "example"}:
+        return "textbook_examples"
+    if content_type in _PROMPT_CONTENT_TYPE_OPTIONS:
+        return content_type
+    return "all"
+
+
+def _normalize_prompt_learning_mode(value: Any) -> str:
+    learning_mode = _as_str(value).lower()
+    if learning_mode in {"", "auto"}:
+        return "all"
+    if learning_mode in _PROMPT_LEARNING_MODE_OPTIONS:
+        return learning_mode
+    return "all"
+
+
+def _normalize_prompt_difficulty(value: Any) -> str:
+    difficulty = _as_str(value).lower()
+    if difficulty in {"", "auto"}:
+        return "all"
+    if difficulty in _PROMPT_DIFFICULTY_OPTIONS:
+        return difficulty
+    return "all"
+
+
+def _normalize_prompt_metadata_from_payload(payload: dict[str, Any]) -> tuple[str, str, str]:
+    content_type = _normalize_prompt_content_type(
+        payload.get("content_type")
+        or payload.get("material_profile")
+        or payload.get("content_profile")
+    )
+    learning_mode = _normalize_prompt_learning_mode(payload.get("learning_mode"))
+    difficulty = _normalize_prompt_difficulty(
+        payload.get("difficulty_level")
+        or payload.get("difficulty")
+        or payload.get("cloze_difficulty")
+    )
+    return content_type, learning_mode, difficulty
+
+
+def _prompt_meta_matches(filter_value: str, prompt_value: str) -> bool:
+    if filter_value == "all":
+        return True
+    if prompt_value == "all":
+        return True
+    return filter_value == prompt_value
+
+
 def _prompt_mode_label(mode: str, *, lang: str) -> str:
     if _normalize_prompt_mode(mode) == "explanation":
         return _tr(lang, "Explanation", "瑙ｉ噴")
@@ -868,10 +937,28 @@ def _prompt_file_map(
     cfg: Any,
     *,
     mode_filter: str | None = None,
+    content_type_filter: str | None = None,
+    learning_mode_filter: str | None = None,
+    difficulty_filter: str | None = None,
     include_templates: bool = False,
 ) -> dict[str, Path]:
     prompts_dir = cfg.resolve_path(_PROMPT_DIR)
     mode_value = _normalize_prompt_mode(mode_filter) if mode_filter else ""
+    content_type_value = (
+        _normalize_prompt_content_type(content_type_filter)
+        if content_type_filter is not None
+        else "all"
+    )
+    learning_mode_value = (
+        _normalize_prompt_learning_mode(learning_mode_filter)
+        if learning_mode_filter is not None
+        else "all"
+    )
+    difficulty_value = (
+        _normalize_prompt_difficulty(difficulty_filter)
+        if difficulty_filter is not None
+        else "all"
+    )
     if not prompts_dir.exists():
         return {}
     result: dict[str, Path] = {}
@@ -887,6 +974,15 @@ def _prompt_file_map(
             continue
         mode = _normalize_prompt_mode(spec.mode)
         if mode_value and mode != mode_value:
+            continue
+        prompt_content_type, prompt_learning_mode, prompt_difficulty = (
+            _normalize_prompt_metadata_from_payload(payload)
+        )
+        if not _prompt_meta_matches(content_type_value, prompt_content_type):
+            continue
+        if not _prompt_meta_matches(learning_mode_value, prompt_learning_mode):
+            continue
+        if not _prompt_meta_matches(difficulty_value, prompt_difficulty):
             continue
         result[path.name] = path
     return result
@@ -922,11 +1018,22 @@ def _prompt_files_for_mode(
 
 
 def _prompt_choices(
-    lang: str, *, mode_filter: str | None = None, include_templates: bool = False
+    lang: str,
+    *,
+    mode_filter: str | None = None,
+    content_type_filter: str | None = None,
+    learning_mode_filter: str | None = None,
+    difficulty_filter: str | None = None,
+    include_templates: bool = False,
 ) -> list[tuple[str, str]]:
     cfg = _load_app_config()
     prompt_files = _prompt_file_map(
-        cfg, mode_filter=mode_filter, include_templates=include_templates
+        cfg,
+        mode_filter=mode_filter,
+        content_type_filter=content_type_filter,
+        learning_mode_filter=learning_mode_filter,
+        difficulty_filter=difficulty_filter,
+        include_templates=include_templates,
     )
     return _prompt_choices_from_map(prompt_files, lang=lang)
 
@@ -948,10 +1055,18 @@ def _prompt_path_choices(
     *,
     lang: str,
     mode_filter: str,
+    content_type_filter: str | None = None,
+    learning_mode_filter: str | None = None,
+    difficulty_filter: str | None = None,
     include_auto: bool = False,
 ) -> list[tuple[str, str]]:
     prompt_files = _prompt_file_map(
-        cfg, mode_filter=mode_filter, include_templates=False
+        cfg,
+        mode_filter=mode_filter,
+        content_type_filter=content_type_filter,
+        learning_mode_filter=learning_mode_filter,
+        difficulty_filter=difficulty_filter,
+        include_templates=False,
     )
     mode_text = _prompt_mode_label(mode_filter, lang=lang)
     choices: list[tuple[str, str]] = []
@@ -1070,6 +1185,18 @@ def _load_prompt_mode(
     return _normalize_prompt_mode(payload.get("mode"))
 
 
+def _load_prompt_filter_metadata(
+    prompt_key: str,
+    prompt_files: dict[str, Path],
+    *,
+    lang: str,
+) -> tuple[str, str, str]:
+    _path, payload, _msg = _read_prompt_payload(prompt_key, prompt_files, lang=lang)
+    if payload is None:
+        return ("all", "all", "all")
+    return _normalize_prompt_metadata_from_payload(payload)
+
+
 def _format_prompt_validation_error(exc: ValidationError) -> str:
     errors = exc.errors()
     lines: list[str] = []
@@ -1096,24 +1223,8 @@ def _validate_prompt_payload(payload: dict[str, Any], *, lang: str) -> tuple[boo
 def _set_user_prompt_template(
     payload: dict[str, Any], *, lang: str, template: str
 ) -> None:
-    current = payload.get("user_prompt_template")
-    mapping: dict[str, str] = {}
-    if isinstance(current, str):
-        text = current.strip()
-        if text:
-            mapping["en"] = text
-            mapping["zh"] = text
-    elif isinstance(current, dict):
-        for key, value in current.items():
-            if isinstance(value, str) and value.strip():
-                mapping[str(key)] = value
-
-    mapping[lang] = template
-    if "en" not in mapping and "zh" in mapping:
-        mapping["en"] = mapping["zh"]
-    if "zh" not in mapping and "en" in mapping:
-        mapping["zh"] = mapping["en"]
-    payload["user_prompt_template"] = mapping
+    _ = lang
+    payload["user_prompt_template"] = template
 
 
 def _write_prompt_payload(
@@ -1891,10 +2002,29 @@ def build_interface() -> gr.Blocks:
     """
 
     cfg = _load_app_config()
+    try:
+        cfg.resolve_extract_prompt_path(
+            material_profile=cfg.material_profile,
+            difficulty=cfg.cloze_difficulty,
+            learning_mode=getattr(cfg, "learning_mode", "expression_mining"),
+        )
+        cfg.resolve_explain_prompt_path(
+            material_profile=cfg.material_profile,
+            difficulty=cfg.cloze_difficulty,
+            learning_mode=getattr(cfg, "learning_mode", "expression_mining"),
+        )
+    except Exception:
+        # Keep UI startup resilient; users can still inspect/fix prompt files in Prompt tab.
+        logger.warning("prompt auto-seed during web startup failed", exc_info=True)
     env_file = _resolve_env_file()
     cfg_view = _load_env_view(cfg, env_file)
     prompt_files = _prompt_file_map(cfg)
     initial_ui_lang = _normalize_ui_lang(getattr(cfg, "prompt_lang", "en"))
+    initial_run_content_type = _normalize_prompt_content_type(cfg.content_profile)
+    initial_run_learning_mode = _normalize_prompt_learning_mode(
+        getattr(cfg, "learning_mode", "expression_mining")
+    )
+    initial_run_difficulty = _normalize_prompt_difficulty(cfg.cloze_difficulty)
     initial_prompt_key = ""
     for key in prompt_files:
         if _load_prompt_mode(key, prompt_files, lang=initial_ui_lang) == "extraction":
@@ -1908,16 +2038,29 @@ def build_interface() -> gr.Blocks:
     initial_prompt_mode = _load_prompt_mode(
         initial_prompt_key, prompt_files, lang=initial_ui_lang
     )
+    (
+        initial_prompt_content_type,
+        initial_prompt_learning_mode,
+        initial_prompt_difficulty,
+    ) = _load_prompt_filter_metadata(
+        initial_prompt_key, prompt_files, lang=initial_ui_lang
+    )
     run_extract_prompt_choices = _prompt_path_choices(
         cfg,
         lang=initial_ui_lang,
         mode_filter="extraction",
+        content_type_filter=initial_run_content_type,
+        learning_mode_filter=initial_run_learning_mode,
+        difficulty_filter=initial_run_difficulty,
         include_auto=True,
     )
     run_explain_prompt_choices = _prompt_path_choices(
         cfg,
         lang=initial_ui_lang,
         mode_filter="explanation",
+        content_type_filter=initial_run_content_type,
+        learning_mode_filter=initial_run_learning_mode,
+        difficulty_filter=initial_run_difficulty,
         include_auto=True,
     )
     config_extract_prompt_choices = _prompt_path_choices(
@@ -3147,9 +3290,44 @@ def build_interface() -> gr.Blocks:
                 )
             )
             with gr.Row():
+                prompt_content_type_selector = gr.Dropdown(
+                    choices=_PROMPT_CONTENT_TYPE_OPTIONS,
+                    value=initial_prompt_content_type,
+                    label=_tr(
+                        initial_ui_lang,
+                        "Prompt content type",
+                        "Prompt content type",
+                    ),
+                    scale=1,
+                )
+                prompt_learning_mode_selector = gr.Dropdown(
+                    choices=_PROMPT_LEARNING_MODE_OPTIONS,
+                    value=initial_prompt_learning_mode,
+                    label=_tr(
+                        initial_ui_lang,
+                        "Prompt learning mode",
+                        "Prompt learning mode",
+                    ),
+                    scale=1,
+                )
+                prompt_difficulty_selector = gr.Dropdown(
+                    choices=_PROMPT_DIFFICULTY_OPTIONS,
+                    value=initial_prompt_difficulty,
+                    label=_tr(
+                        initial_ui_lang,
+                        "Prompt difficulty",
+                        "Prompt difficulty",
+                    ),
+                    scale=1,
+                )
+            with gr.Row():
                 prompt_file_selector = gr.Dropdown(
                     choices=_prompt_choices(
-                        initial_ui_lang, mode_filter=initial_prompt_mode or "extraction"
+                        initial_ui_lang,
+                        mode_filter=initial_prompt_mode or "extraction",
+                        content_type_filter=initial_prompt_content_type,
+                        learning_mode_filter=initial_prompt_learning_mode,
+                        difficulty_filter=initial_prompt_difficulty,
                     ),
                     value=initial_prompt_key,
                     label=_tr(initial_ui_lang, "Prompt file", "Prompt 鏂囦欢"),
@@ -3207,9 +3385,14 @@ def build_interface() -> gr.Blocks:
                 ]
 
             def _normalize_dropdown_value(
-                current: str, choices: list[tuple[str, str]]
+                current: str, choices: list[Any]
             ) -> str:
-                valid_values = {value for _label, value in choices}
+                valid_values: set[str] = set()
+                for item in choices:
+                    if isinstance(item, (tuple, list)) and len(item) >= 2:
+                        valid_values.add(_as_str(item[1]))
+                    else:
+                        valid_values.add(_as_str(item))
                 current_value = _as_str(current)
                 return current_value if current_value in valid_values else ""
 
@@ -3239,12 +3422,18 @@ def build_interface() -> gr.Blocks:
                 lang: str,
                 prompt_key: str,
                 preferred_mode: str,
+                preferred_content_type: str = "all",
+                preferred_learning_mode: str = "all",
+                preferred_difficulty: str = "all",
                 status: str,
                 editor_override: str | None,
-                run_extract_current: str,
-                run_explain_current: str,
-                config_extract_current: str,
-                config_explain_current: str,
+                run_content_type: str = "all",
+                run_learning_mode: str = "all",
+                run_difficulty: str = "all",
+                run_extract_current: str = "",
+                run_explain_current: str = "",
+                config_extract_current: str = "",
+                config_explain_current: str = "",
             ) -> tuple[Any, ...]:
                 cfg_now = _load_app_config()
                 prompt_files_now = _prompt_file_map(cfg_now)
@@ -3255,8 +3444,27 @@ def build_interface() -> gr.Blocks:
                     )
                 if not selected_mode:
                     selected_mode = "extraction"
-                prompt_files_for_mode = _prompt_files_for_mode(
-                    prompt_files_now, mode=selected_mode, lang=lang
+                selected_content_type = _normalize_prompt_content_type(
+                    preferred_content_type
+                )
+                selected_learning_mode = _normalize_prompt_learning_mode(
+                    preferred_learning_mode
+                )
+                selected_difficulty = _normalize_prompt_difficulty(preferred_difficulty)
+                has_explicit_filters = any(
+                    value != "all"
+                    for value in (
+                        selected_content_type,
+                        selected_learning_mode,
+                        selected_difficulty,
+                    )
+                )
+                prompt_files_for_mode = _prompt_file_map(
+                    cfg_now,
+                    mode_filter=selected_mode,
+                    content_type_filter=selected_content_type,
+                    learning_mode_filter=selected_learning_mode,
+                    difficulty_filter=selected_difficulty,
                 )
                 selected_key = _pick_prompt_key(
                     prompt_files_for_mode,
@@ -3264,23 +3472,6 @@ def build_interface() -> gr.Blocks:
                     preferred_key=prompt_key,
                     preferred_mode=selected_mode,
                 )
-                if not selected_key and prompt_files_now:
-                    selected_key = _pick_prompt_key(
-                        prompt_files_now,
-                        lang=lang,
-                        preferred_key=prompt_key,
-                        preferred_mode=selected_mode,
-                    )
-                    fallback_mode = _load_prompt_mode(
-                        selected_key, prompt_files_now, lang=lang
-                    )
-                    if fallback_mode:
-                        selected_mode = fallback_mode
-                        prompt_files_for_mode = _prompt_files_for_mode(
-                            prompt_files_now,
-                            mode=selected_mode,
-                            lang=lang,
-                        )
                 prompt_text = ""
                 load_msg = ""
                 if selected_key:
@@ -3292,10 +3483,27 @@ def build_interface() -> gr.Blocks:
                     )
                     if file_mode:
                         selected_mode = file_mode
-                        prompt_files_for_mode = _prompt_files_for_mode(
-                            prompt_files_now,
-                            mode=selected_mode,
-                            lang=lang,
+                        prompt_files_for_mode = _prompt_file_map(
+                            cfg_now,
+                            mode_filter=selected_mode,
+                            content_type_filter=selected_content_type,
+                            learning_mode_filter=selected_learning_mode,
+                            difficulty_filter=selected_difficulty,
+                        )
+                    if not has_explicit_filters:
+                        (
+                            selected_content_type,
+                            selected_learning_mode,
+                            selected_difficulty,
+                        ) = _load_prompt_filter_metadata(
+                            selected_key, prompt_files_now, lang=lang
+                        )
+                        prompt_files_for_mode = _prompt_file_map(
+                            cfg_now,
+                            mode_filter=selected_mode,
+                            content_type_filter=selected_content_type,
+                            learning_mode_filter=selected_learning_mode,
+                            difficulty_filter=selected_difficulty,
                         )
                 if editor_override is not None:
                     prompt_text = editor_override
@@ -3309,16 +3517,27 @@ def build_interface() -> gr.Blocks:
                 if not selected_key and editor_override is None:
                     prompt_text = ""
                 mode_choices_now = _prompt_mode_choices_for_ui(lang)
+                run_content_type_value = _normalize_prompt_content_type(run_content_type)
+                run_learning_mode_value = _normalize_prompt_learning_mode(
+                    run_learning_mode
+                )
+                run_difficulty_value = _normalize_prompt_difficulty(run_difficulty)
                 run_extract_choices_now = _prompt_path_choices(
                     cfg_now,
                     lang=lang,
                     mode_filter="extraction",
+                    content_type_filter=run_content_type_value,
+                    learning_mode_filter=run_learning_mode_value,
+                    difficulty_filter=run_difficulty_value,
                     include_auto=True,
                 )
                 run_explain_choices_now = _prompt_path_choices(
                     cfg_now,
                     lang=lang,
                     mode_filter="explanation",
+                    content_type_filter=run_content_type_value,
+                    learning_mode_filter=run_learning_mode_value,
+                    difficulty_filter=run_difficulty_value,
                     include_auto=True,
                 )
                 config_extract_choices_now = _prompt_path_choices(
@@ -3337,6 +3556,18 @@ def build_interface() -> gr.Blocks:
                 return (
                     gr.update(choices=prompt_choices_now, value=selected_key),
                     gr.update(choices=mode_choices_now, value=selected_mode),
+                    gr.update(
+                        choices=_PROMPT_CONTENT_TYPE_OPTIONS,
+                        value=selected_content_type,
+                    ),
+                    gr.update(
+                        choices=_PROMPT_LEARNING_MODE_OPTIONS,
+                        value=selected_learning_mode,
+                    ),
+                    gr.update(
+                        choices=_PROMPT_DIFFICULTY_OPTIONS,
+                        value=selected_difficulty,
+                    ),
                     gr.update(value=prompt_text),
                     gr.update(value=status_text),
                     gr.update(
@@ -3382,6 +3613,12 @@ def build_interface() -> gr.Blocks:
             def _on_prompt_file_change(
                 prompt_key: str,
                 prompt_mode: str,
+                prompt_content_type: str,
+                prompt_learning_mode: str,
+                prompt_difficulty: str,
+                run_content_type: str,
+                run_learning_mode: str,
+                run_difficulty: str,
                 run_extract_val: str,
                 run_explain_val: str,
                 config_extract_val: str,
@@ -3393,8 +3630,14 @@ def build_interface() -> gr.Blocks:
                     lang=lang,
                     prompt_key=prompt_key,
                     preferred_mode=prompt_mode,
+                    preferred_content_type=prompt_content_type,
+                    preferred_learning_mode=prompt_learning_mode,
+                    preferred_difficulty=prompt_difficulty,
                     status="",
                     editor_override=None,
+                    run_content_type=run_content_type,
+                    run_learning_mode=run_learning_mode,
+                    run_difficulty=run_difficulty,
                     run_extract_current=run_extract_val,
                     run_explain_current=run_explain_val,
                     config_extract_current=config_extract_val,
@@ -3404,6 +3647,12 @@ def build_interface() -> gr.Blocks:
             def _on_prompt_mode_change(
                 prompt_mode: str,
                 prompt_key: str,
+                prompt_content_type: str,
+                prompt_learning_mode: str,
+                prompt_difficulty: str,
+                run_content_type: str,
+                run_learning_mode: str,
+                run_difficulty: str,
                 run_extract_val: str,
                 run_explain_val: str,
                 config_extract_val: str,
@@ -3415,8 +3664,48 @@ def build_interface() -> gr.Blocks:
                     lang=lang,
                     prompt_key=prompt_key,
                     preferred_mode=prompt_mode,
+                    preferred_content_type=prompt_content_type,
+                    preferred_learning_mode=prompt_learning_mode,
+                    preferred_difficulty=prompt_difficulty,
                     status="",
                     editor_override=None,
+                    run_content_type=run_content_type,
+                    run_learning_mode=run_learning_mode,
+                    run_difficulty=run_difficulty,
+                    run_extract_current=run_extract_val,
+                    run_explain_current=run_explain_val,
+                    config_extract_current=config_extract_val,
+                    config_explain_current=config_explain_val,
+                )
+
+            def _on_prompt_filter_change(
+                prompt_content_type: str,
+                prompt_learning_mode: str,
+                prompt_difficulty: str,
+                prompt_mode: str,
+                prompt_key: str,
+                run_content_type: str,
+                run_learning_mode: str,
+                run_difficulty: str,
+                run_extract_val: str,
+                run_explain_val: str,
+                config_extract_val: str,
+                config_explain_val: str,
+                ui_lang_val: str,
+            ) -> tuple[Any, ...]:
+                lang = _normalize_ui_lang(ui_lang_val)
+                return _refresh_prompt_controls(
+                    lang=lang,
+                    prompt_key=prompt_key,
+                    preferred_mode=prompt_mode,
+                    preferred_content_type=prompt_content_type,
+                    preferred_learning_mode=prompt_learning_mode,
+                    preferred_difficulty=prompt_difficulty,
+                    status="",
+                    editor_override=None,
+                    run_content_type=run_content_type,
+                    run_learning_mode=run_learning_mode,
+                    run_difficulty=run_difficulty,
                     run_extract_current=run_extract_val,
                     run_explain_current=run_explain_val,
                     config_extract_current=config_extract_val,
@@ -3427,6 +3716,12 @@ def build_interface() -> gr.Blocks:
                 prompt_key: str,
                 new_name: str,
                 prompt_mode: str,
+                prompt_content_type: str,
+                prompt_learning_mode: str,
+                prompt_difficulty: str,
+                run_content_type: str,
+                run_learning_mode: str,
+                run_difficulty: str,
                 run_extract_val: str,
                 run_explain_val: str,
                 config_extract_val: str,
@@ -3447,8 +3742,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3466,8 +3767,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3482,8 +3789,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3514,8 +3827,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3531,8 +3850,14 @@ def build_interface() -> gr.Blocks:
                     lang=lang,
                     prompt_key=file_name,
                     preferred_mode=mode,
+                    preferred_content_type=prompt_content_type,
+                    preferred_learning_mode=prompt_learning_mode,
+                    preferred_difficulty=prompt_difficulty,
                     status=status,
                     editor_override=None,
+                    run_content_type=run_content_type,
+                    run_learning_mode=run_learning_mode,
+                    run_difficulty=run_difficulty,
                     run_extract_current=run_extract_val,
                     run_explain_current=run_explain_val,
                     config_extract_current=config_extract_val,
@@ -3543,8 +3868,14 @@ def build_interface() -> gr.Blocks:
             def _on_prompt_save(
                 prompt_key: str,
                 prompt_mode: str,
+                prompt_content_type: str,
+                prompt_learning_mode: str,
+                prompt_difficulty: str,
                 prompt_template: str,
                 save_confirmed: bool,
+                run_content_type: str,
+                run_learning_mode: str,
+                run_difficulty: str,
                 run_extract_val: str,
                 run_explain_val: str,
                 config_extract_val: str,
@@ -3559,8 +3890,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status="",
                         editor_override=template,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3573,8 +3910,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=template,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3591,8 +3934,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=msg,
                         editor_override=template,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3608,8 +3957,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=details,
                         editor_override=template,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3625,8 +3980,14 @@ def build_interface() -> gr.Blocks:
                     lang=lang,
                     prompt_key=prompt_key,
                     preferred_mode=mode,
+                    preferred_content_type=prompt_content_type,
+                    preferred_learning_mode=prompt_learning_mode,
+                    preferred_difficulty=prompt_difficulty,
                     status=status,
                     editor_override=template,
+                    run_content_type=run_content_type,
+                    run_learning_mode=run_learning_mode,
+                    run_difficulty=run_difficulty,
                     run_extract_current=run_extract_val,
                     run_explain_current=run_explain_val,
                     config_extract_current=config_extract_val,
@@ -3637,6 +3998,13 @@ def build_interface() -> gr.Blocks:
             def _on_prompt_rename(
                 prompt_key: str,
                 rename_name: str,
+                prompt_mode: str,
+                prompt_content_type: str,
+                prompt_learning_mode: str,
+                prompt_difficulty: str,
+                run_content_type: str,
+                run_learning_mode: str,
+                run_difficulty: str,
                 run_extract_val: str,
                 run_explain_val: str,
                 config_extract_val: str,
@@ -3652,8 +4020,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode="",
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3670,8 +4044,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode="",
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3690,8 +4070,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode="",
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3708,8 +4094,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode="",
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3727,8 +4119,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode="",
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=msg,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3745,8 +4143,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=_normalize_prompt_mode(payload.get("mode")),
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=details,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3764,8 +4168,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=target_name,
                         preferred_mode=_normalize_prompt_mode(payload.get("mode")),
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3783,8 +4193,14 @@ def build_interface() -> gr.Blocks:
                     lang=lang,
                     prompt_key=target_name,
                     preferred_mode=_normalize_prompt_mode(payload.get("mode")),
+                    preferred_content_type=prompt_content_type,
+                    preferred_learning_mode=prompt_learning_mode,
+                    preferred_difficulty=prompt_difficulty,
                     status=status,
                     editor_override=None,
+                    run_content_type=run_content_type,
+                    run_learning_mode=run_learning_mode,
+                    run_difficulty=run_difficulty,
                     run_extract_current=run_extract_val,
                     run_explain_current=run_explain_val,
                     config_extract_current=config_extract_val,
@@ -3795,6 +4211,13 @@ def build_interface() -> gr.Blocks:
             def _on_prompt_delete(
                 prompt_key: str,
                 delete_confirmed: bool,
+                prompt_mode: str,
+                prompt_content_type: str,
+                prompt_learning_mode: str,
+                prompt_difficulty: str,
+                run_content_type: str,
+                run_learning_mode: str,
+                run_difficulty: str,
                 run_extract_val: str,
                 run_explain_val: str,
                 config_extract_val: str,
@@ -3807,8 +4230,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode="",
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status="",
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3824,8 +4253,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode="",
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3845,8 +4280,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3859,8 +4300,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3876,8 +4323,14 @@ def build_interface() -> gr.Blocks:
                         lang=lang,
                         prompt_key=prompt_key,
                         preferred_mode=mode,
+                        preferred_content_type=prompt_content_type,
+                        preferred_learning_mode=prompt_learning_mode,
+                        preferred_difficulty=prompt_difficulty,
                         status=status,
                         editor_override=None,
+                        run_content_type=run_content_type,
+                        run_learning_mode=run_learning_mode,
+                        run_difficulty=run_difficulty,
                         run_extract_current=run_extract_val,
                         run_explain_current=run_explain_val,
                         config_extract_current=config_extract_val,
@@ -3893,8 +4346,14 @@ def build_interface() -> gr.Blocks:
                     lang=lang,
                     prompt_key="",
                     preferred_mode=mode,
+                    preferred_content_type=prompt_content_type,
+                    preferred_learning_mode=prompt_learning_mode,
+                    preferred_difficulty=prompt_difficulty,
                     status=status,
                     editor_override=None,
+                    run_content_type=run_content_type,
+                    run_learning_mode=run_learning_mode,
+                    run_difficulty=run_difficulty,
                     run_extract_current=run_extract_val,
                     run_explain_current=run_explain_val,
                     config_extract_current=config_extract_val,
@@ -3902,11 +4361,60 @@ def build_interface() -> gr.Blocks:
                 )
                 return _append_prompt_aux_updates(updates)
 
+            def _on_run_prompt_filters_change(
+                run_content_type: str,
+                run_learning_mode: str,
+                run_difficulty: str,
+                run_extract_val: str,
+                run_explain_val: str,
+                ui_lang_val: str,
+            ) -> tuple[Any, Any]:
+                cfg_now = _load_app_config()
+                lang = _normalize_ui_lang(ui_lang_val)
+                run_extract_choices_now = _prompt_path_choices(
+                    cfg_now,
+                    lang=lang,
+                    mode_filter="extraction",
+                    content_type_filter=run_content_type,
+                    learning_mode_filter=run_learning_mode,
+                    difficulty_filter=run_difficulty,
+                    include_auto=True,
+                )
+                run_explain_choices_now = _prompt_path_choices(
+                    cfg_now,
+                    lang=lang,
+                    mode_filter="explanation",
+                    content_type_filter=run_content_type,
+                    learning_mode_filter=run_learning_mode,
+                    difficulty_filter=run_difficulty,
+                    include_auto=True,
+                )
+                return (
+                    gr.update(
+                        choices=run_extract_choices_now,
+                        value=_normalize_dropdown_value(
+                            run_extract_val, run_extract_choices_now
+                        ),
+                    ),
+                    gr.update(
+                        choices=run_explain_choices_now,
+                        value=_normalize_dropdown_value(
+                            run_explain_val, run_explain_choices_now
+                        ),
+                    ),
+                )
+
             prompt_file_selector.change(
                 _on_prompt_file_change,
                 inputs=[
                     prompt_file_selector,
                     prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
+                    content_profile,
+                    learning_mode,
+                    difficulty,
                     run_extract_prompt,
                     run_explain_prompt,
                     extract_prompt_env,
@@ -3916,6 +4424,9 @@ def build_interface() -> gr.Blocks:
                 outputs=[
                     prompt_file_selector,
                     prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
                     prompt_editor,
                     prompt_status,
                     run_extract_prompt,
@@ -3929,6 +4440,12 @@ def build_interface() -> gr.Blocks:
                 inputs=[
                     prompt_mode_selector,
                     prompt_file_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
+                    content_profile,
+                    learning_mode,
+                    difficulty,
                     run_extract_prompt,
                     run_explain_prompt,
                     extract_prompt_env,
@@ -3938,6 +4455,9 @@ def build_interface() -> gr.Blocks:
                 outputs=[
                     prompt_file_selector,
                     prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
                     prompt_editor,
                     prompt_status,
                     run_extract_prompt,
@@ -3946,12 +4466,17 @@ def build_interface() -> gr.Blocks:
                     explain_prompt_env,
                 ],
             )
-            prompt_new_btn.click(
-                _on_prompt_new,
+            prompt_content_type_selector.change(
+                _on_prompt_filter_change,
                 inputs=[
-                    prompt_file_selector,
-                    prompt_new_name,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
                     prompt_mode_selector,
+                    prompt_file_selector,
+                    content_profile,
+                    learning_mode,
+                    difficulty,
                     run_extract_prompt,
                     run_explain_prompt,
                     extract_prompt_env,
@@ -3961,6 +4486,139 @@ def build_interface() -> gr.Blocks:
                 outputs=[
                     prompt_file_selector,
                     prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
+                    prompt_editor,
+                    prompt_status,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                ],
+            )
+            prompt_learning_mode_selector.change(
+                _on_prompt_filter_change,
+                inputs=[
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
+                    prompt_mode_selector,
+                    prompt_file_selector,
+                    content_profile,
+                    learning_mode,
+                    difficulty,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    ui_lang,
+                ],
+                outputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
+                    prompt_editor,
+                    prompt_status,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                ],
+            )
+            prompt_difficulty_selector.change(
+                _on_prompt_filter_change,
+                inputs=[
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
+                    prompt_mode_selector,
+                    prompt_file_selector,
+                    content_profile,
+                    learning_mode,
+                    difficulty,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    ui_lang,
+                ],
+                outputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
+                    prompt_editor,
+                    prompt_status,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                ],
+            )
+            content_profile.change(
+                _on_run_prompt_filters_change,
+                inputs=[
+                    content_profile,
+                    learning_mode,
+                    difficulty,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    ui_lang,
+                ],
+                outputs=[run_extract_prompt, run_explain_prompt],
+            )
+            learning_mode.change(
+                _on_run_prompt_filters_change,
+                inputs=[
+                    content_profile,
+                    learning_mode,
+                    difficulty,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    ui_lang,
+                ],
+                outputs=[run_extract_prompt, run_explain_prompt],
+            )
+            difficulty.change(
+                _on_run_prompt_filters_change,
+                inputs=[
+                    content_profile,
+                    learning_mode,
+                    difficulty,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    ui_lang,
+                ],
+                outputs=[run_extract_prompt, run_explain_prompt],
+            )
+            prompt_new_btn.click(
+                _on_prompt_new,
+                inputs=[
+                    prompt_file_selector,
+                    prompt_new_name,
+                    prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
+                    content_profile,
+                    learning_mode,
+                    difficulty,
+                    run_extract_prompt,
+                    run_explain_prompt,
+                    extract_prompt_env,
+                    explain_prompt_env,
+                    ui_lang,
+                ],
+                outputs=[
+                    prompt_file_selector,
+                    prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
                     prompt_editor,
                     prompt_status,
                     run_extract_prompt,
@@ -3978,8 +4636,14 @@ def build_interface() -> gr.Blocks:
                 inputs=[
                     prompt_file_selector,
                     prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
                     prompt_editor,
                     prompt_save_confirm,
+                    content_profile,
+                    learning_mode,
+                    difficulty,
                     run_extract_prompt,
                     run_explain_prompt,
                     extract_prompt_env,
@@ -3989,6 +4653,9 @@ def build_interface() -> gr.Blocks:
                 outputs=[
                     prompt_file_selector,
                     prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
                     prompt_editor,
                     prompt_status,
                     run_extract_prompt,
@@ -4001,13 +4668,19 @@ def build_interface() -> gr.Blocks:
                     prompt_delete_confirm,
                 ],
                 js="""
-(prompt_key, prompt_mode, prompt_template, _save_confirmed, run_extract_val, run_explain_val, config_extract_val, config_explain_val, ui_lang_val) => {
+(prompt_key, prompt_mode, prompt_content_type, prompt_learning_mode, prompt_difficulty, prompt_template, _save_confirmed, run_content_type, run_learning_mode, run_difficulty, run_extract_val, run_explain_val, config_extract_val, config_explain_val, ui_lang_val) => {
     const message = ui_lang_val === "zh" ? "确认保存当前提示词文件？" : "Confirm saving the current prompt file?";
     return [
         prompt_key,
         prompt_mode,
+        prompt_content_type,
+        prompt_learning_mode,
+        prompt_difficulty,
         prompt_template,
         window.confirm(message),
+        run_content_type,
+        run_learning_mode,
+        run_difficulty,
         run_extract_val,
         run_explain_val,
         config_extract_val,
@@ -4022,6 +4695,13 @@ def build_interface() -> gr.Blocks:
                 inputs=[
                     prompt_file_selector,
                     prompt_rename_name,
+                    prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
+                    content_profile,
+                    learning_mode,
+                    difficulty,
                     run_extract_prompt,
                     run_explain_prompt,
                     extract_prompt_env,
@@ -4031,6 +4711,9 @@ def build_interface() -> gr.Blocks:
                 outputs=[
                     prompt_file_selector,
                     prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
                     prompt_editor,
                     prompt_status,
                     run_extract_prompt,
@@ -4048,6 +4731,13 @@ def build_interface() -> gr.Blocks:
                 inputs=[
                     prompt_file_selector,
                     prompt_delete_confirm,
+                    prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
+                    content_profile,
+                    learning_mode,
+                    difficulty,
                     run_extract_prompt,
                     run_explain_prompt,
                     extract_prompt_env,
@@ -4057,6 +4747,9 @@ def build_interface() -> gr.Blocks:
                 outputs=[
                     prompt_file_selector,
                     prompt_mode_selector,
+                    prompt_content_type_selector,
+                    prompt_learning_mode_selector,
+                    prompt_difficulty_selector,
                     prompt_editor,
                     prompt_status,
                     run_extract_prompt,
@@ -4069,11 +4762,18 @@ def build_interface() -> gr.Blocks:
                     prompt_delete_confirm,
                 ],
                 js="""
-(prompt_key, _delete_confirmed, run_extract_val, run_explain_val, config_extract_val, config_explain_val, ui_lang_val) => {
+(prompt_key, _delete_confirmed, prompt_mode, prompt_content_type, prompt_learning_mode, prompt_difficulty, run_content_type, run_learning_mode, run_difficulty, run_extract_val, run_explain_val, config_extract_val, config_explain_val, ui_lang_val) => {
     const message = ui_lang_val === "zh" ? "确认删除当前提示词文件？" : "Confirm deleting the current prompt file?";
     return [
         prompt_key,
         window.confirm(message),
+        prompt_mode,
+        prompt_content_type,
+        prompt_learning_mode,
+        prompt_difficulty,
+        run_content_type,
+        run_learning_mode,
+        run_difficulty,
         run_extract_val,
         run_explain_val,
         config_extract_val,
@@ -4102,6 +4802,14 @@ def build_interface() -> gr.Blocks:
             prompt_lang_current: str,
             prompt_key_current: str,
             prompt_mode_current: str,
+            prompt_content_type_current: str,
+            prompt_learning_mode_current: str,
+            prompt_difficulty_current: str,
+            run_content_type_current: str,
+            run_learning_mode_current: str,
+            run_difficulty_current: str,
+            run_extract_prompt_current: str,
+            run_explain_prompt_current: str,
             run_id_current: str | None,
         ) -> tuple[Any, ...]:
             lang = _normalize_ui_lang(lang_value)
@@ -4110,16 +4818,27 @@ def build_interface() -> gr.Blocks:
             cfg_now = _load_app_config()
             prompt_files_now = _prompt_file_map(cfg_now)
             prompt_mode_pref = _normalize_prompt_mode(prompt_mode_current)
+            prompt_content_type_pref = _normalize_prompt_content_type(
+                prompt_content_type_current
+            )
+            prompt_learning_mode_pref = _normalize_prompt_learning_mode(
+                prompt_learning_mode_current
+            )
+            prompt_difficulty_pref = _normalize_prompt_difficulty(
+                prompt_difficulty_current
+            )
             if not prompt_mode_pref and prompt_key_current in prompt_files_now:
                 prompt_mode_pref = _load_prompt_mode(
                     prompt_key_current, prompt_files_now, lang=lang
                 )
             if not prompt_mode_pref:
                 prompt_mode_pref = "extraction"
-            prompt_files_filtered_next = _prompt_files_for_mode(
-                prompt_files_now,
-                mode=prompt_mode_pref,
-                lang=lang,
+            prompt_files_filtered_next = _prompt_file_map(
+                cfg_now,
+                mode_filter=prompt_mode_pref,
+                content_type_filter=prompt_content_type_pref,
+                learning_mode_filter=prompt_learning_mode_pref,
+                difficulty_filter=prompt_difficulty_pref,
             )
             prompt_key_next = _pick_prompt_key(
                 prompt_files_filtered_next,
@@ -4138,10 +4857,12 @@ def build_interface() -> gr.Blocks:
                 _load_prompt_mode(prompt_key_next, prompt_files_now, lang=lang)
                 or prompt_mode_pref
             )
-            prompt_files_filtered_next = _prompt_files_for_mode(
-                prompt_files_now,
-                mode=prompt_mode_next,
-                lang=lang,
+            prompt_files_filtered_next = _prompt_file_map(
+                cfg_now,
+                mode_filter=prompt_mode_next,
+                content_type_filter=prompt_content_type_pref,
+                learning_mode_filter=prompt_learning_mode_pref,
+                difficulty_filter=prompt_difficulty_pref,
             )
             if prompt_key_next:
                 prompt_template_next, prompt_status_next = _load_prompt_template(
@@ -4149,19 +4870,51 @@ def build_interface() -> gr.Blocks:
                     prompt_files_now,
                     lang=lang,
                 )
+                if (
+                    prompt_content_type_pref == "all"
+                    and prompt_learning_mode_pref == "all"
+                    and prompt_difficulty_pref == "all"
+                ):
+                    (
+                        prompt_content_type_pref,
+                        prompt_learning_mode_pref,
+                        prompt_difficulty_pref,
+                    ) = _load_prompt_filter_metadata(
+                        prompt_key_next, prompt_files_now, lang=lang
+                    )
+                    prompt_files_filtered_next = _prompt_file_map(
+                        cfg_now,
+                        mode_filter=prompt_mode_next,
+                        content_type_filter=prompt_content_type_pref,
+                        learning_mode_filter=prompt_learning_mode_pref,
+                        difficulty_filter=prompt_difficulty_pref,
+                    )
             else:
                 prompt_template_next, prompt_status_next = "", ""
             prompt_mode_choices_next = _prompt_mode_choices_for_ui(lang)
+            run_content_type_pref = _normalize_prompt_content_type(
+                run_content_type_current
+            )
+            run_learning_mode_pref = _normalize_prompt_learning_mode(
+                run_learning_mode_current
+            )
+            run_difficulty_pref = _normalize_prompt_difficulty(run_difficulty_current)
             run_extract_prompt_choices_next = _prompt_path_choices(
                 cfg_now,
                 lang=lang,
                 mode_filter="extraction",
+                content_type_filter=run_content_type_pref,
+                learning_mode_filter=run_learning_mode_pref,
+                difficulty_filter=run_difficulty_pref,
                 include_auto=True,
             )
             run_explain_prompt_choices_next = _prompt_path_choices(
                 cfg_now,
                 lang=lang,
                 mode_filter="explanation",
+                content_type_filter=run_content_type_pref,
+                learning_mode_filter=run_learning_mode_pref,
+                difficulty_filter=run_difficulty_pref,
                 include_auto=True,
             )
             config_extract_prompt_choices_next = _prompt_path_choices(
@@ -4217,6 +4970,9 @@ def build_interface() -> gr.Blocks:
                         "Equivalent to CLI --extract-prompt.",
                     ),
                     choices=run_extract_prompt_choices_next,
+                    value=_normalize_dropdown_value(
+                        run_extract_prompt_current, run_extract_prompt_choices_next
+                    ),
                 ),
                 gr.update(
                     label=_tr(
@@ -4230,6 +4986,9 @@ def build_interface() -> gr.Blocks:
                         "Equivalent to CLI --explain-prompt.",
                     ),
                     choices=run_explain_prompt_choices_next,
+                    value=_normalize_dropdown_value(
+                        run_explain_prompt_current, run_explain_prompt_choices_next
+                    ),
                 ),
                 gr.update(
                     label=_tr(
@@ -4511,6 +5270,21 @@ def build_interface() -> gr.Blocks:
                     value=prompt_mode_next,
                 ),
                 gr.update(
+                    label=_tr(lang, "Prompt content type", "Prompt content type"),
+                    choices=_PROMPT_CONTENT_TYPE_OPTIONS,
+                    value=prompt_content_type_pref,
+                ),
+                gr.update(
+                    label=_tr(lang, "Prompt learning mode", "Prompt learning mode"),
+                    choices=_PROMPT_LEARNING_MODE_OPTIONS,
+                    value=prompt_learning_mode_pref,
+                ),
+                gr.update(
+                    label=_tr(lang, "Prompt difficulty", "Prompt difficulty"),
+                    choices=_PROMPT_DIFFICULTY_OPTIONS,
+                    value=prompt_difficulty_pref,
+                ),
+                gr.update(
                     label=_tr(lang, "New prompt file name", "New prompt file name")
                 ),
                 gr.update(label=_tr(lang, "Rename to", "Rename to")),
@@ -4538,6 +5312,14 @@ def build_interface() -> gr.Blocks:
                 prompt_lang_env,
                 prompt_file_selector,
                 prompt_mode_selector,
+                prompt_content_type_selector,
+                prompt_learning_mode_selector,
+                prompt_difficulty_selector,
+                content_profile,
+                learning_mode,
+                difficulty,
+                run_extract_prompt,
+                run_explain_prompt,
                 run_selector,
             ],
             outputs=[
@@ -4607,6 +5389,9 @@ def build_interface() -> gr.Blocks:
                 prompt_heading,
                 prompt_file_selector,
                 prompt_mode_selector,
+                prompt_content_type_selector,
+                prompt_learning_mode_selector,
+                prompt_difficulty_selector,
                 prompt_new_name,
                 prompt_rename_name,
                 prompt_editor,

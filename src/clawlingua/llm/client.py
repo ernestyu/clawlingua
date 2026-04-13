@@ -6,6 +6,7 @@ import random
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from typing import Any, Iterable
 
 import httpx
 
@@ -69,27 +70,31 @@ class OpenAICompatibleClient:
                 with httpx.Client(timeout=self._cfg.llm_timeout_seconds) as client:
                     response = client.post(self._endpoint, json=payload, headers=headers)
 
-                # Small jitter after successful request to reduce bursty traffic.
-                if self._cfg.llm_request_sleep_seconds and self._cfg.llm_request_sleep_seconds > 0:
-                    base = float(self._cfg.llm_request_sleep_seconds)
-                    time.sleep(random.uniform(base, 3 * base))
+                    # Small jitter after successful request to reduce bursty traffic.
+                    if self._cfg.llm_request_sleep_seconds and self._cfg.llm_request_sleep_seconds > 0:
+                        base = float(self._cfg.llm_request_sleep_seconds)
+                        time.sleep(random.uniform(base, 3 * base))
 
-                if response.status_code >= 400:
-                    raise httpx.HTTPStatusError(
-                        message=f"status={response.status_code}",
-                        request=response.request,
-                        response=response,
-                    )
+                    if response.status_code >= 400:
+                        raise httpx.HTTPStatusError(
+                            message=f"status={response.status_code}",
+                            request=response.request,
+                            response=response,
+                        )
 
-                data = loads(response.text)
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                if isinstance(content, list):
-                    parts: list[str] = []
-                    for item in content:
-                        if isinstance(item, dict) and "text" in item:
-                            parts.append(str(item["text"]))
-                    return "\n".join(parts).strip()
-                return str(content)
+                    data = loads(response.text)
+                    content = _extract_chat_content(data)
+
+                    # Some gateways return `message.content = null` in non-stream mode
+                    # for specific models; fallback to stream and reconstruct delta.content.
+                    if content is None:
+                        content = _chat_stream_fallback(
+                            client=client,
+                            endpoint=self._endpoint,
+                            payload=payload,
+                            headers=headers,
+                        )
+                    return content
             except Exception as exc:
                 last_err = exc
                 if attempt >= retries:
@@ -134,6 +139,114 @@ def _parse_retry_after_seconds(headers: httpx.Headers) -> float | None:
         when = when.replace(tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
     return max(0.0, (when - now).total_seconds())
+
+
+def _extract_chat_content(data: Any) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return None
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        return None
+    return _normalize_content_value(message.get("content"))
+
+
+def _normalize_content_value(content: Any) -> str | None:
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if text is not None:
+                    parts.append(str(text))
+                    continue
+                inner_content = item.get("content")
+                if inner_content is not None:
+                    parts.append(str(inner_content))
+        return "".join(parts) if parts else None
+    return str(content)
+
+
+def _chat_stream_fallback(
+    *,
+    client: httpx.Client,
+    endpoint: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> str:
+    stream_payload = dict(payload)
+    stream_payload["stream"] = True
+    with client.stream("POST", endpoint, json=stream_payload, headers=headers) as response:
+        if response.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                message=f"status={response.status_code}",
+                request=response.request,
+                response=response,
+            )
+        return _consume_stream_content(response.iter_lines())
+
+
+def _consume_stream_content(lines: Iterable[str | bytes]) -> str:
+    parts: list[str] = []
+    saw_done = False
+    saw_finish = False
+
+    for raw_line in lines:
+        line = _decode_stream_line(raw_line)
+        if not line or not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload:
+            continue
+        if payload == "[DONE]":
+            saw_done = True
+            continue
+        try:
+            chunk = loads(payload)
+        except Exception as exc:  # pragma: no cover - defensive
+            raise ValueError(f"invalid stream chunk: {payload[:200]!r}") from exc
+        if isinstance(chunk, dict) and "error" in chunk:
+            raise ValueError(f"stream error chunk: {chunk.get('error')!r}")
+        if not isinstance(chunk, dict):
+            continue
+        choices = chunk.get("choices")
+        if not isinstance(choices, list):
+            continue
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                delta_content = _normalize_content_value(delta.get("content"))
+                if delta_content:
+                    parts.append(delta_content)
+            if choice.get("finish_reason") is not None:
+                saw_finish = True
+
+    if not saw_done and not saw_finish:
+        raise ValueError("stream ended before [DONE]/finish_reason; response may be partial")
+
+    content = "".join(parts)
+    if not content:
+        raise ValueError("stream fallback produced empty content")
+    return content
+
+
+def _decode_stream_line(raw_line: str | bytes) -> str:
+    if isinstance(raw_line, bytes):
+        return raw_line.decode("utf-8", errors="replace").strip()
+    return str(raw_line).strip()
 
 
 def _format_request_error_detail(exc: Exception | None) -> str:

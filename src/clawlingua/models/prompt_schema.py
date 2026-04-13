@@ -22,9 +22,18 @@ class PromptSpec(BaseModel):
     version: str
     description: str
     mode: Literal["extraction", "explanation"]
-    # system_prompt/user_prompt_template 支持两种形式：
-    # - 旧格式：纯字符串
-    # - 新格式：{"en": "...", "zh": "..."}
+
+    # Metadata for UI filtering.
+    content_type: Literal[
+        "prose_article",
+        "transcript_dialogue",
+        "textbook_examples",
+        "all",
+    ] = "all"
+    learning_mode: Literal["expression_mining", "reading_support", "all"] = "all"
+    difficulty_level: Literal["beginner", "intermediate", "advanced", "all"] = "all"
+
+    # Support either raw string prompts or language-keyed prompt maps.
     system_prompt: Union[str, dict[str, str]]
     user_prompt_template: Union[str, dict[str, str]]
     placeholders: list[str] = Field(default_factory=list)
@@ -46,5 +55,48 @@ class PromptSpec(BaseModel):
     @classmethod
     def _normalize_mode(cls, value: object) -> object:
         if isinstance(value, str):
-            return value.strip().lower()
+            normalized = value.strip().lower()
+            if normalized == "cloze":
+                return "extraction"
+            if normalized == "translate":
+                return "explanation"
+            return normalized
         return value
+
+    @field_validator("content_type", mode="before")
+    @classmethod
+    def _normalize_content_type(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return "all"
+        normalized = value.strip().lower()
+        if normalized == "general":
+            return "prose_article"
+        if normalized in {"prose", "article"}:
+            return "prose_article"
+        if normalized in {"transcript", "dialogue"}:
+            return "transcript_dialogue"
+        if normalized in {"textbook", "example"}:
+            return "textbook_examples"
+        if not normalized:
+            return "all"
+        return normalized
+
+    @field_validator("learning_mode", mode="before")
+    @classmethod
+    def _normalize_learning_mode(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return "all"
+        normalized = value.strip().lower()
+        if not normalized:
+            return "all"
+        return normalized
+
+    @field_validator("difficulty_level", mode="before")
+    @classmethod
+    def _normalize_difficulty_level(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return "all"
+        normalized = value.strip().lower()
+        if not normalized:
+            return "all"
+        return normalized

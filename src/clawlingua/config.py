@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -17,21 +18,6 @@ from .constants import (
     DEFAULT_EXPORT_DIR,
     DEFAULT_LOG_DIR,
     DEFAULT_OUTPUT_DIR,
-    DEFAULT_PROMPT_CLOZE,
-    DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED,
-    DEFAULT_PROMPT_CLOZE_PROSE_BEGINNER,
-    DEFAULT_PROMPT_CLOZE_PROSE_INTERMEDIATE,
-    DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED,
-    DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER,
-    DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE,
-    DEFAULT_PROMPT_CLOZE_TEXTBOOK,
-    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED,
-    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER,
-    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE,
-    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED,
-    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER,
-    DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE,
-    DEFAULT_PROMPT_TRANSLATE,
     SUPPORTED_CONTENT_PROFILES,
     SUPPORTED_LEARNING_MODES,
     SUPPORTED_MATERIAL_PROFILES,
@@ -49,6 +35,17 @@ _VOICE_SLOT_ENV_KEYS = (
 )
 _PROMPT_META_FILENAMES = {"user_prompt_overrides.json"}
 _PROMPT_TEMPLATE_FILENAMES = {"template_extraction.json", "template_explanation.json"}
+_PROMPTS_DIR = Path("./prompts")
+_AUTO_SEED_FILE_BY_MODE = {
+    "extraction": "auto_seed_extraction.json",
+    "explanation": "auto_seed_explanation.json",
+}
+_SEED_SOURCE_FILENAMES_BY_MODE = {
+    "extraction": ("cloze_contextual_example.json", "template_extraction.json"),
+    "explanation": ("translate_rewrite.json", "template_explanation.json"),
+}
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_profile(value: str | None) -> str:
@@ -58,6 +55,154 @@ def _normalize_profile(value: str | None) -> str:
     if profile == "general":
         return "prose_article"
     return profile
+
+
+def _normalize_prompt_mode(value: str | None) -> str:
+    mode = (value or "").strip().lower()
+    if mode == "cloze":
+        return "extraction"
+    if mode == "translate":
+        return "explanation"
+    if mode in {"extraction", "explanation"}:
+        return mode
+    return ""
+
+
+def _normalize_prompt_content_type(value: str | None) -> str:
+    content_type = (value or "").strip().lower()
+    if content_type in {"general", "prose", "article"}:
+        return "prose_article"
+    if content_type in {"transcript", "dialogue"}:
+        return "transcript_dialogue"
+    if content_type in {"textbook", "example"}:
+        return "textbook_examples"
+    if content_type in {"prose_article", "transcript_dialogue", "textbook_examples"}:
+        return content_type
+    return "all"
+
+
+def _normalize_prompt_learning_mode(value: str | None) -> str:
+    learning_mode = (value or "").strip().lower()
+    if learning_mode in SUPPORTED_LEARNING_MODES:
+        return learning_mode
+    return "all"
+
+
+def _normalize_prompt_difficulty(value: str | None) -> str:
+    difficulty = (value or "").strip().lower()
+    if difficulty in {"beginner", "intermediate", "advanced"}:
+        return difficulty
+    return "all"
+
+
+def _prompt_content_type_for_profile(material_profile: str | None) -> str:
+    profile = _normalize_profile(material_profile)
+    if profile == "transcript_dialogue":
+        return "transcript_dialogue"
+    if profile == "textbook_examples":
+        return "textbook_examples"
+    return "prose_article"
+
+
+def _score_prompt_field(requested: str, actual: str) -> int | None:
+    if requested == "all":
+        return 0
+    if actual == requested:
+        return 3
+    if actual == "all":
+        return 1
+    return None
+
+
+def _embedded_seed_prompt_payload(mode: str) -> dict[str, Any]:
+    normalized_mode = _normalize_prompt_mode(mode) or "extraction"
+    if normalized_mode == "explanation":
+        return {
+            "name": "auto_seed_explanation",
+            "version": "2026-04-13",
+            "description": "Auto-seeded fallback explanation prompt.",
+            "mode": "explanation",
+            "content_type": "all",
+            "learning_mode": "all",
+            "difficulty_level": "all",
+            "target_langs_supported": "all",
+            "source_langs_suggested": "all",
+            "system_prompt": (
+                "You are a translation assistant. "
+                "Return a JSON array only with objects: {\"translation\": \"...\"}."
+            ),
+            "user_prompt_template": (
+                "source_lang={source_lang}\n"
+                "target_lang={target_lang}\n"
+                "document_title={document_title}\n"
+                "source_url={source_url}\n"
+                "batch_size={batch_size}\n"
+                "text_originals_json={text_originals_json}\n\n"
+                "Return a JSON array with exactly {batch_size} items in the same order. "
+                "Each item must be an object with key \"translation\" only."
+            ),
+            "placeholders": [
+                "source_lang",
+                "target_lang",
+                "document_title",
+                "source_url",
+                "chunk_text",
+                "text_original",
+                "text_originals_json",
+                "batch_size",
+            ],
+            "output_format": {"type": "json", "schema_name": "translation_batch_v1"},
+            "parser": {"strip_code_fences": True, "expect_json_array": True},
+        }
+    return {
+        "name": "auto_seed_extraction",
+        "version": "2026-04-13",
+        "description": "Auto-seeded fallback extraction prompt.",
+        "mode": "extraction",
+        "content_type": "all",
+        "learning_mode": "all",
+        "difficulty_level": "all",
+        "target_langs_supported": "all",
+        "source_langs_suggested": "all",
+        "system_prompt": (
+            "You are a language-learning content editor. "
+            "Output a JSON array only. No markdown, no explanations."
+        ),
+        "user_prompt_template": (
+            "source_lang={source_lang}\n"
+            "target_lang={target_lang}\n"
+            "document_title={document_title}\n"
+            "source_url={source_url}\n"
+            "learning_mode={learning_mode}\n"
+            "difficulty={difficulty}\n"
+            "cloze_max_sentences={cloze_max_sentences}\n"
+            "cloze_min_chars={cloze_min_chars}\n"
+            "cloze_max_per_chunk={cloze_max_per_chunk}\n\n"
+            "Return a JSON array. Each item must contain:\n"
+            "{\"chunk_id\":\"...\",\"text\":\"...\",\"original\":\"...\","
+            "\"target_phrases\":[\"...\"],\"note_hint\":\"...\"}\n\n"
+            "Requirements:\n"
+            "1) text must include at least one cloze in format {{cN::<b>...</b>}}(hint).\n"
+            "2) original must not contain cloze markers or HTML tags.\n"
+            "3) Respect cloze_max_sentences and cloze_min_chars.\n"
+            "4) If no suitable candidate, return an empty JSON array.\n\n"
+            "chunk_text:\n{chunk_text}"
+        ),
+        "placeholders": [
+            "source_lang",
+            "target_lang",
+            "document_title",
+            "source_url",
+            "chunk_text",
+            "learning_mode",
+            "difficulty",
+            "cloze_max_sentences",
+            "cloze_min_chars",
+            "cloze_max_per_chunk",
+        ],
+        "output_format": {"type": "json", "schema_name": "cloze_cards_v1"},
+        "parser": {"strip_code_fences": True, "expect_json_array": True},
+    }
 
 
 class AppConfig(BaseModel):
@@ -115,31 +260,23 @@ class AppConfig(BaseModel):
     # Number of originals translated in one LLM request.
     translate_batch_size: int = 4
 
-    # Legacy cloze prompt paths (still supported).
-    prompt_cloze: Path = DEFAULT_PROMPT_CLOZE
-    prompt_cloze_textbook: Path = DEFAULT_PROMPT_CLOZE_TEXTBOOK
+    # Legacy prompt path fields (env overrides); optional and no hard-coded defaults.
+    prompt_cloze: Path | None = None
+    prompt_cloze_textbook: Path | None = None
+    prompt_cloze_prose_beginner: Path | None = None
+    prompt_cloze_prose_intermediate: Path | None = None
+    prompt_cloze_prose_advanced: Path | None = None
+    prompt_cloze_prose_reading_support_beginner: Path | None = None
+    prompt_cloze_prose_reading_support_intermediate: Path | None = None
+    prompt_cloze_prose_reading_support_advanced: Path | None = None
+    prompt_cloze_transcript_beginner: Path | None = None
+    prompt_cloze_transcript_intermediate: Path | None = None
+    prompt_cloze_transcript_advanced: Path | None = None
+    prompt_cloze_transcript_reading_support_beginner: Path | None = None
+    prompt_cloze_transcript_reading_support_intermediate: Path | None = None
+    prompt_cloze_transcript_reading_support_advanced: Path | None = None
 
-    # V2 prompt family paths (material profile + difficulty variant).
-    prompt_cloze_prose_beginner: Path = DEFAULT_PROMPT_CLOZE_PROSE_BEGINNER
-    prompt_cloze_prose_intermediate: Path = DEFAULT_PROMPT_CLOZE_PROSE_INTERMEDIATE
-    prompt_cloze_prose_advanced: Path = DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED
-    prompt_cloze_prose_reading_support_beginner: Path = DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER
-    prompt_cloze_prose_reading_support_intermediate: Path = DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE
-    prompt_cloze_prose_reading_support_advanced: Path = DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED
-    prompt_cloze_transcript_beginner: Path = DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER
-    prompt_cloze_transcript_intermediate: Path = DEFAULT_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE
-    prompt_cloze_transcript_advanced: Path = DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED
-    prompt_cloze_transcript_reading_support_beginner: Path = (
-        DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER
-    )
-    prompt_cloze_transcript_reading_support_intermediate: Path = (
-        DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE
-    )
-    prompt_cloze_transcript_reading_support_advanced: Path = (
-        DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED
-    )
-
-    prompt_translate: Path = DEFAULT_PROMPT_TRANSLATE
+    prompt_translate: Path | None = None
     anki_template: Path = DEFAULT_ANKI_TEMPLATE
 
     # Legacy field. Kept for backward compatibility.
@@ -229,6 +366,205 @@ class AppConfig(BaseModel):
             return value
         return (self.workspace_root / value).resolve()
 
+    def _resolve_legacy_extract_prompt_path(
+        self,
+        *,
+        material_profile: str | None = None,
+        difficulty: str | None = None,
+        learning_mode: str | None = None,
+    ) -> Path | None:
+        profile = _normalize_profile(material_profile or self.material_profile)
+        diff = _normalize_prompt_difficulty(difficulty or self.cloze_difficulty)
+        mode = _normalize_prompt_learning_mode(learning_mode or self.learning_mode)
+        if diff == "all":
+            diff = "intermediate"
+        if mode == "all":
+            mode = "expression_mining"
+
+        if profile == "textbook_examples":
+            return self.prompt_cloze_textbook or self.prompt_cloze
+
+        if mode == "reading_support":
+            if profile == "transcript_dialogue":
+                return {
+                    "beginner": self.prompt_cloze_transcript_reading_support_beginner,
+                    "intermediate": self.prompt_cloze_transcript_reading_support_intermediate,
+                    "advanced": self.prompt_cloze_transcript_reading_support_advanced,
+                }.get(diff)
+            if profile == "prose_article":
+                return {
+                    "beginner": self.prompt_cloze_prose_reading_support_beginner,
+                    "intermediate": self.prompt_cloze_prose_reading_support_intermediate,
+                    "advanced": self.prompt_cloze_prose_reading_support_advanced,
+                }.get(diff)
+            return self.prompt_cloze
+
+        if profile == "transcript_dialogue":
+            return {
+                "beginner": self.prompt_cloze_transcript_beginner,
+                "intermediate": self.prompt_cloze_transcript_intermediate,
+                "advanced": self.prompt_cloze_transcript_advanced,
+            }.get(diff)
+        if profile == "prose_article":
+            return {
+                "beginner": self.prompt_cloze_prose_beginner,
+                "intermediate": self.prompt_cloze_prose_intermediate,
+                "advanced": self.prompt_cloze_prose_advanced,
+            }.get(diff)
+        return self.prompt_cloze
+
+    def _scan_prompt_files(
+        self,
+        *,
+        mode: str,
+        content_type: str = "all",
+        learning_mode: str = "all",
+        difficulty: str = "all",
+        include_templates: bool = False,
+    ) -> list[Path]:
+        normalized_mode = _normalize_prompt_mode(mode)
+        if normalized_mode not in {"extraction", "explanation"}:
+            return []
+        prompts_dir = self.resolve_path(_PROMPTS_DIR)
+        if not prompts_dir.exists():
+            return []
+
+        requested_content = _normalize_prompt_content_type(content_type)
+        requested_learning = _normalize_prompt_learning_mode(learning_mode)
+        requested_difficulty = _normalize_prompt_difficulty(difficulty)
+        scored: list[tuple[int, str, Path]] = []
+
+        for path in sorted(prompts_dir.glob("*.json")):
+            if path.name in _PROMPT_META_FILENAMES:
+                continue
+            if not include_templates and path.name in _PROMPT_TEMPLATE_FILENAMES:
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                spec = PromptSpec.model_validate(payload)
+            except (OSError, json.JSONDecodeError, ValidationError, ValueError):
+                continue
+
+            spec_mode = _normalize_prompt_mode(str(spec.mode))
+            if spec_mode != normalized_mode:
+                continue
+            spec_content = _normalize_prompt_content_type(str(spec.content_type))
+            spec_learning = _normalize_prompt_learning_mode(str(spec.learning_mode))
+            spec_difficulty = _normalize_prompt_difficulty(str(spec.difficulty_level))
+
+            score_parts = (
+                _score_prompt_field(requested_content, spec_content),
+                _score_prompt_field(requested_learning, spec_learning),
+                _score_prompt_field(requested_difficulty, spec_difficulty),
+            )
+            if any(part is None for part in score_parts):
+                continue
+            total_score = int(sum(part for part in score_parts if part is not None))
+            scored.append((total_score, path.name.lower(), path))
+
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        return [item[2] for item in scored]
+
+    def _build_seed_payload_from_sources(
+        self, *, mode: str, prompts_dir: Path
+    ) -> tuple[dict[str, Any], str]:
+        normalized_mode = _normalize_prompt_mode(mode) or "extraction"
+        for name in _SEED_SOURCE_FILENAMES_BY_MODE[normalized_mode]:
+            path = prompts_dir / name
+            if not path.exists():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                spec = PromptSpec.model_validate(payload)
+            except (OSError, json.JSONDecodeError, ValidationError, ValueError):
+                continue
+            if _normalize_prompt_mode(str(spec.mode)) != normalized_mode:
+                continue
+            result = spec.model_dump(mode="json")
+            result["name"] = f"auto_seed_{normalized_mode}"
+            result["mode"] = normalized_mode
+            result["content_type"] = "all"
+            result["learning_mode"] = "all"
+            result["difficulty_level"] = "all"
+            return result, name
+
+        source_matches = self._scan_prompt_files(
+            mode=normalized_mode,
+            include_templates=True,
+        )
+        if source_matches:
+            source_path = source_matches[0]
+            try:
+                payload = json.loads(source_path.read_text(encoding="utf-8"))
+                spec = PromptSpec.model_validate(payload)
+                result = spec.model_dump(mode="json")
+                result["name"] = f"auto_seed_{normalized_mode}"
+                result["mode"] = normalized_mode
+                result["content_type"] = "all"
+                result["learning_mode"] = "all"
+                result["difficulty_level"] = "all"
+                return result, source_path.name
+            except (OSError, json.JSONDecodeError, ValidationError, ValueError):
+                pass
+
+        return _embedded_seed_prompt_payload(normalized_mode), "embedded"
+
+    def _auto_seed_prompt_file(self, *, mode: str) -> Path | None:
+        normalized_mode = _normalize_prompt_mode(mode)
+        if normalized_mode not in {"extraction", "explanation"}:
+            return None
+        prompts_dir = self.resolve_path(_PROMPTS_DIR)
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        target = prompts_dir / _AUTO_SEED_FILE_BY_MODE[normalized_mode]
+
+        if target.exists():
+            try:
+                payload = json.loads(target.read_text(encoding="utf-8"))
+                spec = PromptSpec.model_validate(payload)
+                if _normalize_prompt_mode(str(spec.mode)) == normalized_mode:
+                    return target
+            except (OSError, json.JSONDecodeError, ValidationError, ValueError):
+                # Rewrite invalid existing seed file.
+                pass
+
+        payload, source = self._build_seed_payload_from_sources(
+            mode=normalized_mode, prompts_dir=prompts_dir
+        )
+        payload["name"] = f"auto_seed_{normalized_mode}"
+        payload["mode"] = normalized_mode
+        payload["content_type"] = "all"
+        payload["learning_mode"] = "all"
+        payload["difficulty_level"] = "all"
+        try:
+            spec = PromptSpec.model_validate(payload)
+            target.write_text(
+                json.dumps(spec.model_dump(mode="json"), ensure_ascii=False, indent=2)
+                + "\n",
+                encoding="utf-8",
+            )
+            logger.warning(
+                "prompt auto-seeded | mode=%s path=%s source=%s",
+                normalized_mode,
+                target,
+                source,
+            )
+            return target
+        except (OSError, ValidationError, ValueError) as exc:
+            logger.error(
+                "prompt auto-seed failed | mode=%s path=%s error=%s",
+                normalized_mode,
+                target,
+                exc,
+            )
+            return None
+
+    def _ensure_mode_prompt_files(self, *, mode: str) -> list[Path]:
+        matches = self._scan_prompt_files(mode=mode)
+        if matches:
+            return matches
+        self._auto_seed_prompt_file(mode=mode)
+        return self._scan_prompt_files(mode=mode)
+
     def resolve_cloze_prompt_path(
         self,
         *,
@@ -236,67 +572,11 @@ class AppConfig(BaseModel):
         difficulty: str | None = None,
         learning_mode: str | None = None,
     ) -> Path:
-        profile = _normalize_profile(material_profile or self.material_profile)
-        diff = (difficulty or self.cloze_difficulty or "intermediate").strip().lower()
-        mode = (learning_mode or self.learning_mode or "expression_mining").strip().lower()
-        if diff not in {"beginner", "intermediate", "advanced"}:
-            diff = "intermediate"
-        if mode not in SUPPORTED_LEARNING_MODES:
-            mode = "expression_mining"
-
-        if profile == "textbook_examples":
-            return self.prompt_cloze_textbook
-        if mode == "reading_support":
-            if profile == "transcript_dialogue":
-                return {
-                    "beginner": self.prompt_cloze_transcript_reading_support_beginner,
-                    "intermediate": self.prompt_cloze_transcript_reading_support_intermediate,
-                    "advanced": self.prompt_cloze_transcript_reading_support_advanced,
-                }[diff]
-            if profile == "prose_article":
-                return {
-                    "beginner": self.prompt_cloze_prose_reading_support_beginner,
-                    "intermediate": self.prompt_cloze_prose_reading_support_intermediate,
-                    "advanced": self.prompt_cloze_prose_reading_support_advanced,
-                }[diff]
-            # Legacy/unexpected profile in reading_support mode.
-            return self.prompt_cloze
-        if profile == "transcript_dialogue":
-            return {
-                "beginner": self.prompt_cloze_transcript_beginner,
-                "intermediate": self.prompt_cloze_transcript_intermediate,
-                "advanced": self.prompt_cloze_transcript_advanced,
-            }[diff]
-        if profile == "prose_article":
-            return {
-                "beginner": self.prompt_cloze_prose_beginner,
-                "intermediate": self.prompt_cloze_prose_intermediate,
-                "advanced": self.prompt_cloze_prose_advanced,
-            }[diff]
-        # Fallback for unexpected/legacy values.
-        return self.prompt_cloze
-
-    def _scan_prompt_files_by_mode(self, mode: str) -> list[Path]:
-        normalized_mode = (mode or "").strip().lower()
-        if normalized_mode not in {"extraction", "explanation"}:
-            return []
-        prompts_dir = self.resolve_path(Path("./prompts"))
-        if not prompts_dir.exists():
-            return []
-        matched: list[Path] = []
-        for path in sorted(prompts_dir.glob("*.json")):
-            if path.name in _PROMPT_META_FILENAMES:
-                continue
-            if path.name in _PROMPT_TEMPLATE_FILENAMES:
-                continue
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                spec = PromptSpec.model_validate(payload)
-            except (OSError, json.JSONDecodeError, ValidationError, ValueError):
-                continue
-            if str(spec.mode).strip().lower() == normalized_mode:
-                matched.append(path)
-        return matched
+        return self.resolve_extract_prompt_path(
+            material_profile=material_profile,
+            difficulty=difficulty,
+            learning_mode=learning_mode,
+        )
 
     def resolve_extract_prompt_path(
         self,
@@ -307,30 +587,109 @@ class AppConfig(BaseModel):
     ) -> Path:
         if self.extract_prompt is not None:
             return self.extract_prompt
-        resolved = self.resolve_cloze_prompt_path(
+        legacy = self._resolve_legacy_extract_prompt_path(
             material_profile=material_profile,
             difficulty=difficulty,
             learning_mode=learning_mode,
         )
-        resolved_path = self.resolve_path(resolved)
-        if resolved_path.exists():
-            return resolved
-        fallback = self._scan_prompt_files_by_mode("extraction")
-        if fallback:
-            return fallback[0]
-        return resolved
+        if legacy is not None and self.resolve_path(legacy).exists():
+            return legacy
 
-    def resolve_explain_prompt_path(self) -> Path:
+        requested_content = _prompt_content_type_for_profile(
+            material_profile or self.material_profile
+        )
+        requested_learning = _normalize_prompt_learning_mode(
+            learning_mode or self.learning_mode
+        )
+        requested_difficulty = _normalize_prompt_difficulty(
+            difficulty or self.cloze_difficulty
+        )
+
+        candidates = self._scan_prompt_files(
+            mode="extraction",
+            content_type=requested_content,
+            learning_mode=requested_learning,
+            difficulty=requested_difficulty,
+        )
+        if not candidates:
+            self._ensure_mode_prompt_files(mode="extraction")
+            candidates = self._scan_prompt_files(
+                mode="extraction",
+                content_type=requested_content,
+                learning_mode=requested_learning,
+                difficulty=requested_difficulty,
+            )
+        if not candidates:
+            candidates = self._scan_prompt_files(mode="extraction")
+        if candidates:
+            return candidates[0]
+
+        raise build_error(
+            error_code="PROMPT_EXTRACTION_NOT_FOUND",
+            cause="No usable extraction prompt files found.",
+            detail=f"prompt_dir={self.resolve_path(_PROMPTS_DIR)}",
+            next_steps=[
+                "Check prompt JSON schema files under prompts/",
+                "Ensure at least one extraction prompt exists",
+                "Use --extract-prompt to specify a valid prompt path",
+            ],
+            exit_code=ExitCode.CONFIG_ERROR,
+        )
+
+    def resolve_explain_prompt_path(
+        self,
+        *,
+        material_profile: str | None = None,
+        difficulty: str | None = None,
+        learning_mode: str | None = None,
+    ) -> Path:
         if self.explain_prompt is not None:
             return self.explain_prompt
-        resolved = self.prompt_translate
-        resolved_path = self.resolve_path(resolved)
-        if resolved_path.exists():
-            return resolved
-        fallback = self._scan_prompt_files_by_mode("explanation")
-        if fallback:
-            return fallback[0]
-        return resolved
+        if self.prompt_translate is not None and self.resolve_path(
+            self.prompt_translate
+        ).exists():
+            return self.prompt_translate
+
+        requested_content = _prompt_content_type_for_profile(
+            material_profile or self.material_profile
+        )
+        requested_learning = _normalize_prompt_learning_mode(
+            learning_mode or self.learning_mode
+        )
+        requested_difficulty = _normalize_prompt_difficulty(
+            difficulty or self.cloze_difficulty
+        )
+
+        candidates = self._scan_prompt_files(
+            mode="explanation",
+            content_type=requested_content,
+            learning_mode=requested_learning,
+            difficulty=requested_difficulty,
+        )
+        if not candidates:
+            self._ensure_mode_prompt_files(mode="explanation")
+            candidates = self._scan_prompt_files(
+                mode="explanation",
+                content_type=requested_content,
+                learning_mode=requested_learning,
+                difficulty=requested_difficulty,
+            )
+        if not candidates:
+            candidates = self._scan_prompt_files(mode="explanation")
+        if candidates:
+            return candidates[0]
+
+        raise build_error(
+            error_code="PROMPT_EXPLANATION_NOT_FOUND",
+            cause="No usable explanation prompt files found.",
+            detail=f"prompt_dir={self.resolve_path(_PROMPTS_DIR)}",
+            next_steps=[
+                "Check prompt JSON schema files under prompts/",
+                "Ensure at least one explanation prompt exists",
+                "Use --explain-prompt to specify a valid prompt path",
+            ],
+            exit_code=ExitCode.CONFIG_ERROR,
+        )
 
     def get_source_voices(self, source_lang: str) -> list[str]:
         if self.tts_edge_voices:
@@ -470,59 +829,58 @@ def load_config(
         "translate_llm_model": _env_value(merged.get("CLAWLINGUA_TRANSLATE_LLM_MODEL"), None),
         "translate_llm_temperature": _env_value(merged.get("CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE"), None),
         "translate_batch_size": _env_value(merged.get("CLAWLINGUA_TRANSLATE_BATCH_SIZE"), 4),
-        # Legacy prompt paths.
-        "prompt_cloze": _env_value(merged.get("CLAWLINGUA_PROMPT_CLOZE"), DEFAULT_PROMPT_CLOZE),
-        "prompt_cloze_textbook": _env_value(merged.get("CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK"), DEFAULT_PROMPT_CLOZE_TEXTBOOK),
-        # V2 prompt family paths.
+        # Legacy prompt path overrides. Defaults are intentionally empty to avoid file-name coupling.
+        "prompt_cloze": _env_value(merged.get("CLAWLINGUA_PROMPT_CLOZE"), None),
+        "prompt_cloze_textbook": _env_value(merged.get("CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK"), None),
         "prompt_cloze_prose_beginner": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_BEGINNER"),
-            DEFAULT_PROMPT_CLOZE_PROSE_BEGINNER,
+            None,
         ),
         "prompt_cloze_prose_intermediate": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_INTERMEDIATE"),
-            DEFAULT_PROMPT_CLOZE_PROSE_INTERMEDIATE,
+            None,
         ),
         "prompt_cloze_prose_advanced": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_ADVANCED"),
-            DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED,
+            None,
         ),
         "prompt_cloze_prose_reading_support_beginner": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER"),
-            DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER,
+            None,
         ),
         "prompt_cloze_prose_reading_support_intermediate": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE"),
-            DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE,
+            None,
         ),
         "prompt_cloze_prose_reading_support_advanced": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED"),
-            DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED,
+            None,
         ),
         "prompt_cloze_transcript_beginner": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_BEGINNER"),
-            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER,
+            None,
         ),
         "prompt_cloze_transcript_intermediate": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE"),
-            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE,
+            None,
         ),
         "prompt_cloze_transcript_advanced": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_ADVANCED"),
-            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED,
+            None,
         ),
         "prompt_cloze_transcript_reading_support_beginner": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER"),
-            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER,
+            None,
         ),
         "prompt_cloze_transcript_reading_support_intermediate": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE"),
-            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE,
+            None,
         ),
         "prompt_cloze_transcript_reading_support_advanced": _env_value(
             merged.get("CLAWLINGUA_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED"),
-            DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED,
+            None,
         ),
-        "prompt_translate": _env_value(merged.get("CLAWLINGUA_PROMPT_TRANSLATE"), DEFAULT_PROMPT_TRANSLATE),
+        "prompt_translate": _env_value(merged.get("CLAWLINGUA_PROMPT_TRANSLATE"), None),
         "anki_template": _env_value(merged.get("CLAWLINGUA_ANKI_TEMPLATE"), DEFAULT_ANKI_TEMPLATE),
         # Legacy + V2 profiles.
         "content_profile": _env_value(merged.get("CLAWLINGUA_CONTENT_PROFILE"), normalized_profile),

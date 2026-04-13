@@ -1008,10 +1008,22 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     explain_prompt_path = (
         options.explain_prompt
         if options.explain_prompt is not None
-        else cfg.resolve_explain_prompt_path()
+        else cfg.resolve_explain_prompt_path(
+            material_profile=material_profile,
+            difficulty=cfg.cloze_difficulty,
+            learning_mode=learning_mode,
+        )
     )
     extract_prompt = load_prompt(cfg.resolve_path(extract_prompt_path), prompt_lang=cfg.prompt_lang)
     explain_prompt = load_prompt(cfg.resolve_path(explain_prompt_path), prompt_lang=cfg.prompt_lang)
+    logger.info(
+        "prompt selection resolved | extraction=%s explanation=%s material_profile=%s learning_mode=%s difficulty=%s",
+        cfg.resolve_path(extract_prompt_path),
+        cfg.resolve_path(explain_prompt_path),
+        material_profile,
+        learning_mode,
+        cfg.cloze_difficulty,
+    )
 
     document = _build_document(cfg, run_ctx.run_id, options)
     logger.info('ingest complete | title="%s"', document.title or "")

@@ -6,33 +6,6 @@ from pathlib import Path
 
 APP_NAME = "clawlingua"
 
-DEFAULT_PROMPT_CLOZE = Path("./prompts/cloze_contextual.json")
-DEFAULT_PROMPT_CLOZE_TEXTBOOK = Path("./prompts/cloze_textbook_examples.json")
-DEFAULT_PROMPT_CLOZE_PROSE_BEGINNER = Path("./prompts/cloze_prose_beginner.json")
-DEFAULT_PROMPT_CLOZE_PROSE_INTERMEDIATE = Path("./prompts/cloze_prose_intermediate.json")
-DEFAULT_PROMPT_CLOZE_PROSE_ADVANCED = Path("./prompts/cloze_prose_advanced.json")
-DEFAULT_PROMPT_CLOZE_TRANSCRIPT_BEGINNER = Path("./prompts/cloze_transcript_beginner.json")
-DEFAULT_PROMPT_CLOZE_TRANSCRIPT_INTERMEDIATE = Path("./prompts/cloze_transcript_intermediate.json")
-DEFAULT_PROMPT_CLOZE_TRANSCRIPT_ADVANCED = Path("./prompts/cloze_transcript_advanced.json")
-DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_BEGINNER = Path(
-    "./prompts/cloze_prose_reading_support_beginner.json"
-)
-DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_INTERMEDIATE = Path(
-    "./prompts/cloze_prose_reading_support_intermediate.json"
-)
-DEFAULT_PROMPT_CLOZE_PROSE_READING_SUPPORT_ADVANCED = Path(
-    "./prompts/cloze_prose_reading_support_advanced.json"
-)
-DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_BEGINNER = Path(
-    "./prompts/cloze_transcript_reading_support_beginner.json"
-)
-DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_INTERMEDIATE = Path(
-    "./prompts/cloze_transcript_reading_support_intermediate.json"
-)
-DEFAULT_PROMPT_CLOZE_TRANSCRIPT_READING_SUPPORT_ADVANCED = Path(
-    "./prompts/cloze_transcript_reading_support_advanced.json"
-)
-DEFAULT_PROMPT_TRANSLATE = Path("./prompts/translate_rewrite.json")
 DEFAULT_ANKI_TEMPLATE = Path("./templates/anki_cloze_default.json")
 # Where intermediate run directories (JSONL, snapshots) are stored.
 DEFAULT_OUTPUT_DIR = Path("./runs")
