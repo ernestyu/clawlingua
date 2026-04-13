@@ -285,6 +285,30 @@ def _is_retryable_translation_item_error(result: TranslationBatchResult) -> bool
     return bool(result.error and result.error.startswith("retryable:"))
 
 
+def _materialize_translation_fallback_cards(
+    *,
+    remaining: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+    stage: str,
+    reason: str,
+    append_card_from_translation: Callable[[int, dict[str, Any], str], None],
+    attempt: int | None = None,
+) -> None:
+    for entry in remaining:
+        idx = int(entry["index"])
+        item = entry["item"]
+        append_card_from_translation(idx, item, "")
+        payload: dict[str, Any] = {
+            "stage": stage,
+            "index": idx,
+            "reason": reason,
+            "translation_fallback": "empty",
+        }
+        if attempt is not None:
+            payload["attempt"] = attempt
+        errors.append(payload)
+
+
 def _apply_per_chunk_cap(items: list[dict[str, Any]], *, max_per_chunk: int | None) -> list[dict[str, Any]]:
     if not max_per_chunk or max_per_chunk <= 0:
         return list(items)
@@ -1275,7 +1299,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
 
     translate_batch_size = max(1, int(cfg.translate_batch_size or 1))
 
-    def _append_card_from_translation(*, idx: int, item: dict[str, Any], translation: str) -> None:
+    def _append_card_from_translation(idx: int, item: dict[str, Any], translation: str) -> None:
         card_id = f"card_{idx:06d}_{stable_hash(str(item['original']), length=6)}"
         target_phrases = list(item.get("target_phrases") or [])
         expression_transfer = str(item.get("expression_transfer", "")).strip()
@@ -1348,37 +1372,32 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
 
                 if _is_retryable_translation_batch_error(exc):
                     exhausted_msg = f"translation batch retries exhausted after {TRANSLATION_BATCH_MAX_RETRIES} attempts"
-                    exhausted_error = build_error(
-                        error_code="TRANSLATION_BATCH_RETRIES_EXHAUSTED",
-                        cause="Translation batch retries exhausted.",
-                        detail=exhausted_msg,
-                        next_steps=["Check translation LLM network/connectivity", "Inspect `errors.jsonl` for failed originals"],
-                        exit_code=ExitCode.LLM_REQUEST_ERROR,
+                    _materialize_translation_fallback_cards(
+                        remaining=remaining,
+                        errors=errors,
+                        stage="translation_batch_retries_exhausted",
+                        reason=exhausted_msg,
+                        append_card_from_translation=_append_card_from_translation,
+                        attempt=attempt,
                     )
-                    if not options.continue_on_error:
-                        _save_failure_snapshot(exhausted_error)
-                        raise exhausted_error
-                    for entry in remaining:
-                        errors.append(
-                            {
-                                "stage": "translation_batch_retries_exhausted",
-                                "index": int(entry["index"]),
-                                "attempts": attempt,
-                                "error": exhausted_msg,
-                            }
-                        )
                     break
 
-                if not options.continue_on_error:
-                    _save_failure_snapshot(exc)
-                    raise
                 errors.append(
                     {
                         "stage": "translation_batch_error",
                         "attempt": attempt,
                         "remaining": len(remaining),
                         "error": exc.to_lines(),
+                        "translation_fallback": "empty",
                     }
+                )
+                _materialize_translation_fallback_cards(
+                    remaining=remaining,
+                    errors=errors,
+                    stage="translation_item_fallback",
+                    reason="translation batch failed; fallback to empty translation",
+                    append_card_from_translation=_append_card_from_translation,
+                    attempt=attempt,
                 )
                 break
 
@@ -1406,27 +1425,19 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                     translation = str(result.translation or "").strip()
                     ok, reason = validate_translation_text(translation)
                     if not ok:
-                        if not options.continue_on_error:
-                            err = build_error(
-                                error_code="TRANSLATION_VALIDATION_FAILED",
-                                cause="Translation validation failed.",
-                                detail=f"index={idx}, reason={reason}",
-                                next_steps=["Check translation prompt output", "Lower temperature if output is unstable"],
-                                exit_code=ExitCode.CARD_VALIDATION_ERROR,
-                            )
-                            _save_failure_snapshot(err)
-                            raise err
                         errors.append(
                             {
-                                "stage": "translation_validation",
+                                "stage": "translation_validation_fallback",
                                 "index": idx,
                                 "reason": reason,
                                 "original": str(item.get("original", "")),
+                                "translation_fallback": "empty",
                             }
                         )
+                        _append_card_from_translation(idx, item, "")
                         continue
 
-                    _append_card_from_translation(idx=idx, item=item, translation=translation)
+                    _append_card_from_translation(idx, item, translation)
                     continue
 
                 if _is_retryable_translation_item_error(result):
@@ -1434,24 +1445,16 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                     continue
 
                 item_error = result.error or "translation item failed"
-                if not options.continue_on_error:
-                    err = build_error(
-                        error_code="TRANSLATION_ITEM_FAILED",
-                        cause="Translation item failed.",
-                        detail=f"index={idx}, error={item_error}",
-                        next_steps=["Inspect translation prompt output and `errors.jsonl`"],
-                        exit_code=ExitCode.CARD_VALIDATION_ERROR,
-                    )
-                    _save_failure_snapshot(err)
-                    raise err
                 errors.append(
                     {
-                        "stage": "translation_item_failed",
+                        "stage": "translation_item_fallback",
                         "index": idx,
-                        "error": item_error,
+                        "reason": item_error,
                         "original": str(item.get("original", "")),
+                        "translation_fallback": "empty",
                     }
                 )
+                _append_card_from_translation(idx, item, "")
 
             if returned_count < expected_count:
                 retry_remaining.extend(remaining[returned_count:])
@@ -1483,25 +1486,14 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 continue
 
             exhausted_msg = f"translation batch retries exhausted after {TRANSLATION_BATCH_MAX_RETRIES} attempts"
-            exhausted_error = build_error(
-                error_code="TRANSLATION_BATCH_RETRIES_EXHAUSTED",
-                cause="Translation batch retries exhausted.",
-                detail=exhausted_msg,
-                next_steps=["Check translation LLM network/connectivity", "Inspect `errors.jsonl` for failed originals"],
-                exit_code=ExitCode.LLM_REQUEST_ERROR,
+            _materialize_translation_fallback_cards(
+                remaining=retry_remaining,
+                errors=errors,
+                stage="translation_batch_retries_exhausted",
+                reason=exhausted_msg,
+                append_card_from_translation=_append_card_from_translation,
+                attempt=attempt,
             )
-            if not options.continue_on_error:
-                _save_failure_snapshot(exhausted_error)
-                raise exhausted_error
-            for entry in retry_remaining:
-                errors.append(
-                    {
-                        "stage": "translation_batch_retries_exhausted",
-                        "index": int(entry["index"]),
-                        "attempts": attempt,
-                        "error": exhausted_msg,
-                    }
-                )
             break
 
     if not cards and not cfg.allow_empty_deck:
@@ -1521,7 +1513,16 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 "reason": "no cards produced; exporting empty deck",
             }
         )
-    logger.info("translation generation complete | translated=%d", len(cards))
+    translated_non_empty_count = len(
+        [card for card in cards if str(card.translation or "").strip()]
+    )
+    translation_empty_count = len(cards) - translated_non_empty_count
+    logger.info(
+        "translation generation complete | cards=%d translated_non_empty=%d translation_empty=%d",
+        len(cards),
+        translated_non_empty_count,
+        translation_empty_count,
+    )
 
     voices = cfg.get_source_voices(document.source_lang)
     media_manager = MediaManager(run_ctx.media_dir, ext=cfg.tts_output_format)
@@ -1579,6 +1580,11 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         learning_mode=learning_mode,
         format_retry_stats=format_retry_stats,
     )
+    pipeline_metrics["translation"] = {
+        "cards_total": len(cards),
+        "translated_non_empty": translated_non_empty_count,
+        "translation_empty": translation_empty_count,
+    }
     pipeline_metrics["prompt_info"] = {
         "extraction_prompt_name": extract_prompt.name,
         "extraction_prompt_version": extract_prompt.version,
