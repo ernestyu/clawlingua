@@ -85,6 +85,51 @@ def generate_translation_batch(
     return [_normalize_translation_item(item) for item in data]
 
 
+def generate_phrase_translations_batch(
+    *,
+    client: OpenAICompatibleClient,
+    prompt: PromptSpec,
+    document: DocumentRecord,
+    phrases: list[str],
+    temperature: float | None = None,
+) -> list[TranslationBatchResult]:
+    if not phrases:
+        return []
+
+    phrases_json = json.dumps(phrases, ensure_ascii=False, indent=2)
+    placeholders = {
+        "source_lang": document.source_lang,
+        "target_lang": document.target_lang,
+        "document_title": document.title or "",
+        "source_url": document.source_url or "",
+        "chunk_text": "",
+        # Compatible with older translation templates.
+        "text_original": phrases_json,
+        "text_originals_json": phrases_json,
+        "phrase_texts_json": phrases_json,
+        "batch_size": str(len(phrases)),
+    }
+
+    user_prompt = render_prompt_template(prompt.user_prompt_template, placeholders)
+    batch_contract = (
+        "Input is a JSON array named phrase_texts_json.\n"
+        f"Translate each phrase into {document.target_lang} and return a JSON array with exactly {len(phrases)} items.\n"
+        "Position must match input order.\n"
+        "Each output item must be an object with key \"translation\" only.\n"
+        "Do not include explanations or markdown."
+    )
+    content = client.chat(
+        [
+            {"role": "system", "content": prompt.system_prompt},
+            {"role": "user", "content": f"{batch_contract}\n\n{user_prompt}"},
+        ],
+        temperature=temperature,
+        max_retries=1,
+    )
+    data = parse_json_content(content, expect_array=True)
+    return [_normalize_translation_item(item) for item in data]
+
+
 def generate_translation(
     *,
     client: OpenAICompatibleClient,

@@ -30,7 +30,7 @@ class PromptSpec(BaseModel):
         "textbook_examples",
         "all",
     ] = "all"
-    learning_mode: Literal["expression_mining", "reading_support", "all"] = "all"
+    learning_mode: Literal["expression_mining", "expression_mining_v2", "reading_support", "all"] = "all"
     difficulty_level: Literal["beginner", "intermediate", "advanced", "all"] = "all"
 
     # Support either raw string prompts or language-keyed prompt maps.

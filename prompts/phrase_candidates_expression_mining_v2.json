@@ -1,0 +1,35 @@
+{
+  "name": "phrase_candidates_expression_mining_v2",
+  "version": "2026-04-14",
+  "description": "Phrase extraction prompt for expression_mining_v2 pipeline.",
+  "mode": "extraction",
+  "content_type": "all",
+  "learning_mode": "expression_mining_v2",
+  "difficulty_level": "all",
+  "system_prompt": {
+    "en": "You are a language-learning phrase extractor. Return JSON arrays only.",
+    "zh": "你是语言学习短语提取助手。只返回 JSON 数组。"
+  },
+  "user_prompt_template": {
+    "en": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\nlearning_mode={learning_mode}\ndifficulty={difficulty}\ncloze_max_per_chunk={cloze_max_per_chunk}\n\nYou will receive one or more chunks in this format:\nchunk_id=chunk_0001\nchunk_text=\n<chunk text>\n\nReturn a JSON array. Each item must be:\n{\n  \"chunk_id\": \"chunk id\",\n  \"sentence\": \"a sentence copied from chunk_text\",\n  \"phrases\": [\n    {\n      \"text\": \"phrase copied from sentence\",\n      \"reason\": \"optional short reason\",\n      \"phrase_types\": [\"optional taxonomy labels\"]\n    }\n  ]\n}\n\nRules:\n1) phrase text must be an exact substring from sentence (no rewrite).\n2) Do not output cloze markers, numbering, or hints.\n3) Keep high-value learning chunks; skip low-value fillers.\n4) If no good phrase exists for a chunk, omit it.\n5) Return JSON only.\n\nchunk_text:\n{chunk_text}",
+    "zh": "source_lang={source_lang}\ntarget_lang={target_lang}\ndocument_title={document_title}\nsource_url={source_url}\nlearning_mode={learning_mode}\ndifficulty={difficulty}\ncloze_max_per_chunk={cloze_max_per_chunk}\n\n你将收到一个或多个 chunk，格式如下：\nchunk_id=chunk_0001\nchunk_text=\n<chunk 文本>\n\n请返回 JSON 数组。每个元素结构必须是：\n{\n  \"chunk_id\": \"chunk id\",\n  \"sentence\": \"从 chunk_text 原样复制的一句话\",\n  \"phrases\": [\n    {\n      \"text\": \"从 sentence 原样截取的短语\",\n      \"reason\": \"可选，简短理由\",\n      \"phrase_types\": [\"可选 taxonomy 标签\"]\n    }\n  ]\n}\n\n规则：\n1) phrases[*].text 必须是 sentence 的原文子串，不要改写。\n2) 不要输出 cloze 标记、编号或 hint。\n3) 选择有学习价值的短语，跳过低价值填充词。\n4) 某个 chunk 没有合适短语时可不输出。\n5) 只返回 JSON，不要解释。\n\nchunk_text:\n{chunk_text}"
+  },
+  "placeholders": [
+    "source_lang",
+    "target_lang",
+    "document_title",
+    "source_url",
+    "chunk_text",
+    "learning_mode",
+    "difficulty",
+    "cloze_max_per_chunk"
+  ],
+  "output_format": {
+    "type": "json",
+    "schema_name": "phrase_candidates_v1"
+  },
+  "parser": {
+    "strip_code_fences": true,
+    "expect_json_array": true
+  }
+}

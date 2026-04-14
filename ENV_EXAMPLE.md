@@ -30,6 +30,8 @@ CLAWLINGUA_VALIDATE_FORMAT_RETRY_ENABLE=true
 CLAWLINGUA_VALIDATE_FORMAT_RETRY_MAX=3
 # If true, attempts >=2 may call LLM repair/regenerate.
 CLAWLINGUA_VALIDATE_FORMAT_RETRY_LLM_ENABLE=true
+# If true, taxonomy-related rejects get one small-model repair pass.
+CLAWLINGUA_TAXONOMY_REPAIR_ENABLE=false
 
 # Prompt language: en | zh
 CLAWLINGUA_PROMPT_LANG=zh

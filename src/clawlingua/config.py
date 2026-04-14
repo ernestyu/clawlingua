@@ -245,6 +245,8 @@ class AppConfig(BaseModel):
     validate_format_retry_max: int = Field(default=3, ge=0, le=3)
     # Whether attempts >=2 are allowed to call LLM repair/regenerate.
     validate_format_retry_llm_enable: bool = True
+    # Whether taxonomy rejects are sent to a small-model repair pass.
+    taxonomy_repair_enable: bool = False
 
     # Prompt language: en|zh.
     prompt_lang: str = "zh"
@@ -821,6 +823,7 @@ def load_config(
             merged.get("CLAWLINGUA_VALIDATE_FORMAT_RETRY_LLM_ENABLE"),
             True,
         ),
+        "taxonomy_repair_enable": _env_value(merged.get("CLAWLINGUA_TAXONOMY_REPAIR_ENABLE"), False),
         "prompt_lang": _env_value(merged.get("CLAWLINGUA_PROMPT_LANG"), "zh"),
         "extract_prompt": _env_value(merged.get("CLAWLINGUA_EXTRACT_PROMPT"), None),
         "explain_prompt": _env_value(merged.get("CLAWLINGUA_EXPLAIN_PROMPT"), None),

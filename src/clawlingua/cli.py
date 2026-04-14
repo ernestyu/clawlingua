@@ -327,7 +327,7 @@ def build_deck(
     learning_mode: str | None = typer.Option(
         None,
         "--learning-mode",
-        help="Learning mode override: expression_mining|reading_support.",
+        help="Learning mode override: expression_mining|expression_mining_v2|reading_support.",
     ),
     content_profile: str | None = typer.Option(
         None,

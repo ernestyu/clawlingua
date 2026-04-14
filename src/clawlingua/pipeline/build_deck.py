@@ -27,11 +27,15 @@ from ..llm.client import OpenAICompatibleClient
 from ..llm.cloze_generator import (
     generate_cloze_candidates_for_batch,
     generate_cloze_candidates_for_chunk,
+    generate_phrase_candidates_for_batch,
+    generate_phrase_candidates_for_chunk,
 )
+from ..llm.taxonomy_classifier import classify_phrase_types_batch
 from ..llm.prompt_loader import load_prompt
 from ..llm.response_parser import parse_json_content
 from ..llm.translation_generator import (
     TranslationBatchResult,
+    generate_phrase_translations_batch,
     generate_translation_batch,
 )
 from ..models.card import CardRecord
@@ -55,17 +59,21 @@ CLOZE_MARK_RE = re.compile(r"\{\{c\d+::")
 _FORMAT_RETRY_TEXT_EXCEEDS_RE = re.compile(r"^format:text exceeds (\d+) sentences$")
 _FORMAT_RETRY_MIN_CHARS_RE = re.compile(r"^format:text chars < (\d+)$")
 _CLOZE_BLOCK_GENERIC_RE = re.compile(r"\{\{c(\d+)::(.*?)\}\}", re.DOTALL)
+_CLOZE_WITH_HINT_RE = re.compile(r"(\{\{c\d+::\s*<b>(.*?)</b>\s*\}\})\(([^)]*)\)", re.DOTALL)
 _CHUNK_ID_INDEX_RE = re.compile(r"^chunk_(\d+)(?:_|$)", re.IGNORECASE)
 _FORMAT_RETRYABLE_REASONS = (
     "format:missing cloze marker",
     "format:cloze style must be {{cN::<b>...</b>}}(hint)",
     "format:text exceeds ",
     "format:text chars < ",
-    "format:phrase_types must be in taxonomy:",
-    "format:phrase_types has too many labels",
     "format:target_phrases is empty or invalid",
 )
 _FORMAT_RETRYABLE_REASONS_LOWER = tuple(prefix.lower() for prefix in _FORMAT_RETRYABLE_REASONS)
+_TAXONOMY_RETRYABLE_REASONS = (
+    "taxonomy:invalid_labels:",
+    "taxonomy:too_many_labels:",
+)
+_TAXONOMY_RETRYABLE_REASONS_LOWER = tuple(prefix.lower() for prefix in _TAXONOMY_RETRYABLE_REASONS)
 
 
 @dataclass
@@ -88,6 +96,44 @@ class _FormatRetryStats:
         self.llm_repair_success_count += int(other.llm_repair_success_count)
         self.llm_regen_success_count += int(other.llm_regen_success_count)
         self.total_extra_llm_calls += int(other.total_extra_llm_calls)
+
+
+@dataclass
+class _TaxonomyRepairStats:
+    taxonomy_reject_count: int = 0
+    taxonomy_repair_attempted: int = 0
+    taxonomy_repair_success: int = 0
+    taxonomy_repair_failed: int = 0
+
+    def absorb(self, other: "_TaxonomyRepairStats") -> None:
+        self.taxonomy_reject_count += int(other.taxonomy_reject_count)
+        self.taxonomy_repair_attempted += int(other.taxonomy_repair_attempted)
+        self.taxonomy_repair_success += int(other.taxonomy_repair_success)
+        self.taxonomy_repair_failed += int(other.taxonomy_repair_failed)
+
+
+@dataclass
+class PhraseCandidate:
+    chunk_id: str
+    sentence_text: str
+    phrase_text: str
+    reason: str | None = None
+    phrase_types: list[str] | None = None
+    learning_value_score: float | None = None
+    expression_transfer: str | None = None
+    chunk_text: str | None = None
+
+
+@dataclass
+class ClozeUnit:
+    chunk_id: str
+    text_cloze: str
+    text_original: str
+    target_phrases: list[str]
+    phrase_types: list[str]
+    expression_transfer: str | None = None
+    learning_value_score: float | None = None
+    chunk_text: str | None = None
 
 
 @dataclass
@@ -122,6 +168,239 @@ class BuildDeckResult:
     output_path: Path
     cards_count: int
     errors_count: int
+
+
+def _use_phrase_extraction_pipeline(*, learning_mode: str, schema_name: str | None) -> bool:
+    mode = (learning_mode or "").strip().lower()
+    schema = (schema_name or "").strip().lower()
+    return mode == "expression_mining_v2" or schema == "phrase_candidates_v1"
+
+
+def _coerce_learning_value_score(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_phrase_candidate_item(item: dict[str, Any]) -> PhraseCandidate | None:
+    chunk_id = str(item.get("chunk_id") or "").strip()
+    sentence_text = str(item.get("sentence_text") or item.get("sentence") or "").strip()
+    phrase_text = str(item.get("phrase_text") or item.get("text") or "").strip()
+    if not chunk_id or not sentence_text or not phrase_text:
+        return None
+    reason = str(item.get("reason") or item.get("selection_reason") or "").strip() or None
+    phrase_types = normalize_phrase_types(item.get("phrase_types"), max_items=2)
+    expression_transfer = str(item.get("expression_transfer") or "").strip() or None
+    chunk_text = str(item.get("chunk_text") or "").strip() or None
+    return PhraseCandidate(
+        chunk_id=chunk_id,
+        sentence_text=sentence_text,
+        phrase_text=phrase_text,
+        reason=reason,
+        phrase_types=phrase_types,
+        learning_value_score=_coerce_learning_value_score(item.get("learning_value_score")),
+        expression_transfer=expression_transfer,
+        chunk_text=chunk_text,
+    )
+
+
+def _candidate_span(sentence_text: str, phrase_text: str) -> tuple[int, int, str] | None:
+    sentence = str(sentence_text or "")
+    phrase = str(phrase_text or "").strip()
+    if not sentence or not phrase:
+        return None
+    start = sentence.find(phrase)
+    if start >= 0:
+        end = start + len(phrase)
+        return start, end, sentence[start:end]
+    lowered_sentence = sentence.lower()
+    lowered_phrase = phrase.lower()
+    start = lowered_sentence.find(lowered_phrase)
+    if start < 0:
+        return None
+    end = start + len(phrase)
+    if end > len(sentence):
+        end = start + len(lowered_phrase)
+    return start, end, sentence[start:end]
+
+
+def _select_non_overlapping_spans(
+    sentence_text: str,
+    candidates: list[PhraseCandidate],
+) -> list[dict[str, Any]]:
+    spans: list[dict[str, Any]] = []
+    seen_phrase_keys: set[str] = set()
+    for candidate in candidates:
+        key = normalize_for_dedupe(candidate.phrase_text)
+        if not key or key in seen_phrase_keys:
+            continue
+        found = _candidate_span(sentence_text, candidate.phrase_text)
+        if found is None:
+            continue
+        start, end, matched_phrase = found
+        seen_phrase_keys.add(key)
+        spans.append(
+            {
+                "start": start,
+                "end": end,
+                "phrase": matched_phrase,
+                "phrase_types": list(candidate.phrase_types or []),
+                "reason": candidate.reason or "",
+                "learning_value_score": candidate.learning_value_score,
+                "expression_transfer": candidate.expression_transfer or "",
+            }
+        )
+    if not spans:
+        return []
+
+    spans.sort(key=lambda item: (-(item["end"] - item["start"]), item["start"]))
+    selected: list[dict[str, Any]] = []
+    for span in spans:
+        overlaps = any(
+            not (span["end"] <= existing["start"] or span["start"] >= existing["end"])
+            for existing in selected
+        )
+        if overlaps:
+            continue
+        selected.append(span)
+    selected.sort(key=lambda item: item["start"])
+    return selected
+
+
+def _build_cloze_text_from_spans(sentence_text: str, spans: list[dict[str, Any]]) -> tuple[str, list[str]]:
+    if not spans:
+        return "", []
+    pieces: list[str] = []
+    phrases: list[str] = []
+    cursor = 0
+    cloze_index = 1
+    for span in spans:
+        start = int(span["start"])
+        end = int(span["end"])
+        if start < cursor:
+            continue
+        phrase = str(span["phrase"]).strip()
+        if not phrase:
+            continue
+        pieces.append(sentence_text[cursor:start])
+        pieces.append(f"{{{{c{cloze_index}::<b>{phrase}</b>}}}}(hint)")
+        phrases.append(phrase)
+        cursor = end
+        cloze_index += 1
+    pieces.append(sentence_text[cursor:])
+    return "".join(pieces).strip(), phrases
+
+
+def _collect_phrase_types_from_spans(spans: list[dict[str, Any]]) -> list[str]:
+    labels: list[str] = []
+    for span in spans:
+        for label in normalize_phrase_types(span.get("phrase_types"), max_items=2):
+            if label not in labels:
+                labels.append(label)
+            if len(labels) >= 2:
+                return labels
+    return labels
+
+
+def _build_cloze_units_from_phrases(phrase_candidates: list[PhraseCandidate]) -> list[ClozeUnit]:
+    grouped: dict[tuple[str, str], list[PhraseCandidate]] = {}
+    for candidate in phrase_candidates:
+        key = (candidate.chunk_id, candidate.sentence_text)
+        grouped.setdefault(key, []).append(candidate)
+
+    units: list[ClozeUnit] = []
+    for (chunk_id, sentence_text), group in grouped.items():
+        spans = _select_non_overlapping_spans(sentence_text, group)
+        if not spans:
+            continue
+        text_cloze, target_phrases = _build_cloze_text_from_spans(sentence_text, spans)
+        if not text_cloze or not target_phrases:
+            continue
+        phrase_types = _collect_phrase_types_from_spans(spans)
+        expression_transfer = next(
+            (
+                str(span.get("expression_transfer") or "").strip()
+                for span in spans
+                if str(span.get("expression_transfer") or "").strip()
+            ),
+            "",
+        )
+        scores = [span.get("learning_value_score") for span in spans if isinstance(span.get("learning_value_score"), float)]
+        learning_value_score = (sum(scores) / len(scores)) if scores else None
+        chunk_text = next((c.chunk_text for c in group if c.chunk_text), None)
+        units.append(
+            ClozeUnit(
+                chunk_id=chunk_id,
+                text_cloze=text_cloze,
+                text_original=sentence_text,
+                target_phrases=target_phrases,
+                phrase_types=phrase_types,
+                expression_transfer=expression_transfer or None,
+                learning_value_score=learning_value_score,
+                chunk_text=chunk_text,
+            )
+        )
+    return units
+
+
+def _cloze_unit_to_candidate(unit: ClozeUnit) -> dict[str, Any]:
+    candidate: dict[str, Any] = {
+        "chunk_id": unit.chunk_id,
+        "text": unit.text_cloze,
+        "original": unit.text_original,
+        "target_phrases": list(unit.target_phrases),
+        "phrase_types": list(unit.phrase_types),
+        "note_hint": "",
+    }
+    if unit.expression_transfer:
+        candidate["expression_transfer"] = unit.expression_transfer
+    if unit.learning_value_score is not None:
+        candidate["learning_value_score"] = unit.learning_value_score
+    if unit.chunk_text:
+        candidate["chunk_text"] = unit.chunk_text
+    return candidate
+
+
+def _materialize_cloze_candidates_from_phrase_items(
+    phrase_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    phrase_candidates = [
+        candidate
+        for item in phrase_items
+        if (candidate := _normalize_phrase_candidate_item(item)) is not None
+    ]
+    units = _build_cloze_units_from_phrases(phrase_candidates)
+    return [_cloze_unit_to_candidate(unit) for unit in units]
+
+
+def _sanitize_cloze_hint_text(text: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    value = re.sub(r"\s+", " ", value)
+    return value.replace("(", "（").replace(")", "）")
+
+
+def _inject_phrase_hints(
+    *,
+    text: str,
+    phrase_to_hint: dict[str, str],
+) -> str:
+    if not text or not phrase_to_hint:
+        return text
+
+    def _replace(match: re.Match[str]) -> str:
+        block = match.group(1)
+        phrase = re.sub(r"</?b>", "", match.group(2), flags=re.IGNORECASE).strip()
+        hint = match.group(3)
+        mapped = phrase_to_hint.get(normalize_for_dedupe(phrase), "")
+        final_hint = _sanitize_cloze_hint_text(mapped) if mapped else hint
+        return f"{block}({final_hint})"
+
+    return _CLOZE_WITH_HINT_RE.sub(_replace, text)
 
 
 def _build_note(
@@ -520,9 +799,15 @@ def _is_retryable_format_reason(reason: str) -> bool:
     value = str(reason or "").strip().lower()
     if not value:
         return False
-    if not value.startswith("format:"):
-        return False
-    return any(value.startswith(prefix) for prefix in _FORMAT_RETRYABLE_REASONS_LOWER)
+    if value.startswith("format:"):
+        return any(value.startswith(prefix) for prefix in _FORMAT_RETRYABLE_REASONS_LOWER)
+    if value.startswith("taxonomy:"):
+        return any(value.startswith(prefix) for prefix in _TAXONOMY_RETRYABLE_REASONS_LOWER)
+    return False
+
+
+def _is_taxonomy_reason(reason: str) -> bool:
+    return str(reason or "").strip().lower().startswith("taxonomy:")
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -617,9 +902,13 @@ def _attempt_format_canonicalize(
     original = str(candidate.get("original", "")).strip()
     target_phrases = list(candidate.get("target_phrases") or [])
 
-    if reason_value.startswith("format:phrase_types must be in taxonomy:"):
+    if reason_value.startswith("format:phrase_types must be in taxonomy:") or reason_value.startswith(
+        "taxonomy:invalid_labels:"
+    ):
         candidate["phrase_types"] = []
-    if reason_value.startswith("format:phrase_types has too many labels"):
+    if reason_value.startswith("format:phrase_types has too many labels") or reason_value.startswith(
+        "taxonomy:too_many_labels:"
+    ):
         phrase_types = candidate.get("phrase_types")
         if isinstance(phrase_types, list):
             candidate["phrase_types"] = phrase_types[:2]
@@ -760,12 +1049,23 @@ def _collect_valid_candidates(
     learning_mode: str,
     errors: list[dict[str, Any]],
     retry_client: OpenAICompatibleClient | None = None,
-) -> tuple[list[dict[str, Any]], int, str | None, str | None, _FormatRetryStats]:
+    taxonomy_repair_enable: bool = False,
+) -> tuple[
+    list[dict[str, Any]],
+    int,
+    str | None,
+    str | None,
+    _FormatRetryStats,
+    list[dict[str, Any]],
+    int,
+]:
     valid_candidates: list[dict[str, Any]] = []
     validation_rejects = 0
     first_validation_reason: str | None = None
     first_final_reject_reason: str | None = None
     retry_stats = _FormatRetryStats()
+    taxonomy_repair_queue: list[dict[str, Any]] = []
+    taxonomy_reject_count = 0
 
     for item in raw_candidates:
         current_item = item
@@ -878,6 +1178,26 @@ def _collect_valid_candidates(
 
         if retry_recovered:
             continue
+        is_taxonomy_reject = _is_taxonomy_reason(last_reason)
+        if is_taxonomy_reject:
+            taxonomy_reject_count += 1
+        if taxonomy_repair_enable and is_taxonomy_reject:
+            taxonomy_repair_queue.append(
+                {
+                    "item": copy.deepcopy(retry_candidate),
+                    "reason": last_reason,
+                    "original_reason": reason,
+                }
+            )
+            errors.append(
+                {
+                    "stage": "taxonomy_repair_queued",
+                    "reason": last_reason,
+                    "original_reason": reason,
+                    "item": copy.deepcopy(retry_candidate),
+                }
+            )
+            continue
         validation_rejects += 1
         if first_final_reject_reason is None:
             first_final_reject_reason = last_reason
@@ -889,7 +1209,15 @@ def _collect_valid_candidates(
                 "item": copy.deepcopy(retry_candidate),
             }
         )
-    return valid_candidates, validation_rejects, first_validation_reason, first_final_reject_reason, retry_stats
+    return (
+        valid_candidates,
+        validation_rejects,
+        first_validation_reason,
+        first_final_reject_reason,
+        retry_stats,
+        taxonomy_repair_queue,
+        taxonomy_reject_count,
+    )
 
 
 def _collect_fallback_raw_candidates(
@@ -933,6 +1261,140 @@ def _collect_fallback_raw_candidates(
             item["chunk_text"] = chunk.source_text
             fallback_raw.append(item)
     return fallback_raw
+
+
+def _repair_taxonomy_candidates(
+    *,
+    queued_candidates: list[dict[str, Any]],
+    cfg: AppConfig,
+    material_profile: str,
+    learning_mode: str,
+    client: OpenAICompatibleClient,
+    errors: list[dict[str, Any]],
+    temperature: float | None,
+    classify_fn: Callable[..., list[list[str]]] = classify_phrase_types_batch,
+) -> tuple[list[dict[str, Any]], _TaxonomyRepairStats]:
+    stats = _TaxonomyRepairStats(
+        taxonomy_reject_count=len(queued_candidates),
+        taxonomy_repair_attempted=len(queued_candidates),
+    )
+    if not cfg.taxonomy_repair_enable or not queued_candidates:
+        return [], stats
+
+    repaired_valid: list[dict[str, Any]] = []
+    batch_size = max(1, int(cfg.translate_batch_size or 1))
+
+    def _iter_batches(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+        if size <= 1:
+            return [[item] for item in items]
+        return [items[i : i + size] for i in range(0, len(items), size)]
+
+    def _record_batch_failure(batch: list[dict[str, Any]], reason: str, *, stage: str, attempt: int) -> None:
+        for entry in batch:
+            stats.taxonomy_repair_failed += 1
+            errors.append(
+                {
+                    "stage": stage,
+                    "attempt": attempt,
+                    "reason": reason,
+                    "original_reason": entry.get("reason", ""),
+                    "item": copy.deepcopy(entry.get("item", {})),
+                }
+            )
+
+    for batch in _iter_batches(queued_candidates, batch_size):
+        remaining = list(batch)
+        attempt = 0
+        while remaining:
+            attempt += 1
+            classifier_input = [
+                {
+                    "text_cloze": str(entry.get("item", {}).get("text", "")).strip(),
+                    "text_original": str(entry.get("item", {}).get("original", "")).strip(),
+                    "target_phrases": list(entry.get("item", {}).get("target_phrases") or []),
+                    "difficulty": cfg.cloze_difficulty,
+                    "learning_mode": learning_mode,
+                }
+                for entry in remaining
+            ]
+            try:
+                repaired_phrase_types = classify_fn(
+                    client=client,
+                    items=classifier_input,
+                    temperature=temperature,
+                )
+                if len(repaired_phrase_types) != len(remaining):
+                    raise build_error(
+                        error_code="LLM_RESPONSE_SHAPE_INVALID",
+                        cause="Taxonomy repair response length mismatch.",
+                        detail=f"expected={len(remaining)}, got={len(repaired_phrase_types)}",
+                        next_steps=["Fix taxonomy classifier output contract"],
+                        exit_code=ExitCode.LLM_PARSE_ERROR,
+                    )
+            except ClawLinguaError as exc:
+                if _is_retryable_translation_batch_error(exc) and attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                    errors.append(
+                        {
+                            "stage": "taxonomy_repair_batch_retry",
+                            "attempt": attempt,
+                            "remaining": len(remaining),
+                            "error": exc.to_lines(),
+                        }
+                    )
+                    delay = _translation_retry_delay_seconds(cfg, attempt)
+                    if delay > 0:
+                        time.sleep(delay)
+                    continue
+                _record_batch_failure(
+                    remaining,
+                    "taxonomy repair batch failed",
+                    stage="taxonomy_repair_failed",
+                    attempt=attempt,
+                )
+                errors.append(
+                    {
+                        "stage": "taxonomy_repair_batch_error",
+                        "attempt": attempt,
+                        "remaining": len(remaining),
+                        "error": exc.to_lines(),
+                    }
+                )
+                break
+
+            for entry, labels in zip(remaining, repaired_phrase_types, strict=False):
+                candidate = copy.deepcopy(entry.get("item", {}))
+                candidate["phrase_types"] = normalize_phrase_types(labels, max_items=2)
+                ok, reason = validate_text_candidate(
+                    candidate,
+                    max_sentences=cfg.cloze_max_sentences,
+                    min_chars=cfg.cloze_min_chars,
+                    difficulty=cfg.cloze_difficulty,
+                    material_profile=material_profile,
+                    learning_mode=learning_mode,
+                )
+                if ok:
+                    stats.taxonomy_repair_success += 1
+                    repaired_valid.append(candidate)
+                    errors.append(
+                        {
+                            "stage": "taxonomy_repair_recovered",
+                            "original_reason": entry.get("reason", ""),
+                            "item": copy.deepcopy(candidate),
+                        }
+                    )
+                    continue
+                stats.taxonomy_repair_failed += 1
+                errors.append(
+                    {
+                        "stage": "taxonomy_repair_failed",
+                        "reason": reason,
+                        "original_reason": entry.get("reason", ""),
+                        "item": copy.deepcopy(candidate),
+                    }
+                )
+            break
+
+    return repaired_valid, stats
 
 
 def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> DocumentRecord:
@@ -1040,6 +1502,10 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     )
     extract_prompt = load_prompt(cfg.resolve_path(extract_prompt_path), prompt_lang=cfg.prompt_lang)
     explain_prompt = load_prompt(cfg.resolve_path(explain_prompt_path), prompt_lang=cfg.prompt_lang)
+    use_phrase_pipeline = _use_phrase_extraction_pipeline(
+        learning_mode=learning_mode,
+        schema_name=extract_prompt.output_format.schema_name,
+    )
     logger.info(
         "prompt selection resolved | extraction=%s explanation=%s material_profile=%s learning_mode=%s difficulty=%s",
         cfg.resolve_path(extract_prompt_path),
@@ -1047,6 +1513,12 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         material_profile,
         learning_mode,
         cfg.cloze_difficulty,
+    )
+    logger.info(
+        "extraction pipeline selected | mode=%s schema=%s phrase_pipeline=%s",
+        learning_mode,
+        extract_prompt.output_format.schema_name,
+        use_phrase_pipeline,
     )
 
     document = _build_document(cfg, run_ctx.run_id, options)
@@ -1069,6 +1541,7 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         output_path = (cfg.workspace_root / output_path).resolve()
 
     errors: list[dict] = []
+    raw_extraction_candidates: list[dict[str, Any]] = []
     raw_candidates: list[dict] = []
     valid_candidates: list[dict] = []
     deduped: list[dict] = []
@@ -1076,18 +1549,20 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     cards: list[CardRecord] = []
     chunks: list = []
     format_retry_stats = _FormatRetryStats()
+    taxonomy_repair_stats = _TaxonomyRepairStats()
 
     def _save_failure_snapshot(exc: ClawLinguaError) -> None:
         if not save_intermediate:
             return
         validated = deduped if deduped else valid_candidates
         snapshot_errors = [*errors, {"stage": "fatal", "error": exc.to_lines()}]
+        snapshot_raw = raw_candidates if raw_candidates else raw_extraction_candidates
         try:
             _save_intermediate(
                 run_dir=run_ctx.run_dir,
                 document=document,
                 chunks=chunks,
-                raw_candidates=raw_candidates,
+                raw_candidates=snapshot_raw,
                 valid_candidates=validated,
                 cards=cards,
                 errors=snapshot_errors,
@@ -1176,27 +1651,45 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 raise err
             item["chunk_id"] = chunk.chunk_id
             item["chunk_text"] = chunk.source_text
-            raw_candidates.append(item)
+            raw_extraction_candidates.append(item)
 
     for batch in _iter_batches(chunks, batch_size):
         try:
             if len(batch) == 1:
                 chunk = batch[0]
-                items = generate_cloze_candidates_for_chunk(
-                    client=client,
-                    prompt=extract_prompt,
-                    document=document,
-                    chunk=chunk,
-                    temperature=options.temperature,
-                )
+                if use_phrase_pipeline:
+                    items = generate_phrase_candidates_for_chunk(
+                        client=client,
+                        prompt=extract_prompt,
+                        document=document,
+                        chunk=chunk,
+                        temperature=options.temperature,
+                    )
+                else:
+                    items = generate_cloze_candidates_for_chunk(
+                        client=client,
+                        prompt=extract_prompt,
+                        document=document,
+                        chunk=chunk,
+                        temperature=options.temperature,
+                    )
             else:
-                items = generate_cloze_candidates_for_batch(
-                    client=client,
-                    prompt=extract_prompt,
-                    document=document,
-                    chunks=batch,
-                    temperature=options.temperature,
-                )
+                if use_phrase_pipeline:
+                    items = generate_phrase_candidates_for_batch(
+                        client=client,
+                        prompt=extract_prompt,
+                        document=document,
+                        chunks=batch,
+                        temperature=options.temperature,
+                    )
+                else:
+                    items = generate_cloze_candidates_for_batch(
+                        client=client,
+                        prompt=extract_prompt,
+                        document=document,
+                        chunks=batch,
+                        temperature=options.temperature,
+                    )
             _append_raw_items(batch, items)
         except ClawLinguaError as exc:
             if not options.continue_on_error:
@@ -1210,15 +1703,51 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 }
             )
 
-    valid_candidates, validation_rejects, first_validation_reason, first_final_reject_reason, retry_stats_initial = _collect_valid_candidates(
+    if use_phrase_pipeline:
+        raw_candidates = _materialize_cloze_candidates_from_phrase_items(raw_extraction_candidates)
+        if raw_extraction_candidates and not raw_candidates:
+            errors.append(
+                {
+                    "stage": "phrase_to_cloze",
+                    "reason": "phrase candidates could not be converted into cloze units",
+                    "raw_phrase_candidates": len(raw_extraction_candidates),
+                }
+            )
+    else:
+        raw_candidates = list(raw_extraction_candidates)
+
+    (
+        valid_candidates,
+        validation_rejects,
+        first_validation_reason,
+        first_final_reject_reason,
+        retry_stats_initial,
+        taxonomy_repair_queue,
+        taxonomy_reject_count_initial,
+    ) = _collect_valid_candidates(
         raw_candidates=raw_candidates,
         cfg=cfg,
         material_profile=material_profile,
         learning_mode=learning_mode,
         errors=errors,
         retry_client=client,
+        taxonomy_repair_enable=cfg.taxonomy_repair_enable,
     )
     format_retry_stats.absorb(retry_stats_initial)
+    if cfg.taxonomy_repair_enable and taxonomy_repair_queue:
+        repaired_valid, repair_stats = _repair_taxonomy_candidates(
+            queued_candidates=taxonomy_repair_queue,
+            cfg=cfg,
+            material_profile=material_profile,
+            learning_mode=learning_mode,
+            client=translate_client,
+            errors=errors,
+            temperature=options.temperature,
+        )
+        taxonomy_repair_stats.absorb(repair_stats)
+        valid_candidates.extend(repaired_valid)
+    else:
+        taxonomy_repair_stats.taxonomy_reject_count += taxonomy_reject_count_initial
 
     if validation_rejects:
         logger.warning(
@@ -1235,25 +1764,65 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
                 "reason": "no valid candidates after first pass",
             }
         )
-        fallback_raw = _collect_fallback_raw_candidates(
+        fallback_generate_fn: Callable[..., list[dict[str, Any]]] = (
+            generate_phrase_candidates_for_chunk if use_phrase_pipeline else generate_cloze_candidates_for_chunk
+        )
+        fallback_raw_extraction = _collect_fallback_raw_candidates(
             client=client,
             prompt=extract_prompt,
             document=document,
             chunks=chunks,
             temperature=0.1 if options.temperature is None else options.temperature,
             errors=errors,
+            generate_fn=fallback_generate_fn,
         )
+        fallback_raw = (
+            _materialize_cloze_candidates_from_phrase_items(fallback_raw_extraction)
+            if use_phrase_pipeline
+            else fallback_raw_extraction
+        )
+        if use_phrase_pipeline and fallback_raw_extraction and not fallback_raw:
+            errors.append(
+                {
+                    "stage": "phrase_to_cloze_fallback",
+                    "reason": "fallback phrase candidates could not be converted into cloze units",
+                    "raw_phrase_candidates": len(fallback_raw_extraction),
+                }
+            )
 
         raw_candidates.extend(fallback_raw)
-        valid_candidates, _, first_validation_reason, first_final_reject_reason, retry_stats_fallback = _collect_valid_candidates(
+        (
+            valid_candidates,
+            _,
+            first_validation_reason,
+            first_final_reject_reason,
+            retry_stats_fallback,
+            taxonomy_repair_queue_fallback,
+            taxonomy_reject_count_fallback,
+        ) = _collect_valid_candidates(
             raw_candidates=fallback_raw,
             cfg=cfg,
             material_profile=material_profile,
             learning_mode=learning_mode,
             errors=errors,
             retry_client=client,
+            taxonomy_repair_enable=cfg.taxonomy_repair_enable,
         )
         format_retry_stats.absorb(retry_stats_fallback)
+        if cfg.taxonomy_repair_enable and taxonomy_repair_queue_fallback:
+            repaired_valid_fallback, repair_stats_fallback = _repair_taxonomy_candidates(
+                queued_candidates=taxonomy_repair_queue_fallback,
+                cfg=cfg,
+                material_profile=material_profile,
+                learning_mode=learning_mode,
+                client=translate_client,
+                errors=errors,
+                temperature=options.temperature,
+            )
+            taxonomy_repair_stats.absorb(repair_stats_fallback)
+            valid_candidates.extend(repaired_valid_fallback)
+        else:
+            taxonomy_repair_stats.taxonomy_reject_count += taxonomy_reject_count_fallback
 
     if not valid_candidates and not (cfg.allow_empty_deck or options.continue_on_error):
         err = build_error(
@@ -1298,6 +1867,144 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
     )
 
     translate_batch_size = max(1, int(cfg.translate_batch_size or 1))
+    phrase_hint_map: dict[str, str] = {}
+    phrase_translation_total = 0
+
+    if use_phrase_pipeline and deduped:
+        ordered_unique_phrases: list[str] = []
+        seen_phrase_keys: set[str] = set()
+        for item in deduped:
+            for phrase in item.get("target_phrases", []) or []:
+                value = str(phrase).strip()
+                key = normalize_for_dedupe(value)
+                if not value or not key or key in seen_phrase_keys:
+                    continue
+                seen_phrase_keys.add(key)
+                ordered_unique_phrases.append(value)
+
+        phrase_translation_total = len(ordered_unique_phrases)
+        for batch in _iter_batches(ordered_unique_phrases, translate_batch_size):
+            remaining = list(batch)
+            attempt = 0
+            while remaining:
+                attempt += 1
+                try:
+                    batch_results = generate_phrase_translations_batch(
+                        client=translate_client,
+                        prompt=explain_prompt,
+                        document=document,
+                        phrases=remaining,
+                        temperature=options.temperature,
+                    )
+                except ClawLinguaError as exc:
+                    if _is_retryable_translation_batch_error(exc) and attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                        errors.append(
+                            {
+                                "stage": "phrase_translation_batch_retry",
+                                "attempt": attempt,
+                                "remaining": len(remaining),
+                                "error": exc.to_lines(),
+                            }
+                        )
+                        delay = _translation_retry_delay_seconds(cfg, attempt)
+                        if delay > 0:
+                            time.sleep(delay)
+                        continue
+
+                    errors.append(
+                        {
+                            "stage": "phrase_translation_batch_error",
+                            "attempt": attempt,
+                            "remaining": len(remaining),
+                            "error": exc.to_lines(),
+                        }
+                    )
+                    break
+
+                expected_count = len(remaining)
+                returned_count = len(batch_results)
+                if returned_count != expected_count:
+                    errors.append(
+                        {
+                            "stage": "phrase_translation_batch_incomplete_response",
+                            "attempt": attempt,
+                            "expected": expected_count,
+                            "returned": returned_count,
+                        }
+                    )
+
+                retry_remaining: list[str] = []
+                matched_count = min(expected_count, returned_count)
+                for pos in range(matched_count):
+                    phrase = remaining[pos]
+                    result = batch_results[pos]
+                    if result.ok:
+                        hint = str(result.translation or "").strip()
+                        ok, reason = validate_translation_text(hint)
+                        if ok and hint:
+                            phrase_hint_map[normalize_for_dedupe(phrase)] = _sanitize_cloze_hint_text(hint)
+                        else:
+                            errors.append(
+                                {
+                                    "stage": "phrase_translation_validation",
+                                    "phrase": phrase,
+                                    "reason": reason or "empty_phrase_translation",
+                                }
+                            )
+                        continue
+                    if _is_retryable_translation_item_error(result):
+                        retry_remaining.append(phrase)
+                        continue
+                    errors.append(
+                        {
+                            "stage": "phrase_translation_item_error",
+                            "phrase": phrase,
+                            "reason": result.error or "phrase translation failed",
+                        }
+                    )
+
+                if returned_count < expected_count:
+                    retry_remaining.extend(remaining[returned_count:])
+                elif returned_count > expected_count:
+                    errors.append(
+                        {
+                            "stage": "phrase_translation_batch_extra_items",
+                            "attempt": attempt,
+                            "expected": expected_count,
+                            "returned": returned_count,
+                        }
+                    )
+
+                if not retry_remaining:
+                    break
+                if attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                    errors.append(
+                        {
+                            "stage": "phrase_translation_batch_retry_remaining",
+                            "attempt": attempt,
+                            "remaining": len(retry_remaining),
+                        }
+                    )
+                    delay = _translation_retry_delay_seconds(cfg, attempt)
+                    if delay > 0:
+                        time.sleep(delay)
+                    remaining = retry_remaining
+                    continue
+
+                errors.append(
+                    {
+                        "stage": "phrase_translation_batch_retries_exhausted",
+                        "attempt": attempt,
+                        "remaining": len(retry_remaining),
+                    }
+                )
+                break
+
+        for item in deduped:
+            item["text"] = _inject_phrase_hints(
+                text=str(item.get("text", "")),
+                phrase_to_hint=phrase_hint_map,
+            )
 
     def _append_card_from_translation(idx: int, item: dict[str, Any], translation: str) -> None:
         card_id = f"card_{idx:06d}_{stable_hash(str(item['original']), length=6)}"
@@ -1523,6 +2230,12 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         translated_non_empty_count,
         translation_empty_count,
     )
+    if use_phrase_pipeline:
+        logger.info(
+            "phrase hint translation complete | unique_phrases=%d hints_mapped=%d",
+            phrase_translation_total,
+            len(phrase_hint_map),
+        )
 
     voices = cfg.get_source_voices(document.source_lang)
     media_manager = MediaManager(run_ctx.media_dir, ext=cfg.tts_output_format)
@@ -1580,10 +2293,16 @@ def run_build_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDeckResult
         learning_mode=learning_mode,
         format_retry_stats=format_retry_stats,
     )
+    pipeline_metrics["taxonomy_reject_count"] = taxonomy_repair_stats.taxonomy_reject_count
+    pipeline_metrics["taxonomy_repair_attempted"] = taxonomy_repair_stats.taxonomy_repair_attempted
+    pipeline_metrics["taxonomy_repair_success"] = taxonomy_repair_stats.taxonomy_repair_success
+    pipeline_metrics["taxonomy_repair_failed"] = taxonomy_repair_stats.taxonomy_repair_failed
     pipeline_metrics["translation"] = {
         "cards_total": len(cards),
         "translated_non_empty": translated_non_empty_count,
         "translation_empty": translation_empty_count,
+        "phrase_hints_requested": phrase_translation_total,
+        "phrase_hints_mapped": len(phrase_hint_map),
     }
     pipeline_metrics["prompt_info"] = {
         "extraction_prompt_name": extract_prompt.name,

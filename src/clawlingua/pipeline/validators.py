@@ -415,16 +415,16 @@ def validate_text_candidate(
     if not isinstance(target_phrases_raw, list) or len(target_phrases) < 1:
         return _reject("format", "target_phrases is empty or invalid")
     if raw_phrase_type_count > 2:
-        return _reject("format", "phrase_types has too many labels")
+        return _reject("taxonomy", "too_many_labels:phrase_types has too many labels")
     if raw_phrase_type_count > 0 and not phrase_types:
         allowed = ", ".join(PHRASE_TAXONOMY)
-        return _reject("format", f"phrase_types must be in taxonomy: {allowed}")
+        return _reject("taxonomy", f"invalid_labels:phrase_types must be in taxonomy: {allowed}")
     if _has_obviously_invalid_type_combo(
         phrase_types=phrase_types,
         text=text,
         target_phrases=target_phrases,
     ):
-        return _reject("quality", "phrase_types combination is inconsistent with candidate context")
+        return _reject("taxonomy", "invalid_combo:phrase_types combination is inconsistent with candidate context")
 
     transfer_ok, transfer_reason = _validate_expression_transfer(
         transfer=transfer_text,
@@ -484,8 +484,8 @@ def validate_text_candidate(
             phrase_scores = [_phrase_score(p) for p in phrases_for_difficulty]
             if max(phrase_scores or [-10.0]) < 1.2:
                 return _reject(
-                    "quality",
-                    "advanced candidate lacks high-value taxonomy support",
+                    "taxonomy",
+                    "advanced_support_missing:advanced candidate lacks high-value taxonomy support",
                 )
 
     return True, ""
