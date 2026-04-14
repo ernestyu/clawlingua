@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import functools
 from typing import Any
 
 import gradio as gr
@@ -36,6 +37,7 @@ from clawlingua_web import (
     handlers_config,
     handlers_prompt,
     handlers_run,
+    handlers_ui,
     i18n,
     prompt_io,
     run_history,
@@ -46,6 +48,8 @@ logger = logging.getLogger("clawlingua.web")
 _PROMPT_CONTENT_TYPE_OPTIONS = prompt_io.PROMPT_CONTENT_TYPE_OPTIONS
 _PROMPT_LEARNING_MODE_OPTIONS = prompt_io.PROMPT_LEARNING_MODE_OPTIONS
 _PROMPT_DIFFICULTY_OPTIONS = prompt_io.PROMPT_DIFFICULTY_OPTIONS
+
+
 def _resolve_env_file() -> Path | None:
     return config_io.resolve_env_file()
 
@@ -2318,9 +2322,7 @@ def build_interface() -> gr.Blocks:
                     deps=prompt_deps,
                 )
 
-            def _normalize_dropdown_value(
-                current: str, choices: list[Any]
-            ) -> str:
+            def _normalize_dropdown_value(current: str, choices: list[Any]) -> str:
                 return handlers_prompt.normalize_dropdown_value(current, choices)
 
             def _pick_prompt_key(
@@ -3029,22 +3031,34 @@ def build_interface() -> gr.Blocks:
                 rejection_filter.render()
                 chunk_filter.render()
             apply_analysis_filter_btn.render()
-            run_analysis.render()
-            run_samples.render()
-
-        def _on_ui_lang_change(
-            lang_value: str,
-            prompt_lang_current: str,
-            prompt_key_current: str,
-            prompt_mode_current: str,
-            prompt_content_type_current: str,
-            prompt_learning_mode_current: str,
-            prompt_difficulty_current: str,
-            run_content_type_current: str,
-            run_learning_mode_current: str,
-            run_difficulty_current: str,
-            run_extract_prompt_current: str,
-            run_explain_prompt_current: str,
+        ui_deps = handlers_ui.UiDeps(
+            normalize_ui_lang=_normalize_ui_lang,
+            load_app_config=_load_app_config,
+            prompt_file_map=_prompt_file_map,
+            normalize_prompt_mode=_normalize_prompt_mode,
+            normalize_prompt_content_type=_normalize_prompt_content_type,
+            normalize_prompt_learning_mode=_normalize_prompt_learning_mode,
+            normalize_prompt_difficulty=_normalize_prompt_difficulty,
+            load_prompt_mode=_load_prompt_mode,
+            pick_prompt_key=lambda prompt_files_now, **kwargs: handlers_prompt.pick_prompt_key(  # placeholder
+                prompt_files_now, deps=prompt_deps, **kwargs
+            ),
+            load_prompt_template=_load_prompt_template,
+            load_prompt_filter_metadata=_load_prompt_filter_metadata,
+            prompt_mode_choices_for_ui=lambda lang: handlers_prompt.prompt_mode_choices_for_ui(  # placeholder
+                lang, deps=prompt_deps
+            ),
+            prompt_path_choices=_prompt_path_choices,
+            refresh_recent_runs=_refresh_recent_runs,
+            normalize_dropdown_value=lambda current, choices: handlers_prompt.normalize_dropdown_value(
+                current, choices
+            ),
+            tr=_tr,
+            prompt_choices_from_map=_prompt_choices_from_map,
+            prompt_content_type_options=_PROMPT_CONTENT_TYPE_OPTIONS,
+            prompt_learning_mode_options=_PROMPT_LEARNING_MODE_OPTIONS,
+            prompt_difficulty_options=_PROMPT_DIFFICULTY_OPTIONS,
+        )
             run_id_current: str | None,
         ) -> tuple[Any, ...]:
             lang = _normalize_ui_lang(lang_value)
