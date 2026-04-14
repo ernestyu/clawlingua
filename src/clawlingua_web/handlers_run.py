@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+from pathlib import Path
 from typing import Any, Callable
 
 import gradio as gr
+
+from clawlingua.pipeline.build_deck import BuildDeckOptions, run_build_deck
+from clawlingua.utils.time import make_run_id, utc_now_iso
+from clawlingua_web import run_history, upload_io
 
 
 @dataclass(frozen=True)
 class RunDeps:
     normalize_ui_lang: Callable[[str | None], str]
     tr: Callable[[str, str, str], str]
-    run_single_build_v2: Callable[..., dict[str, Any]]
+    run_single_build: Callable[..., dict[str, Any]]
     to_optional_int: Callable[..., int | None]
     to_optional_float: Callable[[Any], float | None]
     as_str: Callable[..., str]
@@ -20,6 +26,140 @@ class RunDeps:
     refresh_recent_runs: Callable[..., tuple[Any, str, str | None]]
     load_run_detail: Callable[..., tuple[str, str | None]]
     build_run_analysis: Callable[..., tuple[str, list[list[Any]], list[Any], list[Any], list[Any]]]
+
+
+@dataclass(frozen=True)
+class RunServiceDeps:
+    load_app_config: Callable[[], Any]
+    normalize_ui_lang: Callable[[str | None], str]
+    as_str: Callable[..., str]
+    logger: logging.Logger | None = None
+
+
+def run_single_build(
+    uploaded_file: Any,
+    deck_title: str,
+    source_lang: str,
+    target_lang: str,
+    content_profile: str,
+    learning_mode: str,
+    difficulty: str,
+    max_notes: int | None,
+    input_char_limit: int | None,
+    cloze_min_chars: int | None,
+    chunk_max_chars: int | None,
+    temperature: float | None,
+    save_intermediate: bool,
+    continue_on_error: bool,
+    prompt_lang: str | None = None,
+    extract_prompt: str | None = None,
+    explain_prompt: str | None = None,
+    *,
+    deps: RunServiceDeps,
+) -> dict[str, Any]:
+    if uploaded_file is None:
+        return {"status": "error", "message": "No input file provided.", "run_id": None}
+
+    logger = deps.logger or logging.getLogger("clawlingua.web")
+    cfg = deps.load_app_config()
+    if prompt_lang:
+        cfg.prompt_lang = deps.normalize_ui_lang(prompt_lang)
+    workspace_root = cfg.workspace_root
+    tmp_dir = (workspace_root / "tmp").resolve()
+    try:
+        local_input = upload_io.materialize_uploaded_file(uploaded_file, tmp_dir)
+    except Exception as exc:
+        logger.exception("failed to materialize uploaded file")
+        return {"status": "error", "message": str(exc), "run_id": None}
+
+    run_id = make_run_id()
+    run_dir = cfg.resolve_path(cfg.output_dir) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    default_output_path = (cfg.resolve_path(cfg.export_dir) / run_id / "output.apkg").resolve()
+    summary_path = run_dir / "run_summary.json"
+
+    source_lang_value = source_lang or cfg.default_source_lang
+    target_lang_value = target_lang or cfg.default_target_lang
+    profile_value = (
+        content_profile or getattr(cfg, "material_profile", None) or cfg.content_profile
+    )
+    learning_mode_value = learning_mode or cfg.learning_mode
+    title_value = (deck_title or "").strip() or local_input.stem
+    run_history.record_run_start(
+        summary_path,
+        run_id=run_id,
+        started_at=utc_now_iso(),
+        title=title_value,
+        source_lang=source_lang_value,
+        target_lang=target_lang_value,
+        content_profile=profile_value,
+        learning_mode=learning_mode_value,
+        difficulty=difficulty or cfg.cloze_difficulty,
+        extract_prompt_override=deps.as_str(extract_prompt),
+        explain_prompt_override=deps.as_str(explain_prompt),
+        output_path=str(default_output_path),
+        cfg=cfg,
+    )
+
+    options = BuildDeckOptions(
+        input_value=str(local_input),
+        run_id=run_id,
+        source_lang=source_lang or None,
+        target_lang=target_lang or None,
+        content_profile=content_profile or None,
+        material_profile=content_profile or None,
+        learning_mode=learning_mode or None,
+        input_char_limit=input_char_limit,
+        deck_name=deck_title or None,
+        max_chars=chunk_max_chars,
+        cloze_min_chars=cloze_min_chars,
+        max_notes=max_notes,
+        temperature=temperature,
+        cloze_difficulty=difficulty or None,
+        extract_prompt=Path(extract_prompt) if deps.as_str(extract_prompt) else None,
+        explain_prompt=Path(explain_prompt) if deps.as_str(explain_prompt) else None,
+        save_intermediate=save_intermediate,
+        continue_on_error=continue_on_error,
+    )
+    try:
+        result = run_build_deck(cfg, options)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.exception(
+            "web build failed | run_id=%s input=%s profile=%s difficulty=%s",
+            run_id,
+            str(local_input),
+            content_profile or cfg.content_profile,
+            difficulty or cfg.cloze_difficulty,
+        )
+        run_history.record_run_failed(
+            summary_path,
+            finished_at=utc_now_iso(),
+            error=str(exc),
+        )
+        return {
+            "status": "error",
+            "run_id": run_id,
+            "run_dir": str(run_dir),
+            "message": str(exc),
+        }
+
+    output_path = str(result.output_path)
+    run_history.record_run_completed(
+        summary_path,
+        finished_at=utc_now_iso(),
+        cards=result.cards_count,
+        errors=result.errors_count,
+        output_path=output_path,
+    )
+
+    return {
+        "status": "ok",
+        "run_id": result.run_id,
+        "run_dir": str(result.run_dir),
+        "output_path": output_path,
+        "cards_count": result.cards_count,
+        "errors_count": result.errors_count,
+    }
 
 
 def on_run_start(ui_lang_val: str, *, deps: RunDeps) -> tuple[str, None]:
@@ -49,7 +189,7 @@ def on_run(
     deps: RunDeps,
 ) -> tuple[Any, ...]:
     lang = deps.normalize_ui_lang(ui_lang_val)
-    result = deps.run_single_build_v2(
+    result = deps.run_single_build(
         uploaded_file=file_obj,
         deck_title=deck_title_val or "",
         source_lang=src,

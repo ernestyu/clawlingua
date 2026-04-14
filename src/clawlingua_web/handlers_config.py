@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+import httpx
+
 
 @dataclass(frozen=True)
 class ConfigDeps:
-    list_models_markdown: Callable[..., str]
-    test_models_markdown: Callable[..., str]
     to_timeout_seconds: Callable[[Any], float]
     normalize_ui_lang: Callable[[str | None], str]
     read_env_example: Callable[[], dict[str, str]]
@@ -17,25 +17,151 @@ class ConfigDeps:
     save_env_v2: Callable[..., str]
 
 
+def _normalize_base_url(base_url: str) -> str:
+    value = (base_url or "").strip().rstrip("/")
+    if value.endswith("/chat/completions"):
+        value = value[: -len("/chat/completions")]
+    return value
+
+
+def _build_models_url(base_url: str) -> str:
+    root = _normalize_base_url(base_url)
+    if not root:
+        return ""
+    if root.endswith("/models"):
+        return root
+    return f"{root}/models"
+
+
+def _request_models(
+    base_url: str, api_key: str, timeout_seconds: float
+) -> tuple[str, httpx.Response]:
+    endpoint = _build_models_url(base_url)
+    if not endpoint:
+        raise ValueError("missing base URL")
+    headers = {"Accept": "application/json"}
+    token = (api_key or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    with httpx.Client(timeout=timeout_seconds) as client:
+        response = client.get(endpoint, headers=headers)
+    return endpoint, response
+
+
+def _list_models_markdown(
+    base_url: str,
+    api_key: str,
+    timeout_seconds: float,
+    *,
+    lang: str,
+    tr: Callable[[str, str, str], str],
+) -> str:
+    if not _normalize_base_url(base_url):
+        return f"⚠️ {tr(lang, 'Missing base URL.', 'Missing base URL.')}"
+    try:
+        endpoint, response = _request_models(base_url, api_key, timeout_seconds)
+    except ValueError:
+        return f"⚠️ {tr(lang, 'Missing base URL.', 'Missing base URL.')}"
+    except httpx.RequestError as exc:
+        return f"❌ {tr(lang, 'Request failed', 'Request failed')}: `{exc}`"
+    except Exception as exc:
+        return f"❌ {tr(lang, 'Request failed', 'Request failed')}: `{exc}`"
+
+    if response.status_code >= 400:
+        body = response.text[:500] if response.text else ""
+        return (
+            f"❌ {tr(lang, 'HTTP error', 'HTTP error')}: **{response.status_code}**\n\n"
+            f"- endpoint: `{endpoint}`\n"
+            f"- body: `{body}`"
+        )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return f"❌ {tr(lang, 'Response is not valid JSON.', 'Response is not valid JSON.')}"
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return (
+            f"⚠️ {tr(lang, 'Response JSON has no list field `data`.', 'Response JSON has no list field `data`.')}\n\n"
+            f"- endpoint: `{endpoint}`\n"
+            f"- status: `{response.status_code}`"
+        )
+
+    model_ids: list[str] = []
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("id") or "").strip()
+        if not model_id or model_id in seen:
+            continue
+        model_ids.append(model_id)
+        seen.add(model_id)
+
+    if not model_ids:
+        return (
+            f"✅ {tr(lang, 'Found models', 'Found models')}: **0**\n\n"
+            f"- endpoint: `{endpoint}`\n"
+            f"- status: `{response.status_code}`\n"
+            f"- {tr(lang, 'No model ids found in `data`.', 'No model ids found in `data`.')}"
+        )
+
+    lines = [f"- `{model_id}`" for model_id in model_ids]
+    return (
+        f"✅ {tr(lang, 'Found models', 'Found models')}: **{len(model_ids)}**\n\n"
+        f"- endpoint: `{endpoint}`\n"
+        f"- status: `{response.status_code}`\n\n"
+        f"{chr(10).join(lines)}"
+    )
+
+
+def _test_models_markdown(
+    base_url: str,
+    api_key: str,
+    timeout_seconds: float,
+    *,
+    lang: str,
+    tr: Callable[[str, str, str], str],
+) -> str:
+    if not _normalize_base_url(base_url):
+        return f"⚠️ {tr(lang, 'Missing base URL.', 'Missing base URL.')}"
+    try:
+        endpoint, response = _request_models(base_url, api_key, timeout_seconds)
+    except ValueError:
+        return f"⚠️ {tr(lang, 'Missing base URL.', 'Missing base URL.')}"
+    except httpx.RequestError as exc:
+        return f"❌ {tr(lang, 'Request failed', 'Request failed')}: `{exc}`"
+    except Exception as exc:
+        return f"❌ {tr(lang, 'Request failed', 'Request failed')}: `{exc}`"
+    return (
+        f"✅ {tr(lang, 'Connectivity OK', 'Connectivity OK')}\n\n"
+        f"- endpoint: `{endpoint}`\n"
+        f"- status: `{response.status_code}`"
+    )
+
+
 def on_list_models(
     base_url: str, api_key: str, timeout_raw: Any, ui_lang_val: str, *, deps: ConfigDeps
 ) -> str:
-    return deps.list_models_markdown(
+    return _list_models_markdown(
         base_url=base_url,
         api_key=api_key,
         timeout_seconds=deps.to_timeout_seconds(timeout_raw),
         lang=deps.normalize_ui_lang(ui_lang_val),
+        tr=deps.tr,
     )
 
 
 def on_test_models(
     base_url: str, api_key: str, timeout_raw: Any, ui_lang_val: str, *, deps: ConfigDeps
 ) -> str:
-    return deps.test_models_markdown(
+    return _test_models_markdown(
         base_url=base_url,
         api_key=api_key,
         timeout_seconds=deps.to_timeout_seconds(timeout_raw),
         lang=deps.normalize_ui_lang(ui_lang_val),
+        tr=deps.tr,
     )
 
 
