@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "clawlingua"
+name = "clawlearn"
 version = "0.1.0"
 description = "Build Anki cloze decks from local text files."
 readme = "README.md"
@@ -25,8 +25,8 @@ dev = ["pytest>=8.1.1"]
 web = ["gradio>=4.0.0"]
 
 [project.scripts]
-clawlingua = "clawlingua.cli:main"
-clawlingua-web = "clawlingua_web.app:launch"
+clawlearn = "clawlearn.cli:main"
+clawlearn-web = "clawlearn_web.app:launch"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

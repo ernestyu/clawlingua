@@ -1,6 +1,6 @@
-# ClawLingua
+# ClawLearn
 
-ClawLingua 是一个 Python CLI 工具，用来把真实语料（播客字幕、长文等）
+ClawLearn 是一个 Python CLI 工具，用来把真实语料（播客字幕、长文等）
 自动转换成 Anki 填空卡（cloze deck，`.apkg`）。
 
 核心能力：
@@ -33,7 +33,7 @@ pip install -r requirements.txt
 ### 1.2 初始化项目
 
 ```bash
-python -m clawlingua.cli init
+python -m clawlearn.cli init
 ```
 
 `init` 会做几件事：
@@ -57,16 +57,16 @@ python -m clawlingua.cli init
 ### 2.1 主 LLM（生成 cloze）
 
 ```env
-CLAWLINGUA_LLM_PROVIDER=openai_compatible
-CLAWLINGUA_LLM_BASE_URL=http://127.0.0.1:8000/v1
-CLAWLINGUA_LLM_API_KEY=YOUR_API_KEY
-CLAWLINGUA_LLM_MODEL=qwen3-30b
-CLAWLINGUA_LLM_TIMEOUT_SECONDS=120
-CLAWLINGUA_LLM_MAX_RETRIES=3
-CLAWLINGUA_LLM_RETRY_BACKOFF_SECONDS=2.0
+CLAWLEARN_LLM_PROVIDER=openai_compatible
+CLAWLEARN_LLM_BASE_URL=http://127.0.0.1:8000/v1
+CLAWLEARN_LLM_API_KEY=YOUR_API_KEY
+CLAWLEARN_LLM_MODEL=qwen3-30b
+CLAWLEARN_LLM_TIMEOUT_SECONDS=120
+CLAWLEARN_LLM_MAX_RETRIES=3
+CLAWLEARN_LLM_RETRY_BACKOFF_SECONDS=2.0
 # 连续 LLM 请求之间的基础 sleep 秒数；实际会在 [N, 3N] 之间随机，0 表示不主动 sleep
-CLAWLINGUA_LLM_REQUEST_SLEEP_SECONDS=0
-CLAWLINGUA_LLM_TEMPERATURE=0.2
+CLAWLEARN_LLM_REQUEST_SLEEP_SECONDS=0
+CLAWLEARN_LLM_TEMPERATURE=0.2
 ```
 
 主 LLM 负责：
@@ -79,7 +79,7 @@ CLAWLINGUA_LLM_TEMPERATURE=0.2
 ### 2.2 输入清洗
 
 ```env
-CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS=3
+CLAWLEARN_INGEST_SHORT_LINE_MAX_WORDS=3
 ```
 
 用于预处理输入文本：
@@ -93,14 +93,14 @@ CLAWLINGUA_INGEST_SHORT_LINE_MAX_WORDS=3
 
 ```env
 # 按字符数切块，内部通过句子边界软切。
-CLAWLINGUA_CHUNK_MAX_CHARS=1800
-CLAWLINGUA_CHUNK_MIN_CHARS=120
-CLAWLINGUA_CHUNK_OVERLAP_SENTENCES=1
+CLAWLEARN_CHUNK_MAX_CHARS=1800
+CLAWLEARN_CHUNK_MIN_CHARS=120
+CLAWLEARN_CHUNK_OVERLAP_SENTENCES=1
 ```
 
 行为：
 
-- 先按段落拆分，再把太短的段落合并到 `CLAWLINGUA_CHUNK_MIN_CHARS`；
+- 先按段落拆分，再把太短的段落合并到 `CLAWLEARN_CHUNK_MIN_CHARS`；
 - 对合并后的段落：
   - 以 `CHUNK_MAX_CHARS` 控制块大小；
   - 从当前句子向后扩展，直到接近上限；
@@ -111,20 +111,20 @@ CLAWLINGUA_CHUNK_OVERLAP_SENTENCES=1
 
 ```env
 # 每条 cloze 文本允许的最大句子数（同时写入 prompt 与校验规则）。
-CLAWLINGUA_CLOZE_MAX_SENTENCES=3
+CLAWLEARN_CLOZE_MAX_SENTENCES=3
 
 # 每条 cloze 文本的最小字符数（太短的句子会被丢弃，0 表示不限制）。
-CLAWLINGUA_CLOZE_MIN_CHARS=200
+CLAWLEARN_CLOZE_MIN_CHARS=200
 
 # 难度：beginner | intermediate | advanced
 # 命令行 --difficulty 优先级更高。
-CLAWLINGUA_CLOZE_DIFFICULTY=intermediate
+CLAWLEARN_CLOZE_DIFFICULTY=intermediate
 
 # 每个 chunk 去重后最多保留多少条 cloze 候选（空/0 表示不限制）。
-CLAWLINGUA_CLOZE_MAX_PER_CHUNK=4
+CLAWLEARN_CLOZE_MAX_PER_CHUNK=4
 
 # LLM 一次处理多少个 chunk；1 表示逐块调用，建议 1–4。
-CLAWLINGUA_LLM_CHUNK_BATCH_SIZE=1
+CLAWLEARN_LLM_CHUNK_BATCH_SIZE=1
 ```
 
 解释：
@@ -142,10 +142,10 @@ CLAWLINGUA_LLM_CHUNK_BATCH_SIZE=1
 
 ```env
 # 翻译用的小模型；若不配置则回退到主 LLM。
-CLAWLINGUA_TRANSLATE_LLM_BASE_URL=
-CLAWLINGUA_TRANSLATE_LLM_API_KEY=
-CLAWLINGUA_TRANSLATE_LLM_MODEL=
-CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE=
+CLAWLEARN_TRANSLATE_LLM_BASE_URL=
+CLAWLEARN_TRANSLATE_LLM_API_KEY=
+CLAWLEARN_TRANSLATE_LLM_MODEL=
+CLAWLEARN_TRANSLATE_LLM_TEMPERATURE=
 ```
 
 - 建议主 LLM 用较贵的模型（如 Gemini），翻译 LLM 用便宜模型（如本地 Qwen）；
@@ -154,40 +154,40 @@ CLAWLINGUA_TRANSLATE_LLM_TEMPERATURE=
 ### 2.6 Prompt、模板与输出
 
 ```env
-CLAWLINGUA_CONTENT_PROFILE=general
-CLAWLINGUA_PROMPT_CLOZE=./prompts/cloze_contextual.json
-CLAWLINGUA_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
-CLAWLINGUA_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
-CLAWLINGUA_PROMPT_LANG=zh
-CLAWLINGUA_ANKI_TEMPLATE=./templates/anki_cloze_default.json
+CLAWLEARN_CONTENT_PROFILE=general
+CLAWLEARN_PROMPT_CLOZE=./prompts/cloze_contextual.json
+CLAWLEARN_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
+CLAWLEARN_PROMPT_TRANSLATE=./prompts/translate_rewrite.json
+CLAWLEARN_PROMPT_LANG=zh
+CLAWLEARN_ANKI_TEMPLATE=./templates/anki_cloze_default.json
 
 # 中间运行数据（JSONL、media 快照）
-CLAWLINGUA_OUTPUT_DIR=./runs
+CLAWLEARN_OUTPUT_DIR=./runs
 # 最终导出的牌组（未显式指定 --output 时）
-CLAWLINGUA_EXPORT_DIR=./outputs
-CLAWLINGUA_LOG_DIR=./logs
-CLAWLINGUA_LOG_LEVEL=INFO
-CLAWLINGUA_SAVE_INTERMEDIATE=true
-CLAWLINGUA_DEFAULT_DECK_NAME=ClawLingua Default Deck
+CLAWLEARN_EXPORT_DIR=./outputs
+CLAWLEARN_LOG_DIR=./logs
+CLAWLEARN_LOG_LEVEL=INFO
+CLAWLEARN_SAVE_INTERMEDIATE=true
+CLAWLEARN_DEFAULT_DECK_NAME=ClawLearn Default Deck
 ```
 
-- `CLAWLINGUA_CONTENT_PROFILE=general` 使用 `cloze_contextual.json`。
-- `CLAWLINGUA_CONTENT_PROFILE=textbook_examples` 使用 `cloze_textbook_examples.json`。
-- `CLAWLINGUA_PROMPT_LANG` 控制多语言 prompt 使用哪一套文案（`en` 或 `zh`），
+- `CLAWLEARN_CONTENT_PROFILE=general` 使用 `cloze_contextual.json`。
+- `CLAWLEARN_CONTENT_PROFILE=textbook_examples` 使用 `cloze_textbook_examples.json`。
+- `CLAWLEARN_PROMPT_LANG` 控制多语言 prompt 使用哪一套文案（`en` 或 `zh`），
   可通过命令行 `--prompt-lang` 覆盖。
 
 ### 2.7 TTS（edge_tts）
 
 ```env
-CLAWLINGUA_TTS_PROVIDER=edge_tts
-CLAWLINGUA_TTS_OUTPUT_FORMAT=mp3
-CLAWLINGUA_TTS_RATE=+0%
-CLAWLINGUA_TTS_VOLUME=+0%
-CLAWLINGUA_TTS_RANDOM_SEED=
+CLAWLEARN_TTS_PROVIDER=edge_tts
+CLAWLEARN_TTS_OUTPUT_FORMAT=mp3
+CLAWLEARN_TTS_RATE=+0%
+CLAWLEARN_TTS_VOLUME=+0%
+CLAWLEARN_TTS_RANDOM_SEED=
 
-CLAWLINGUA_TTS_EDGE_EN_VOICES=en-US-AnaNeural,en-US-AndrewNeural,en-GB-SoniaNeural
-CLAWLINGUA_TTS_EDGE_ZH_VOICES=zh-CN-XiaoxiaoNeural,zh-CN-YunxiNeural,zh-CN-liaoning-XiaobeiNeural
-CLAWLINGUA_TTS_EDGE_JA_VOICES=ja-JP-NanamiNeural,ja-JP-KeitaNeural,ja-JP-AoiNeural
+CLAWLEARN_TTS_EDGE_EN_VOICES=en-US-AnaNeural,en-US-AndrewNeural,en-GB-SoniaNeural
+CLAWLEARN_TTS_EDGE_ZH_VOICES=zh-CN-XiaoxiaoNeural,zh-CN-YunxiNeural,zh-CN-liaoning-XiaobeiNeural
+CLAWLEARN_TTS_EDGE_JA_VOICES=ja-JP-NanamiNeural,ja-JP-KeitaNeural,ja-JP-AoiNeural
 ```
 
 根据 `source_lang` 在对应 voice 列表中随机挑选一个 voice，为每张卡的
@@ -206,7 +206,7 @@ CLAWLINGUA_TTS_EDGE_JA_VOICES=ja-JP-NanamiNeural,ja-JP-KeitaNeural,ja-JP-AoiNeur
 - 多语言格式：
   - `"system_prompt": { "en": "...", "zh": "..." }`
 
-运行时会根据 `CLAWLINGUA_PROMPT_LANG` / `--prompt-lang` 选择对应语言。
+运行时会根据 `CLAWLEARN_PROMPT_LANG` / `--prompt-lang` 选择对应语言。
 
 - 输入占位符：
   - `source_lang` / `target_lang`
@@ -259,7 +259,7 @@ CLAWLINGUA_TTS_EDGE_JA_VOICES=ja-JP-NanamiNeural,ja-JP-KeitaNeural,ja-JP-AoiNeur
 ### 3.3 翻译 Prompt (`prompts/translate_rewrite.json`)
 
 翻译 prompt 同样可以采用多语言格式（参见 cloze prompt 的说明），生效逻辑
-由 `CLAWLINGUA_PROMPT_LANG` / `--prompt-lang` 控制。
+由 `CLAWLEARN_PROMPT_LANG` / `--prompt-lang` 控制。
 
 - 输入：`source_lang`、`target_lang`、`document_title`、`source_url`、`text_original`、`chunk_text`；
 - 输出：JSON 数组，每项包含一个 `translation` 字段：
@@ -279,12 +279,12 @@ CLAWLINGUA_TTS_EDGE_JA_VOICES=ja-JP-NanamiNeural,ja-JP-KeitaNeural,ja-JP-AoiNeur
 
 ## 4. CLI 命令
 
-CLI 入口在 `src/clawlingua/cli.py`，使用 Typer 实现。
+CLI 入口在 `src/clawlearn/cli.py`，使用 Typer 实现。
 
 ### 4.1 `init`
 
 ```bash
-python -m clawlingua.cli init
+python -m clawlearn.cli init
 ```
 
 - 创建 `.env`（若不存在）；
@@ -294,7 +294,7 @@ python -m clawlingua.cli init
 ### 4.2 `doctor`
 
 ```bash
-python -m clawlingua.cli doctor --env-file .env
+python -m clawlearn.cli doctor --env-file .env
 ```
 
 - 检查依赖（edge_tts / genanki / httpx / typer）；
@@ -306,7 +306,7 @@ python -m clawlingua.cli doctor --env-file .env
 ### 4.3 `build deck`
 
 ```bash
-python -m clawlingua.cli build deck INPUT \
+python -m clawlearn.cli build deck INPUT \
   --source-lang en \
   --target-lang zh \
   --content-profile general|textbook_examples \
@@ -327,14 +327,14 @@ python -m clawlingua.cli build deck INPUT \
 - `INPUT`：本地文件路径（支持 `.txt` / `.md` / `.epub`）；
 - `--content-profile`：切换内容策略（`general` 或 `textbook_examples`）；
 - `--difficulty`：覆盖 env 中的 `CLOZE_DIFFICULTY`；
-- `--prompt-lang`：覆盖 `CLAWLINGUA_PROMPT_LANG`，用于选择多语言 prompt 文案；
+- `--prompt-lang`：覆盖 `CLAWLEARN_PROMPT_LANG`，用于选择多语言 prompt 文案；
 - `--max-chars`：覆盖当前 run 的 `CHUNK_MAX_CHARS`；
 - `--cloze-min-chars`：覆盖当前 run 的 `CLOZE_MIN_CHARS`；
 - `textbook_examples` 模式下，若 env 的 `CLOZE_MIN_CHARS > 120` 且未 CLI 覆盖，会直接拒绝执行；
 - `--max-notes`：对整套牌组做全局上限；
 - `--save-intermediate`：将中间结果保存到 `OUTPUT_DIR/<run_id>`；
 - 未显式提供 `--output` 时，最终 `.apkg` 会写入
-  `CLAWLINGUA_EXPORT_DIR/<run_id>/output.apkg`。
+  `CLAWLEARN_EXPORT_DIR/<run_id>/output.apkg`。
 - `--continue-on-error`：遇到单条失败时跳过、记录错误，而不是直接退出；
 - `--debug`：出错时抛出完整 traceback，便于调试。
 - 默认牌组名使用输入文件名（不含扩展名）；可用 `--deck-name` 覆盖。
@@ -342,8 +342,8 @@ python -m clawlingua.cli build deck INPUT \
 ### 4.4 `prompt validate`
 
 ```bash
-python -m clawlingua.cli prompt validate ./prompts/cloze_contextual.json
-python -m clawlingua.cli prompt validate ./prompts/cloze_textbook_examples.json
+python -m clawlearn.cli prompt validate ./prompts/cloze_contextual.json
+python -m clawlearn.cli prompt validate ./prompts/cloze_textbook_examples.json
 ```
 
 对 prompt 文件做 schema 校验（字段是否齐全、类型是否正确）。
@@ -351,8 +351,8 @@ python -m clawlingua.cli prompt validate ./prompts/cloze_textbook_examples.json
 ### 4.5 `config show` / `config validate`
 
 ```bash
-python -m clawlingua.cli config show --env-file .env
-python -m clawlingua.cli config validate --env-file .env
+python -m clawlearn.cli config show --env-file .env
+python -m clawlearn.cli config validate --env-file .env
 ```
 
 - `config show`：打印最终解析后的配置 JSON；
@@ -380,13 +380,13 @@ python -m clawlingua.cli config validate --env-file .env
 2. 运行 doctor 确认配置无误：
 
    ```bash
-   python -m clawlingua.cli doctor --env-file .env
+   python -m clawlearn.cli doctor --env-file .env
    ```
 
 3. 用播客字幕生成牌组：
 
    ```bash
-   python -m clawlingua.cli build deck ./podcast_transcript.md \
+   python -m clawlearn.cli build deck ./podcast_transcript.md \
      --source-lang en --target-lang zh --env-file .env \
      --difficulty intermediate --max-chars 1500 \
      --save-intermediate --continue-on-error
@@ -403,7 +403,7 @@ python -m clawlingua.cli config validate --env-file .env
 
 ## 7. 可选 Web 管理界面
 
-除了纯命令行，ClawLingua 还提供一个基于 Gradio 的本地 Web 界面，方便
+除了纯命令行，ClawLearn 还提供一个基于 Gradio 的本地 Web 界面，方便
 在浏览器里上传文件、调整参数。该界面是可选的，不会改变 CLI 的行为，
 只有在你主动启动时才会运行。
 
@@ -418,9 +418,9 @@ pip install .[web]
 ### 7.2 启动 Web UI
 
 ```bash
-clawlingua-web
+clawlearn-web
 # 或
-python -m clawlingua_web.app
+python -m clawlearn_web.app
 ```
 
 默认监听 `127.0.0.1:7860`，在浏览器中访问：
@@ -433,12 +433,12 @@ Web 界面包含三个 Tab：
   本次运行的 override（最大卡片数、input char limit、cloze_min_chars、
   chunk_max_chars、temperature 等）。后端调用与 CLI 相同的
   `run_build_deck` pipeline，将中间数据写入
-  `CLAWLINGUA_OUTPUT_DIR/<run_id>`，最终牌组写入
-  `CLAWLINGUA_EXPORT_DIR/<run_id>/output.apkg`。
+  `CLAWLEARN_OUTPUT_DIR/<run_id>`，最终牌组写入
+  `CLAWLEARN_EXPORT_DIR/<run_id>/output.apkg`。
 - **Config**：`.env` 配置编辑器，用于修改常见的
-  `CLAWLINGUA_*` 变量（例如 LLM 地址/模型、chunk/cloze 默认值、
+  `CLAWLEARN_*` 变量（例如 LLM 地址/模型、chunk/cloze 默认值、
   prompt 语言、输出/日志目录、默认牌组名称、TTS 等）。点击 Save 时会
-  写入新的 `.env`，并通过 `clawlingua.config.validate_base_config` +
+  写入新的 `.env`，并通过 `clawlearn.config.validate_base_config` +
   `validate_runtime_config` 做一轮校验，失败会自动回滚；Load defaults
   则从 `ENV_EXAMPLE.md` 载入默认值但不直接写盘。Config 页还提供对主
   LLM 与翻译 LLM 的「列出模型 / 测试 /models 连通性」功能。

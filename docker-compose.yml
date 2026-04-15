@@ -1,7 +1,7 @@
 services:
-  clawlingua-web:
+  clawlearn-web:
     build: .
-    container_name: clawlingua-web
+    container_name: clawlearn-web
     env_file:
       - .env
     ports:

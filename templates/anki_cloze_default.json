@@ -1,6 +1,6 @@
 {
-    "model_name": "ClawLingua Cloze",
-    "deck_name": "ClawLingua Default Deck",
+    "model_name": "ClawLearn Cloze",
+    "deck_name": "ClawLearn Default Deck",
     "fields": [
         "Text",
         "Original",

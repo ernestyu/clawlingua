@@ -17,9 +17,9 @@ RUN pip install --upgrade pip \
 
 RUN mkdir -p /app/runs /app/outputs /app/logs
 
-ENV CLAWLINGUA_WEB_HOST=0.0.0.0 \
-    CLAWLINGUA_WEB_PORT=7860
+ENV CLAWLEARN_WEB_HOST=0.0.0.0 \
+    CLAWLEARN_WEB_PORT=7860
 
 EXPOSE 7860
 
-CMD ["clawlingua-web"]
+CMD ["clawlearn-web"]
