@@ -74,8 +74,8 @@ def build_tab(
         config_heading = gr.Markdown(
             tr(
                 initial_ui_lang,
-                "### Config (.env editor)",
-                "### 閰嶇疆锛?env 缂栬緫鍣級",
+                "### Config (.env editor)\nWeb UI reads `.env` from the current working directory of the web process.",
+                "### 閰嶇疆锛?env 缂栬緫鍣級\nWeb UI reads `.env` from the current working directory of the web process.",
             )
         )
 
@@ -425,6 +425,39 @@ def bind_events(
     ui_lang: Any,
     deps: handlers_config.ConfigDeps,
 ) -> None:
+    config_value_outputs = [
+        components.llm_base_url,
+        components.llm_api_key,
+        components.llm_model,
+        components.llm_timeout,
+        components.llm_temperature_env,
+        components.llm_chunk_batch_size_env,
+        components.translate_base_url,
+        components.translate_api_key,
+        components.translate_model,
+        components.translate_temperature,
+        components.chunk_max_chars_env,
+        components.chunk_min_chars_env,
+        components.cloze_min_chars_env,
+        components.cloze_max_per_chunk_env,
+        components.validate_retry_enable_env,
+        components.validate_retry_max_env,
+        components.validate_retry_llm_enable_env,
+        components.content_profile_env,
+        components.cloze_difficulty_env,
+        components.prompt_lang_env,
+        components.extract_prompt_env,
+        components.explain_prompt_env,
+        components.output_dir_env,
+        components.export_dir_env,
+        components.log_dir_env,
+        components.default_deck_name_env,
+        components.tts_voice1_env,
+        components.tts_voice2_env,
+        components.tts_voice3_env,
+        components.tts_voice4_env,
+    ]
+
     def _on_list_models(base_url: str, api_key: str, timeout_raw: Any, ui_lang_val: str) -> str:
         return handlers_config.on_list_models(
             base_url,
@@ -577,39 +610,7 @@ def bind_events(
             components.tts_voice4_env,
             ui_lang,
         ],
-        outputs=[
-            components.llm_base_url,
-            components.llm_api_key,
-            components.llm_model,
-            components.llm_timeout,
-            components.llm_temperature_env,
-            components.llm_chunk_batch_size_env,
-            components.translate_base_url,
-            components.translate_api_key,
-            components.translate_model,
-            components.translate_temperature,
-            components.chunk_max_chars_env,
-            components.chunk_min_chars_env,
-            components.cloze_min_chars_env,
-            components.cloze_max_per_chunk_env,
-            components.validate_retry_enable_env,
-            components.validate_retry_max_env,
-            components.validate_retry_llm_enable_env,
-            components.content_profile_env,
-            components.cloze_difficulty_env,
-            components.prompt_lang_env,
-            components.extract_prompt_env,
-            components.explain_prompt_env,
-            components.output_dir_env,
-            components.export_dir_env,
-            components.log_dir_env,
-            components.default_deck_name_env,
-            components.tts_voice1_env,
-            components.tts_voice2_env,
-            components.tts_voice3_env,
-            components.tts_voice4_env,
-            components.save_config_status,
-        ],
+        outputs=config_value_outputs + [components.save_config_status],
     )
 
     def _on_save_config(
@@ -644,7 +645,7 @@ def bind_events(
         tts_voice3_val: Any,
         tts_voice4_val: Any,
         ui_lang_val: Any,
-    ) -> str:
+    ) -> tuple[str, ...]:
         return handlers_config.on_save_config(
             llm_base_url_val,
             llm_api_key_val,
@@ -679,6 +680,16 @@ def bind_events(
             ui_lang_val,
             deps=deps,
         )
+
+    def _on_reload_env(ui_lang_val: Any) -> tuple[str, ...]:
+        return handlers_config.on_reload_env(ui_lang_val, deps=deps)
+
+    components.config_tab.select(
+        _on_reload_env,
+        inputs=[ui_lang],
+        outputs=config_value_outputs + [components.save_config_status],
+        queue=False,
+    )
 
     components.save_config_btn.click(
         _on_save_config,
@@ -715,5 +726,5 @@ def bind_events(
             components.tts_voice4_env,
             ui_lang,
         ],
-        outputs=[components.save_config_status],
+        outputs=config_value_outputs + [components.save_config_status],
     )

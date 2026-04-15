@@ -34,6 +34,7 @@ from ..llm.cloze_generator import (
     generate_phrase_candidates_for_chunk,
 )
 from ..llm.taxonomy_classifier import classify_phrase_types_batch
+from ..llm.taxonomy_classifier import classify_phrase_annotations_batch
 from ..llm.prompt_loader import load_prompt
 from ..llm.response_parser import parse_json_content
 from ..llm.translation_generator import (
@@ -48,7 +49,7 @@ from ..tts.provider_registry import get_tts_provider
 from ..tts.voice_selector import UniformVoiceSelector
 from ..utils.hash import stable_hash
 from ..utils.jsonx import dump_json, dump_jsonl, load_json
-from ..utils.text import normalize_for_dedupe
+from ..utils.text import normalize_for_dedupe, split_sentences
 from ..utils.time import utc_now_iso
 from .core_chunking import chunk_document
 from .core_candidates import dump_candidate_artifacts
@@ -82,6 +83,8 @@ _TAXONOMY_RETRYABLE_REASONS = (
     "taxonomy:too_many_labels:",
 )
 _TAXONOMY_RETRYABLE_REASONS_LOWER = tuple(prefix.lower() for prefix in _TAXONOMY_RETRYABLE_REASONS)
+_CONTEXT_EXPAND_MAX_SENTENCE_CHARS = 360
+_EMPTY_RAW_CANDIDATE_RATIO_GUARD = 0.95
 
 
 @dataclass
@@ -180,7 +183,7 @@ class BuildDeckResult:
 
 def _use_phrase_extraction_pipeline(*, learning_mode: str, schema_name: str | None) -> bool:
     schema = (schema_name or "").strip().lower()
-    return schema == "phrase_candidates_v1"
+    return schema.startswith("phrase_candidates_")
 
 
 def _coerce_learning_value_score(value: object) -> float | None:
@@ -614,8 +617,131 @@ def _apply_per_chunk_cap(items: list[dict[str, Any]], *, max_per_chunk: int | No
     return limited
 
 
+def _expand_candidate_context_in_chunk(
+    *,
+    text: str,
+    original: str,
+    chunk_text: str,
+    min_sentences: int,
+) -> tuple[str, str, str]:
+    required_sentences = 2 if int(min_sentences or 0) >= 2 else 1
+    base_text = str(text or "").strip()
+    base_original = str(original or "").strip()
+    if required_sentences <= 1 or not base_text or not base_original:
+        return base_text, base_original, ""
+    if len(split_sentences(base_original)) >= required_sentences:
+        return base_text, base_original, ""
+
+    chunk_sentences = split_sentences(chunk_text)
+    if len(chunk_sentences) < 2:
+        return base_text, base_original, ""
+
+    idx = -1
+    for i, sentence in enumerate(chunk_sentences):
+        if sentence == base_original:
+            idx = i
+            break
+    if idx < 0:
+        original_key = normalize_for_dedupe(base_original)
+        for i, sentence in enumerate(chunk_sentences):
+            if normalize_for_dedupe(sentence) == original_key:
+                idx = i
+                break
+    if idx < 0:
+        return base_text, base_original, ""
+
+    expanded_sentence = ""
+    expanded_with = ""
+    if idx + 1 < len(chunk_sentences):
+        candidate = chunk_sentences[idx + 1]
+        if len(candidate) > _CONTEXT_EXPAND_MAX_SENTENCE_CHARS:
+            return base_text, base_original, ""
+        expanded_sentence = candidate
+        expanded_with = "next_sentence"
+    elif idx > 0:
+        candidate = chunk_sentences[idx - 1]
+        if len(candidate) > _CONTEXT_EXPAND_MAX_SENTENCE_CHARS:
+            return base_text, base_original, ""
+        expanded_sentence = candidate
+        expanded_with = "previous_sentence"
+
+    if not expanded_sentence:
+        return base_text, base_original, ""
+    if expanded_with == "next_sentence":
+        return (
+            f"{base_text} {expanded_sentence}".strip(),
+            f"{base_original} {expanded_sentence}".strip(),
+            expanded_with,
+        )
+    return (
+        f"{expanded_sentence} {base_text}".strip(),
+        f"{expanded_sentence} {base_original}".strip(),
+        expanded_with,
+    )
+
+
+def _apply_transcript_context_fallback(
+    *,
+    items: list[dict[str, Any]],
+    material_profile: str,
+    learning_mode: str,
+    min_sentences: int,
+) -> int:
+    if material_profile != "transcript_dialogue" or learning_mode != "lingua_expression":
+        return 0
+    required_sentences = 2 if int(min_sentences or 0) >= 2 else 1
+    if required_sentences <= 1:
+        return 0
+
+    expanded_count = 0
+    for item in items:
+        chunk_text = str(item.get("chunk_text") or "").strip()
+        text = str(item.get("text") or "").strip()
+        original = str(item.get("original") or "").strip()
+        if not chunk_text or not text or not original:
+            continue
+        expanded_text, expanded_original, expanded_with = _expand_candidate_context_in_chunk(
+            text=text,
+            original=original,
+            chunk_text=chunk_text,
+            min_sentences=required_sentences,
+        )
+        if not expanded_with:
+            continue
+        item["text"] = expanded_text
+        item["original"] = expanded_original
+        item["context_expanded"] = True
+        item["context_expanded_with"] = expanded_with
+        expanded_count += 1
+    return expanded_count
+
+
 def _count_cloze_marks(text: str) -> int:
     return len(CLOZE_MARK_RE.findall(str(text or "")))
+
+
+def _is_structurally_empty_raw_candidate(item: dict[str, Any]) -> bool:
+    text = str(item.get("text") or "").strip()
+    original = str(item.get("original") or "").strip()
+    target_phrases = item.get("target_phrases")
+    if not isinstance(target_phrases, list):
+        target_count = 0
+    else:
+        target_count = len([str(x).strip() for x in target_phrases if str(x).strip()])
+    return (not text) and (not original) and target_count == 0
+
+
+def _should_fail_for_structurally_empty_raw_candidates(raw_candidates: list[dict[str, Any]]) -> tuple[bool, int, float]:
+    total = len(raw_candidates)
+    if total <= 0:
+        return False, 0, 0.0
+    empty_count = len([item for item in raw_candidates if _is_structurally_empty_raw_candidate(item)])
+    ratio = float(empty_count) / float(total)
+    if empty_count == total:
+        return True, empty_count, ratio
+    if total >= 20 and ratio >= _EMPTY_RAW_CANDIDATE_RATIO_GUARD:
+        return True, empty_count, ratio
+    return False, empty_count, ratio
 
 
 def _extract_chunk_index(chunk_id: str | None) -> int | None:
@@ -1403,6 +1529,85 @@ def _repair_taxonomy_candidates(
     return repaired_valid, stats
 
 
+def _annotate_lingua_transcript_candidates(
+    *,
+    items: list[dict[str, Any]],
+    cfg: AppConfig,
+    material_profile: str,
+    learning_mode: str,
+    client: OpenAICompatibleClient,
+    errors: list[dict[str, Any]],
+    temperature: float | None = None,
+    classify_fn: Callable[..., list[dict[str, Any]]] = classify_phrase_annotations_batch,
+) -> int:
+    if not items:
+        return 0
+    if not cfg.lingua_annotate_enable:
+        return 0
+    if material_profile != "transcript_dialogue" or learning_mode != "lingua_expression":
+        return 0
+
+    max_items = int(cfg.lingua_annotate_max_items or 0)
+    target_items = items[:max_items] if max_items > 0 else items
+    if not target_items:
+        return 0
+
+    batch_size = max(1, int(cfg.lingua_annotate_batch_size or 50))
+    annotated = 0
+    for batch in iter_batches(target_items, batch_size):
+        classifier_input = [
+            {
+                "text_cloze": str(item.get("text", "")).strip(),
+                "text_original": str(item.get("original", "")).strip(),
+                "target_phrases": [str(x).strip() for x in (item.get("target_phrases") or []) if str(x).strip()],
+                "difficulty": cfg.cloze_difficulty,
+                "learning_mode": learning_mode,
+            }
+            for item in batch
+        ]
+        try:
+            annotations = classify_fn(
+                client=client,
+                items=classifier_input,
+                temperature=temperature,
+            )
+            if len(annotations) != len(batch):
+                raise build_error(
+                    error_code="LLM_RESPONSE_SHAPE_INVALID",
+                    cause="Stage-2 annotation response length mismatch.",
+                    detail=f"expected={len(batch)}, got={len(annotations)}",
+                    next_steps=["Fix Stage-2 annotation output contract"],
+                    exit_code=ExitCode.LLM_PARSE_ERROR,
+                )
+        except ClawLearnError as exc:
+            errors.append(
+                {
+                    "stage": "lingua_stage2_annotate_batch_error",
+                    "batch_size": len(batch),
+                    "error": exc.to_lines(),
+                }
+            )
+            for item in batch:
+                item["phrase_types"] = []
+                item["selection_reason"] = ""
+                item["reason"] = ""
+            continue
+
+        for item, payload in zip(batch, annotations, strict=False):
+            labels = normalize_phrase_types(
+                payload.get("phrase_types") if isinstance(payload, dict) else [],
+                max_items=1,
+            )
+            reason = ""
+            if isinstance(payload, dict):
+                reason = str(payload.get("reason") or payload.get("selection_reason") or "").strip()
+            item["phrase_types"] = labels
+            item["selection_reason"] = reason if labels else ""
+            item["reason"] = reason if labels else ""
+            annotated += 1
+    return annotated
+
+
 def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> DocumentRecord:
     source_lang = options.source_lang or cfg.default_source_lang
     target_lang = options.target_lang or cfg.default_target_lang
@@ -1708,6 +1913,36 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
     else:
         raw_candidates = list(raw_extraction_candidates)
 
+    should_fail_for_empty_raw, empty_raw_count, empty_raw_ratio = _should_fail_for_structurally_empty_raw_candidates(
+        raw_candidates
+    )
+    if should_fail_for_empty_raw:
+        errors.append(
+            {
+                "stage": "extract_shape_guard",
+                "reason": "structurally_empty_raw_candidates",
+                "empty_raw_candidates": empty_raw_count,
+                "raw_candidates": len(raw_candidates),
+                "empty_ratio": round(empty_raw_ratio, 4),
+                "schema_name": extract_prompt.output_format.schema_name,
+            }
+        )
+        err = build_error(
+            error_code="LLM_RESPONSE_SHAPE_INVALID",
+            cause="Extraction output shape is incompatible with the active parser.",
+            detail=(
+                f"raw={len(raw_candidates)} empty={empty_raw_count} ratio={empty_raw_ratio:.2%} "
+                f"schema={extract_prompt.output_format.schema_name}"
+            ),
+            next_steps=[
+                "Verify extraction prompt schema_name matches the pipeline parser path",
+                "Ensure extraction outputs include text/original/target_phrases for cloze schemas",
+            ],
+            exit_code=ExitCode.LLM_PARSE_ERROR,
+        )
+        _save_failure_snapshot(err)
+        raise err
+
     (
         valid_candidates,
         validation_rejects,
@@ -1851,6 +2086,33 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
 
     if options.max_notes and options.max_notes > 0:
         deduped = deduped[: options.max_notes]
+    context_expanded_count = _apply_transcript_context_fallback(
+        items=deduped,
+        material_profile=material_profile,
+        learning_mode=learning_mode,
+        min_sentences=cfg.lingua_transcript_min_context_sentences,
+    )
+    if context_expanded_count > 0:
+        logger.info(
+            "transcript context fallback expanded | count=%d min_sentences=%d",
+            context_expanded_count,
+            max(2, int(cfg.lingua_transcript_min_context_sentences or 2)),
+        )
+    stage2_annotated_count = _annotate_lingua_transcript_candidates(
+        items=deduped,
+        cfg=cfg,
+        material_profile=material_profile,
+        learning_mode=learning_mode,
+        client=translate_client,
+        errors=errors,
+        temperature=options.temperature,
+    )
+    if stage2_annotated_count > 0:
+        logger.info(
+            "lingua stage2 annotation complete | annotated=%d batch_size=%d",
+            stage2_annotated_count,
+            max(1, int(cfg.lingua_annotate_batch_size or 50)),
+        )
     logger.info(
         "text generation complete | raw=%d valid=%d deduped=%d",
         len(raw_candidates),

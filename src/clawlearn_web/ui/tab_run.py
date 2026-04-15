@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import gradio as gr
 
@@ -390,8 +390,8 @@ def bind_events(
         save_inter_val: Any,
         continue_on_error_val: Any,
         ui_lang_val: Any,
-    ) -> tuple[Any, ...]:
-        return handlers_run.on_run(
+    ) -> Iterator[tuple[Any, ...]]:
+        yield from handlers_run.on_run(
             file_obj,
             deck_title_val,
             src,
@@ -486,6 +486,7 @@ def bind_events(
             analytics.rejection_filter,
             analytics.chunk_filter,
         ],
+        queue=True,
     )
 
     components.refresh_runs_button.click(

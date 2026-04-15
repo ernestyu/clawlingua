@@ -312,7 +312,11 @@ def on_ui_lang_change(
             value=run_download_next,
         ),
         gr.update(
-            value=deps.tr(lang, "### Config (.env editor)", "### Config (.env editor)")
+            value=deps.tr(
+                lang,
+                "### Config (.env editor)\nWeb UI reads `.env` from the current working directory of the web process.",
+                "### Config (.env editor)\nWeb UI reads `.env` from the current working directory of the web process.",
+            )
         ),
         gr.update(label=deps.tr(lang, "Extraction LLM", "Extraction LLM")),
         gr.update(

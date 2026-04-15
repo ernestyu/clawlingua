@@ -260,6 +260,9 @@ def build_interface() -> gr.Blocks:
         to_timeout_seconds=_to_timeout_seconds,
         normalize_ui_lang=_normalize_ui_lang,
         read_env_example=config_io.read_env_example,
+        resolve_env_file=config_io.resolve_env_file,
+        load_config=load_config,
+        load_env_view=config_io.load_env_view,
         tr=_tr,
         save_env_v2=save_env,
     )

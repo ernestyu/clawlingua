@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
+from ..errors import build_error
+from ..exit_codes import ExitCode
 from ..models.chunk import ChunkRecord
 from ..models.document import DocumentRecord
 from ..models.prompt_schema import PromptSpec
@@ -45,6 +48,45 @@ def _normalize_phrase_types(value: object) -> list[str]:
     return []
 
 
+_PHRASE_TOKEN_RE = re.compile(r"[A-Za-z']+")
+_FORBIDDEN_PHRASE_LEADS = {"that", "which", "whereas"}
+
+
+def _normalize_context_text(item: dict[str, Any]) -> str:
+    sentence_text = str(
+        item.get("sentence")
+        or item.get("sentence_text")
+        or item.get("original")
+        or item.get("text_original")
+        or ""
+    ).strip()
+    if sentence_text:
+        return sentence_text
+    context_sentences = item.get("context_sentences")
+    if isinstance(context_sentences, list):
+        parts = [str(x).strip() for x in context_sentences if str(x).strip()]
+        if parts:
+            return " ".join(parts)
+    return ""
+
+
+def _is_stage1_phrase_valid(*, phrase_text: str, context_text: str) -> bool:
+    phrase = str(phrase_text or "").strip()
+    context = str(context_text or "").strip()
+    if not phrase or not context:
+        return False
+    if any(ch in phrase for ch in ",;:"):
+        return False
+    tokens = _PHRASE_TOKEN_RE.findall(phrase)
+    if len(tokens) < 2 or len(tokens) > 6:
+        return False
+    if tokens and tokens[0].lower() in _FORBIDDEN_PHRASE_LEADS:
+        return False
+    if phrase in context:
+        return True
+    return phrase.lower() in context.lower()
+
+
 def _extract_phrase_candidates_from_items(
     *,
     data: list[Any],
@@ -55,13 +97,7 @@ def _extract_phrase_candidates_from_items(
         if not isinstance(item, dict):
             continue
         chunk_id = str(item.get("chunk_id") or forced_chunk_id or "").strip()
-        sentence_text = str(
-            item.get("sentence")
-            or item.get("sentence_text")
-            or item.get("original")
-            or item.get("text_original")
-            or ""
-        ).strip()
+        sentence_text = _normalize_context_text(item)
         if not chunk_id or not sentence_text:
             continue
         phrases = item.get("phrases")
@@ -76,49 +112,99 @@ def _extract_phrase_candidates_from_items(
             ).strip()
             if not phrase_text:
                 continue
+            if not _is_stage1_phrase_valid(phrase_text=phrase_text, context_text=sentence_text):
+                continue
             candidate: dict[str, Any] = {
                 "chunk_id": chunk_id,
                 "sentence_text": sentence_text,
                 "phrase_text": phrase_text,
-                "reason": str(item.get("reason") or item.get("selection_reason") or "").strip(),
-                "phrase_types": _normalize_phrase_types(item.get("phrase_types")),
             }
-            if "learning_value_score" in item:
-                candidate["learning_value_score"] = item.get("learning_value_score")
-            if "expression_transfer" in item:
-                candidate["expression_transfer"] = str(item.get("expression_transfer") or "").strip()
             candidates.append(candidate)
             continue
 
         for phrase in phrases:
             if isinstance(phrase, str):
                 phrase_text = phrase.strip()
-                reason = ""
-                phrase_types: list[str] = []
-                learning_value_score: object | None = None
-                expression_transfer = ""
             elif isinstance(phrase, dict):
                 phrase_text = str(phrase.get("text") or phrase.get("phrase_text") or "").strip()
-                reason = str(phrase.get("reason") or phrase.get("selection_reason") or "").strip()
-                phrase_types = _normalize_phrase_types(phrase.get("phrase_types"))
-                learning_value_score = phrase.get("learning_value_score")
-                expression_transfer = str(phrase.get("expression_transfer") or "").strip()
             else:
                 continue
             if not phrase_text:
+                continue
+            if not _is_stage1_phrase_valid(phrase_text=phrase_text, context_text=sentence_text):
                 continue
             candidate = {
                 "chunk_id": chunk_id,
                 "sentence_text": sentence_text,
                 "phrase_text": phrase_text,
-                "reason": reason,
-                "phrase_types": phrase_types,
             }
-            if learning_value_score is not None:
-                candidate["learning_value_score"] = learning_value_score
-            if expression_transfer:
-                candidate["expression_transfer"] = expression_transfer
             candidates.append(candidate)
+    return candidates
+
+
+def _looks_like_phrase_response_item(item: dict[str, Any]) -> bool:
+    return isinstance(item.get("context_sentences"), list) or isinstance(item.get("phrases"), list)
+
+
+def _extract_cloze_candidates_from_items(
+    *,
+    data: list[Any],
+    forced_chunk_id: str | None = None,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+
+        text = str(item.get("text") or item.get("text_cloze") or "").strip()
+        original = str(item.get("original") or item.get("text_original") or "").strip()
+        target_phrases_raw = item.get("target_phrases")
+        target_phrases = (
+            [str(x).strip() for x in target_phrases_raw if str(x).strip()]
+            if isinstance(target_phrases_raw, list)
+            else []
+        )
+
+        if _looks_like_phrase_response_item(item) and not (text and original and target_phrases):
+            raise build_error(
+                error_code="LLM_RESPONSE_SHAPE_INVALID",
+                cause="Extraction response schema mismatch.",
+                detail="Received phrase-candidate shape while cloze parser expected cloze-card fields.",
+                next_steps=[
+                    "Use a phrase_candidates schema with the phrase pipeline route",
+                    "Or return cloze-card fields: text/original/target_phrases",
+                ],
+                exit_code=ExitCode.LLM_PARSE_ERROR,
+            )
+
+        if not text or not original or not target_phrases:
+            continue
+
+        note_hint = item.get("note_hint") or item.get("note") or ""
+        if forced_chunk_id is not None:
+            chunk_id = forced_chunk_id
+        else:
+            chunk_id = str(item.get("chunk_id") or "").strip()
+        candidate: dict[str, Any] = {
+            "chunk_id": str(chunk_id).strip(),
+            "text": text,
+            "original": original,
+            "target_phrases": target_phrases,
+            "note_hint": str(note_hint).strip(),
+        }
+        if "selection_reason" in item:
+            candidate["selection_reason"] = str(item.get("selection_reason", "")).strip()
+        if "learning_value_score" in item:
+            candidate["learning_value_score"] = item.get("learning_value_score")
+        if "phrase_types" in item:
+            raw_types = item.get("phrase_types")
+            if isinstance(raw_types, list):
+                candidate["phrase_types"] = [str(x).strip() for x in raw_types if str(x).strip()]
+            elif str(raw_types).strip():
+                candidate["phrase_types"] = [str(raw_types).strip()]
+        if "expression_transfer" in item:
+            candidate["expression_transfer"] = str(item.get("expression_transfer", "")).strip()
+        candidates.append(candidate)
     return candidates
 
 
@@ -145,38 +231,8 @@ def generate_cloze_candidates_for_chunk(
         temperature=temperature,
     )
     data = parse_json_content(content, expect_array=prompt.parser.expect_json_array)
-    candidates: list[dict] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        text = item.get("text") or item.get("text_cloze") or ""
-        original = item.get("original") or item.get("text_original") or ""
-        target_phrases = item.get("target_phrases") or []
-        note_hint = item.get("note_hint") or item.get("note") or ""
-        # Single-chunk generation must always be attributed to that chunk.
-        # Model-supplied chunk_id values are treated as untrusted.
-        chunk_id = chunk.chunk_id
-        candidate = {
-            "chunk_id": str(chunk_id).strip(),
-            "text": str(text).strip(),
-            "original": str(original).strip(),
-            "target_phrases": [str(x).strip() for x in target_phrases if str(x).strip()],
-            "note_hint": str(note_hint).strip(),
-        }
-        if "selection_reason" in item:
-            candidate["selection_reason"] = str(item.get("selection_reason", "")).strip()
-        if "learning_value_score" in item:
-            candidate["learning_value_score"] = item.get("learning_value_score")
-        if "phrase_types" in item:
-            raw_types = item.get("phrase_types")
-            if isinstance(raw_types, list):
-                candidate["phrase_types"] = [str(x).strip() for x in raw_types if str(x).strip()]
-            elif str(raw_types).strip():
-                candidate["phrase_types"] = [str(raw_types).strip()]
-        if "expression_transfer" in item:
-            candidate["expression_transfer"] = str(item.get("expression_transfer", "")).strip()
-        candidates.append(candidate)
-    return candidates
+    # Single-chunk generation must always be attributed to this chunk_id.
+    return _extract_cloze_candidates_from_items(data=data, forced_chunk_id=chunk.chunk_id)
 
 
 def generate_cloze_candidates_for_batch(
@@ -207,36 +263,7 @@ def generate_cloze_candidates_for_batch(
         temperature=temperature,
     )
     data = parse_json_content(content, expect_array=prompt.parser.expect_json_array)
-    candidates: list[dict] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        text = item.get("text") or item.get("text_cloze") or ""
-        original = item.get("original") or item.get("text_original") or ""
-        target_phrases = item.get("target_phrases") or []
-        note_hint = item.get("note_hint") or item.get("note") or ""
-        chunk_id = item.get("chunk_id") or ""
-        candidate = {
-            "chunk_id": str(chunk_id).strip(),
-            "text": str(text).strip(),
-            "original": str(original).strip(),
-            "target_phrases": [str(x).strip() for x in target_phrases if str(x).strip()],
-            "note_hint": str(note_hint).strip(),
-        }
-        if "selection_reason" in item:
-            candidate["selection_reason"] = str(item.get("selection_reason", "")).strip()
-        if "learning_value_score" in item:
-            candidate["learning_value_score"] = item.get("learning_value_score")
-        if "phrase_types" in item:
-            raw_types = item.get("phrase_types")
-            if isinstance(raw_types, list):
-                candidate["phrase_types"] = [str(x).strip() for x in raw_types if str(x).strip()]
-            elif str(raw_types).strip():
-                candidate["phrase_types"] = [str(raw_types).strip()]
-        if "expression_transfer" in item:
-            candidate["expression_transfer"] = str(item.get("expression_transfer", "")).strip()
-        candidates.append(candidate)
-    return candidates
+    return _extract_cloze_candidates_from_items(data=data)
 
 
 def generate_phrase_candidates_for_chunk(
@@ -256,9 +283,12 @@ def generate_phrase_candidates_for_chunk(
     user_prompt = render_prompt_template(prompt.user_prompt_template, placeholders)
     phrase_contract = (
         "Return only a JSON array.\n"
-        "Each item must contain keys: chunk_id, sentence, phrases.\n"
-        "phrases must be an array of objects with key text, optional reason and phrase_types.\n"
-        "Each phrase text must be an exact substring in sentence.\n"
+        "Each item must contain keys: chunk_id, context_sentences, phrases.\n"
+        "context_sentences must be an array of 2-3 verbatim sentences when possible.\n"
+        "phrases must be an array where each phrase is either a string or {\"text\":\"...\"}.\n"
+        "Each phrase must be a 2-6 word substring of the context and must not contain ',', ';', or ':'.\n"
+        "Each phrase must not start with that/which/whereas.\n"
+        "Do not output reason, selection_reason, phrase_types, learning_value_score, or expression_transfer.\n"
         "Do not output cloze markers, numbering, or hints."
     )
     content = client.chat(
@@ -293,9 +323,12 @@ def generate_phrase_candidates_for_batch(
     user_prompt = render_prompt_template(prompt.user_prompt_template, placeholders)
     phrase_contract = (
         "Return only a JSON array.\n"
-        "Each item must contain keys: chunk_id, sentence, phrases.\n"
-        "phrases must be an array of objects with key text, optional reason and phrase_types.\n"
-        "Each phrase text must be an exact substring in sentence.\n"
+        "Each item must contain keys: chunk_id, context_sentences, phrases.\n"
+        "context_sentences must be an array of 2-3 verbatim sentences when possible.\n"
+        "phrases must be an array where each phrase is either a string or {\"text\":\"...\"}.\n"
+        "Each phrase must be a 2-6 word substring of the context and must not contain ',', ';', or ':'.\n"
+        "Each phrase must not start with that/which/whereas.\n"
+        "Do not output reason, selection_reason, phrase_types, learning_value_score, or expression_transfer.\n"
         "Do not output cloze markers, numbering, or hints."
     )
     content = client.chat(

@@ -247,6 +247,14 @@ class AppConfig(BaseModel):
     validate_format_retry_llm_enable: bool = True
     # Whether taxonomy rejects are sent to a small-model repair pass.
     taxonomy_repair_enable: bool = False
+    # Lingua transcript context fallback minimum sentence count.
+    lingua_transcript_min_context_sentences: int = Field(default=2, ge=1, le=3)
+    # Whether to run Stage-2 taxonomy/reason annotation for final lingua transcript candidates.
+    lingua_annotate_enable: bool = False
+    # Stage-2 annotation batch size.
+    lingua_annotate_batch_size: int = Field(default=50, ge=1)
+    # Optional max items for Stage-2 annotation per run.
+    lingua_annotate_max_items: int | None = Field(default=None, ge=1)
 
     # Prompt language: en|zh.
     prompt_lang: str = "zh"
@@ -824,6 +832,13 @@ def load_config(
             True,
         ),
         "taxonomy_repair_enable": _env_value(merged.get("CLAWLEARN_TAXONOMY_REPAIR_ENABLE"), False),
+        "lingua_transcript_min_context_sentences": _env_value(
+            merged.get("CLAWLEARN_LINGUA_TRANSCRIPT_MIN_CONTEXT_SENTENCES"),
+            2,
+        ),
+        "lingua_annotate_enable": _env_value(merged.get("CLAWLEARN_LINGUA_ANNOTATE_ENABLE"), False),
+        "lingua_annotate_batch_size": _env_value(merged.get("CLAWLEARN_LINGUA_ANNOTATE_BATCH_SIZE"), 50),
+        "lingua_annotate_max_items": _env_value(merged.get("CLAWLEARN_LINGUA_ANNOTATE_MAX_ITEMS"), None),
         "prompt_lang": _env_value(merged.get("CLAWLEARN_PROMPT_LANG"), "zh"),
         "extract_prompt": _env_value(merged.get("CLAWLEARN_EXTRACT_PROMPT"), None),
         "explain_prompt": _env_value(merged.get("CLAWLEARN_EXPLAIN_PROMPT"), None),

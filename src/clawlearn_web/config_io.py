@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
 from typing import Any, Callable, Dict, Iterable, Optional
@@ -68,6 +69,15 @@ EDITABLE_ENV_KEYS = [
 
 def resolve_env_file() -> Optional[Path]:
     """Best-effort resolution of the default .env file."""
+
+    override = str(os.getenv("CLAWLEARN_ENV_FILE") or "").strip()
+    if override:
+        override_path = Path(override).expanduser()
+        if not override_path.is_absolute():
+            override_path = (Path.cwd() / override_path).resolve()
+        else:
+            override_path = override_path.resolve()
+        return override_path
 
     candidate = Path(".env").resolve()
     return candidate if candidate.exists() else None

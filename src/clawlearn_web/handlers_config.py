@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 import httpx
@@ -13,8 +14,70 @@ class ConfigDeps:
     to_timeout_seconds: Callable[[Any], float]
     normalize_ui_lang: Callable[[str | None], str]
     read_env_example: Callable[[], dict[str, str]]
+    resolve_env_file: Callable[[], Path | None]
+    load_config: Callable[..., Any]
+    load_env_view: Callable[..., dict[str, str]]
     tr: Callable[[str, str, str], str]
     save_env_v2: Callable[..., str]
+
+
+def _config_values_from_view(cfg_view: dict[str, str]) -> tuple[str, ...]:
+    return (
+        cfg_view.get("CLAWLEARN_LLM_BASE_URL", ""),
+        cfg_view.get("CLAWLEARN_LLM_API_KEY", ""),
+        cfg_view.get("CLAWLEARN_LLM_MODEL", ""),
+        cfg_view.get("CLAWLEARN_LLM_TIMEOUT_SECONDS", "120"),
+        cfg_view.get("CLAWLEARN_LLM_TEMPERATURE", "0.2"),
+        cfg_view.get("CLAWLEARN_LLM_CHUNK_BATCH_SIZE", "1"),
+        cfg_view.get("CLAWLEARN_TRANSLATE_LLM_BASE_URL", ""),
+        cfg_view.get("CLAWLEARN_TRANSLATE_LLM_API_KEY", ""),
+        cfg_view.get("CLAWLEARN_TRANSLATE_LLM_MODEL", ""),
+        cfg_view.get("CLAWLEARN_TRANSLATE_LLM_TEMPERATURE", ""),
+        cfg_view.get("CLAWLEARN_CHUNK_MAX_CHARS", "1800"),
+        cfg_view.get("CLAWLEARN_CHUNK_MIN_CHARS", "120"),
+        cfg_view.get("CLAWLEARN_CLOZE_MIN_CHARS", "0"),
+        cfg_view.get("CLAWLEARN_CLOZE_MAX_PER_CHUNK", ""),
+        cfg_view.get("CLAWLEARN_VALIDATE_FORMAT_RETRY_ENABLE", "true"),
+        cfg_view.get("CLAWLEARN_VALIDATE_FORMAT_RETRY_MAX", "3"),
+        cfg_view.get("CLAWLEARN_VALIDATE_FORMAT_RETRY_LLM_ENABLE", "true"),
+        cfg_view.get("CLAWLEARN_CONTENT_PROFILE", "prose_article"),
+        cfg_view.get("CLAWLEARN_CLOZE_DIFFICULTY", "intermediate"),
+        cfg_view.get("CLAWLEARN_PROMPT_LANG", "zh"),
+        cfg_view.get("CLAWLEARN_EXTRACT_PROMPT", ""),
+        cfg_view.get("CLAWLEARN_EXPLAIN_PROMPT", ""),
+        cfg_view.get("CLAWLEARN_OUTPUT_DIR", "./runs"),
+        cfg_view.get("CLAWLEARN_EXPORT_DIR", "./outputs"),
+        cfg_view.get("CLAWLEARN_LOG_DIR", "./logs"),
+        cfg_view.get("CLAWLEARN_DEFAULT_DECK_NAME", ""),
+        cfg_view.get("CLAWLEARN_TTS_EDGE_VOICE1", ""),
+        cfg_view.get("CLAWLEARN_TTS_EDGE_VOICE2", ""),
+        cfg_view.get("CLAWLEARN_TTS_EDGE_VOICE3", ""),
+        cfg_view.get("CLAWLEARN_TTS_EDGE_VOICE4", ""),
+    )
+
+
+def _reload_status(
+    *,
+    lang: str,
+    tr: Callable[[str, str, str], str],
+    env_path: Path,
+    found: bool,
+    error: Exception | None = None,
+) -> str:
+    if error is not None:
+        return (
+            f"❌ {tr(lang, 'Failed to reload config from .env', 'Failed to reload config from .env')}: `{error}`\n\n"
+            f"- env_file: `{env_path}`"
+        )
+    if not found:
+        return (
+            f"⚠️ {tr(lang, '.env not found', '.env not found')}\n\n"
+            f"- env_file: `{env_path}`"
+        )
+    return (
+        f"✅ {tr(lang, 'Reloaded config from .env', 'Reloaded config from .env')}\n\n"
+        f"- env_file: `{env_path}`"
+    )
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -284,7 +347,7 @@ def on_save_config(
     ui_lang_val: Any,
     *,
     deps: ConfigDeps,
-) -> str:
+) -> tuple[str, ...]:
     updated = {
         "CLAWLEARN_LLM_BASE_URL": llm_base_url_val or "",
         "CLAWLEARN_LLM_API_KEY": llm_api_key_val or "",
@@ -317,4 +380,40 @@ def on_save_config(
         "CLAWLEARN_TTS_EDGE_VOICE3": tts_voice3_val or "",
         "CLAWLEARN_TTS_EDGE_VOICE4": tts_voice4_val or "",
     }
-    return deps.save_env_v2(updated, lang=deps.normalize_ui_lang(ui_lang_val))
+    save_status = deps.save_env_v2(updated, lang=deps.normalize_ui_lang(ui_lang_val))
+    reloaded = on_reload_env(ui_lang_val, deps=deps)
+    values, reload_status = reloaded[:-1], reloaded[-1]
+    return (*values, f"{save_status}\n\n{reload_status}")
+
+
+def on_reload_env(
+    ui_lang_val: Any,
+    *,
+    deps: ConfigDeps,
+) -> tuple[str, ...]:
+    lang = deps.normalize_ui_lang(ui_lang_val)
+    resolved_env = deps.resolve_env_file()
+    env_path = (resolved_env or Path(".env")).resolve()
+    try:
+        cfg = deps.load_config(env_file=resolved_env)
+        cfg_view = deps.load_env_view(cfg, resolved_env)
+        status = _reload_status(
+            lang=lang,
+            tr=deps.tr,
+            env_path=env_path,
+            found=bool(resolved_env and resolved_env.exists()),
+        )
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        try:
+            cfg = deps.load_config(env_file=None)
+            cfg_view = deps.load_env_view(cfg, None)
+        except Exception:
+            cfg_view = {}
+        status = _reload_status(
+            lang=lang,
+            tr=deps.tr,
+            env_path=env_path,
+            found=False,
+            error=exc,
+        )
+    return (*_config_values_from_view(cfg_view), status)

@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-from typing import Any, Callable
+import threading
+import time
+from typing import Any, Callable, Iterator
 
 import gradio as gr
 
@@ -16,6 +18,8 @@ from clawlearn.pipeline.build_textbook_deck import (
 )
 from clawlearn.utils.time import make_run_id, utc_now_iso
 from clawlearn_web import run_history, upload_io
+
+_RUN_PROGRESS_POLL_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -197,6 +201,36 @@ def on_run_start(ui_lang_val: str, *, deps: RunDeps) -> tuple[str, None]:
     return deps.tr(lang, "Running", "Running"), None
 
 
+def _safe_build_run_analysis(
+    *,
+    run_id: str | None,
+    cfg_now: Any,
+    lang: str,
+    deps: RunDeps,
+) -> tuple[str, list[list[Any]], list[Any], list[Any], list[Any]]:
+    try:
+        return deps.build_run_analysis(
+            run_id,
+            cfg_now,
+            lang=lang,
+            taxonomy_filter="all",
+            transfer_filter="all",
+            rejection_filter="all",
+            chunk_filter="all",
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return (
+            (
+                f"{deps.tr(lang, 'Run analytics unavailable', 'Run analytics unavailable')}\n\n"
+                f"- {deps.tr(lang, 'Error', 'Error')}: `{exc}`"
+            ),
+            [],
+            [("all", "all")],
+            [("all", "all")],
+            [("all", "all")],
+        )
+
+
 def on_run(
     file_obj: Any,
     deck_title_val: Any,
@@ -219,31 +253,73 @@ def on_run(
     ui_lang_val: Any,
     *,
     deps: RunDeps,
-) -> tuple[Any, ...]:
+) -> Iterator[tuple[Any, ...]]:
     lang = deps.normalize_ui_lang(ui_lang_val)
-    result = deps.run_single_build(
-        uploaded_file=file_obj,
-        deck_title=deck_title_val or "",
-        source_lang=src,
-        target_lang=tgt,
-        content_profile=profile,
-        learning_mode=mode,
-        difficulty=diff,
-        max_notes=deps.to_optional_int(max_notes_val, min_value=1),
-        input_char_limit=deps.to_optional_int(input_limit_val, min_value=1),
-        cloze_min_chars=deps.to_optional_int(cloze_min_val, min_value=0),
-        textbook_max_concepts_per_chunk=deps.to_optional_int(
-            textbook_max_concepts_val, min_value=1
-        ),
-        textbook_keep_source_excerpt=bool(textbook_keep_excerpt_val),
-        chunk_max_chars=deps.to_optional_int(chunk_max_val, min_value=1),
-        temperature=deps.to_optional_float(temperature_val),
-        save_intermediate=bool(save_inter_val),
-        continue_on_error=bool(continue_on_error_val),
-        prompt_lang=lang,
-        extract_prompt=deps.as_str(extract_prompt_val),
-        explain_prompt=deps.as_str(explain_prompt_val),
-    )
+    worker_payload: dict[str, Any] = {}
+    worker_error: dict[str, Exception] = {}
+
+    def _run_worker() -> None:
+        try:
+            worker_payload["result"] = deps.run_single_build(
+                uploaded_file=file_obj,
+                deck_title=deck_title_val or "",
+                source_lang=src,
+                target_lang=tgt,
+                content_profile=profile,
+                learning_mode=mode,
+                difficulty=diff,
+                max_notes=deps.to_optional_int(max_notes_val, min_value=1),
+                input_char_limit=deps.to_optional_int(input_limit_val, min_value=1),
+                cloze_min_chars=deps.to_optional_int(cloze_min_val, min_value=0),
+                textbook_max_concepts_per_chunk=deps.to_optional_int(
+                    textbook_max_concepts_val, min_value=1
+                ),
+                textbook_keep_source_excerpt=bool(textbook_keep_excerpt_val),
+                chunk_max_chars=deps.to_optional_int(chunk_max_val, min_value=1),
+                temperature=deps.to_optional_float(temperature_val),
+                save_intermediate=bool(save_inter_val),
+                continue_on_error=bool(continue_on_error_val),
+                prompt_lang=lang,
+                extract_prompt=deps.as_str(extract_prompt_val),
+                explain_prompt=deps.as_str(explain_prompt_val),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            worker_error["error"] = exc
+
+    worker = threading.Thread(target=_run_worker, daemon=True)
+    worker.start()
+    started = time.monotonic()
+    while worker.is_alive():
+        worker.join(timeout=_RUN_PROGRESS_POLL_SECONDS)
+        if worker.is_alive():
+            elapsed_seconds = int(max(0.0, time.monotonic() - started))
+            status_md = (
+                f"{deps.tr(lang, 'Running', 'Running')}\n\n"
+                f"- {deps.tr(lang, 'Elapsed', 'Elapsed')}: **{elapsed_seconds}s**"
+            )
+            yield (
+                status_md,
+                None,
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+            )
+
+    if "error" in worker_error:
+        result = {"status": "error", "message": str(worker_error["error"]), "run_id": None}
+    else:
+        result = worker_payload.get("result") or {
+            "status": "error",
+            "message": "run failed without result",
+            "run_id": None,
+        }
+
     cfg_now = deps.load_app_config()
     run_id = deps.as_str(result.get("run_id")) or None
     selector_update, detail_md, history_download = deps.refresh_recent_runs(
@@ -257,14 +333,11 @@ def on_run(
         taxonomy_choices,
         rejection_choices,
         chunk_choices,
-    ) = deps.build_run_analysis(
-        run_id,
-        cfg_now,
+    ) = _safe_build_run_analysis(
+        run_id=run_id,
+        cfg_now=cfg_now,
         lang=lang,
-        taxonomy_filter="all",
-        transfer_filter="all",
-        rejection_filter="all",
-        chunk_filter="all",
+        deps=deps,
     )
     taxonomy_update = gr.update(choices=taxonomy_choices, value="all")
     rejection_update = gr.update(choices=rejection_choices, value="all")
@@ -278,7 +351,7 @@ def on_run(
             f"{deps.tr(lang, 'Failed', 'Failed')}\n\n"
             f"{run_line}- {deps.tr(lang, 'Error', 'Error')}: `{msg}`"
         )
-        return (
+        yield (
             status_md,
             None,
             selector_update,
@@ -291,6 +364,7 @@ def on_run(
             rejection_update,
             chunk_update,
         )
+        return
 
     cards = result["cards_count"]
     errors = result["errors_count"]
@@ -302,7 +376,7 @@ def on_run(
         f"- errors: **{errors}**\n"
         f"- output: `{out_path}`"
     )
-    return (
+    yield (
         status_md,
         out_path,
         selector_update,
