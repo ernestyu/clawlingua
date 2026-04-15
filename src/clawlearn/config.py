@@ -285,7 +285,7 @@ class AppConfig(BaseModel):
     content_profile: str = "general"
     # New V2 fields.
     material_profile: str = "prose_article"
-    learning_mode: str = "expression_mining"
+    learning_mode: str = "lingua_expression"
 
     # Allow export of empty deck (0 cards) instead of hard-failing the run.
     allow_empty_deck: bool = True
@@ -357,7 +357,7 @@ class AppConfig(BaseModel):
     @field_validator("learning_mode")
     @classmethod
     def _validate_learning_mode(cls, v: str) -> str:
-        value = (v or "expression_mining").strip().lower()
+        value = (v or "lingua_expression").strip().lower()
         if value not in SUPPORTED_LEARNING_MODES:
             allowed = ", ".join(sorted(SUPPORTED_LEARNING_MODES))
             raise ValueError(f"learning_mode must be one of: {allowed}")
@@ -381,12 +381,12 @@ class AppConfig(BaseModel):
         if diff == "all":
             diff = "intermediate"
         if mode == "all":
-            mode = "expression_mining"
+            mode = "lingua_expression"
 
         if profile == "textbook_examples":
             return self.prompt_cloze_textbook or self.prompt_cloze
 
-        if mode == "reading_support":
+        if mode == "lingua_reading":
             if profile == "transcript_dialogue":
                 return {
                     "beginner": self.prompt_cloze_transcript_reading_support_beginner,
@@ -888,7 +888,7 @@ def load_config(
         # Legacy + V2 profiles.
         "content_profile": _env_value(merged.get("CLAWLEARN_CONTENT_PROFILE"), normalized_profile),
         "material_profile": normalized_profile,
-        "learning_mode": _env_value(merged.get("CLAWLEARN_LEARNING_MODE"), "expression_mining"),
+        "learning_mode": _env_value(merged.get("CLAWLEARN_LEARNING_MODE"), "lingua_expression"),
         "allow_empty_deck": _env_value(merged.get("CLAWLEARN_ALLOW_EMPTY_DECK"), True),
         "output_dir": _env_value(merged.get("CLAWLEARN_OUTPUT_DIR"), DEFAULT_OUTPUT_DIR),
         "export_dir": _env_value(merged.get("CLAWLEARN_EXPORT_DIR"), DEFAULT_EXPORT_DIR),

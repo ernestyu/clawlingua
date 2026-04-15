@@ -29,7 +29,7 @@ def _build_extraction_placeholders(
         "document_title": document.title or "",
         "source_url": document.source_url or "",
         "chunk_text": chunk_text,
-        "learning_mode": getattr(client.config, "learning_mode", "expression_mining"),
+        "learning_mode": getattr(client.config, "learning_mode", "lingua_expression"),
         "difficulty": client.config.cloze_difficulty,
         "cloze_max_sentences": str(client.config.cloze_max_sentences),
         "cloze_min_chars": str(client.config.cloze_min_chars),

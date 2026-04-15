@@ -228,7 +228,7 @@ def run_info_from_dir(cfg: Any, run_dir: Path) -> RunInfo:
     target_lang = as_str(summary.get("target_lang"))
     content_profile = as_str(summary.get("content_profile"))
     material_profile = as_str(summary.get("material_profile"), default=content_profile)
-    learning_mode = as_str(summary.get("learning_mode"), default="expression_mining")
+    learning_mode = as_str(summary.get("learning_mode"), default="lingua_expression")
     cards = max(0, as_int(summary.get("cards"), default=0))
     errors = max(0, as_int(summary.get("errors"), default=0))
     output_path_resolved = resolve_output_path(cfg, run_dir, summary.get("output_path"))

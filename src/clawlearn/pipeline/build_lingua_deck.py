@@ -16,7 +16,11 @@ from ..anki.deck_exporter import export_apkg
 from ..anki.media_manager import MediaManager
 from ..anki.template_loader import load_anki_template
 from ..config import AppConfig, validate_base_config, validate_runtime_config
-from ..constants import SUPPORTED_CONTENT_PROFILES, SUPPORTED_FILE_SUFFIXES, SUPPORTED_LEARNING_MODES
+from ..constants import (
+    SUPPORTED_CONTENT_PROFILES,
+    SUPPORTED_FILE_SUFFIXES,
+    SUPPORTED_LINGUA_LEARNING_MODES,
+)
 from ..errors import ClawLearnError, build_error
 from ..exit_codes import ExitCode
 from ..ingest.epub_reader import read_epub_file
@@ -47,6 +51,7 @@ from ..utils.jsonx import dump_json, dump_jsonl, load_json
 from ..utils.text import normalize_for_dedupe
 from ..utils.time import utc_now_iso
 from .core_chunking import chunk_document
+from .core_candidates import dump_candidate_artifacts
 from .core_export import resolve_output_path
 from .core_io import resolve_input_path
 from .core_llm import iter_batches
@@ -174,9 +179,8 @@ class BuildDeckResult:
 
 
 def _use_phrase_extraction_pipeline(*, learning_mode: str, schema_name: str | None) -> bool:
-    mode = (learning_mode or "").strip().lower()
     schema = (schema_name or "").strip().lower()
-    return mode == "expression_mining_v2" or schema == "phrase_candidates_v1"
+    return schema == "phrase_candidates_v1"
 
 
 def _coerce_learning_value_score(value: object) -> float | None:
@@ -459,8 +463,12 @@ def _save_intermediate(
     dump_json(run_dir / "document.json", document.model_dump(mode="json"))
     (run_dir / "document.md").write_text(document.cleaned_text, encoding="utf-8")
     dump_jsonl(run_dir / "chunks.jsonl", [chunk.model_dump(mode="json") for chunk in chunks])
-    dump_jsonl(run_dir / "text_candidates.raw.jsonl", raw_candidates)
-    dump_jsonl(run_dir / "text_candidates.validated.jsonl", valid_candidates)
+    dump_candidate_artifacts(
+        run_dir=run_dir,
+        raw_candidates=raw_candidates,
+        validated_candidates=valid_candidates,
+        write_legacy_text_candidates=True,
+    )
     dump_jsonl(run_dir / "translations.jsonl", [{"original": c.original, "translation": c.translation} for c in cards])
     dump_jsonl(run_dir / "cards.final.jsonl", [card.model_dump(mode="json") for card in cards])
     if errors:
@@ -515,12 +523,12 @@ def _resolve_material_profile(cfg: AppConfig, options: BuildDeckOptions) -> str:
 
 
 def _resolve_learning_mode(cfg: AppConfig, options: BuildDeckOptions) -> str:
-    mode = (options.learning_mode or cfg.learning_mode or "expression_mining").strip().lower()
-    if mode not in SUPPORTED_LEARNING_MODES:
-        allowed = ", ".join(sorted(SUPPORTED_LEARNING_MODES))
+    mode = (options.learning_mode or cfg.learning_mode or "lingua_expression").strip().lower()
+    if mode not in SUPPORTED_LINGUA_LEARNING_MODES:
+        allowed = ", ".join(sorted(SUPPORTED_LINGUA_LEARNING_MODES))
         raise build_error(
             error_code="ARG_LEARNING_MODE_INVALID",
-            cause="Unsupported learning mode in current build.",
+            cause="Unsupported learning mode for lingua domain.",
             detail=f"learning_mode={mode!r}",
             next_steps=[f"Use one of: {allowed}"],
             exit_code=ExitCode.ARGUMENT_ERROR,
@@ -631,7 +639,7 @@ def _build_pipeline_metrics(
     ranked_candidates: list[dict[str, Any]],
     deduped_candidates: list[dict[str, Any]],
     errors: list[dict[str, Any]],
-    learning_mode: str = "expression_mining",
+    learning_mode: str = "lingua_expression",
     format_retry_stats: _FormatRetryStats | None = None,
 ) -> dict[str, Any]:
     chunk_ids = {str(getattr(chunk, "chunk_id", "")) for chunk in chunks if str(getattr(chunk, "chunk_id", ""))}

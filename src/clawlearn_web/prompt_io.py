@@ -26,7 +26,13 @@ PROMPT_CONTENT_TYPE_OPTIONS = [
     "transcript_dialogue",
     "textbook_examples",
 ]
-PROMPT_LEARNING_MODE_OPTIONS = ["all", "expression_mining", "reading_support"]
+PROMPT_LEARNING_MODE_OPTIONS = [
+    "all",
+    "lingua_expression",
+    "lingua_reading",
+    "textbook_focus",
+    "textbook_review",
+]
 PROMPT_DIFFICULTY_OPTIONS = ["all", "beginner", "intermediate", "advanced"]
 
 

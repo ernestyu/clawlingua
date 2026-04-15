@@ -10,7 +10,7 @@ from typing import Any
 from ..anki.deck_exporter import export_apkg
 from ..anki.template_loader import load_anki_template
 from ..config import AppConfig, validate_base_config, validate_runtime_config
-from ..constants import SUPPORTED_FILE_SUFFIXES
+from ..constants import SUPPORTED_FILE_SUFFIXES, SUPPORTED_TEXTBOOK_LEARNING_MODES
 from ..errors import build_error
 from ..exit_codes import ExitCode
 from ..ingest.epub_reader import read_epub_file
@@ -22,6 +22,7 @@ from ..runtime import create_run_context
 from ..utils.hash import stable_hash
 from ..utils.jsonx import dump_json, dump_jsonl
 from ..utils.time import utc_now_iso
+from .core_candidates import dump_candidate_artifacts
 from .core_chunking import chunk_document
 from .core_export import resolve_output_path
 from .core_io import resolve_input_path
@@ -36,6 +37,7 @@ class BuildTextbookDeckOptions:
     run_id: str | None = None
     source_lang: str | None = None
     target_lang: str | None = None
+    learning_mode: str | None = None
     input_char_limit: int | None = None
     output: Path | None = None
     deck_name: str | None = None
@@ -178,14 +180,31 @@ def _build_document(cfg: AppConfig, run_id: str, options: BuildTextbookDeckOptio
         fetched_at=utc_now_iso(),
         metadata={
             "material_profile": "textbook_examples",
-            "learning_mode": "textbook_concept",
+            "learning_mode": options.learning_mode or "textbook_focus",
         },
     )
+
+
+def _resolve_learning_mode(options: BuildTextbookDeckOptions) -> str:
+    mode = str(options.learning_mode or "").strip().lower()
+    if not mode:
+        mode = "textbook_focus"
+    if mode not in SUPPORTED_TEXTBOOK_LEARNING_MODES:
+        allowed = ", ".join(sorted(SUPPORTED_TEXTBOOK_LEARNING_MODES))
+        raise build_error(
+            error_code="ARG_LEARNING_MODE_INVALID",
+            cause="Unsupported learning mode for textbook domain.",
+            detail=f"learning_mode={mode!r}",
+            next_steps=[f"Use one of: {allowed}"],
+            exit_code=ExitCode.ARGUMENT_ERROR,
+        )
+    return mode
 
 
 def run_build_textbook_deck(cfg: AppConfig, options: BuildTextbookDeckOptions) -> BuildDeckResult:
     validate_base_config(cfg)
     validate_runtime_config(cfg)
+    options.learning_mode = _resolve_learning_mode(options)
 
     run_ctx = create_run_context(cfg, name="build_textbook", run_id=options.run_id)
     template = load_anki_template(cfg.resolve_path(cfg.anki_template))
@@ -217,7 +236,8 @@ def run_build_textbook_deck(cfg: AppConfig, options: BuildTextbookDeckOptions) -
 
     errors: list[dict[str, Any]] = []
     cards: list[CardRecord] = []
-    candidates: list[dict[str, Any]] = []
+    raw_candidates: list[dict[str, Any]] = []
+    validated_candidates: list[dict[str, Any]] = []
     max_concepts_per_chunk = max(1, int(options.max_concepts_per_chunk or 1))
     keep_source_excerpt = bool(options.keep_source_excerpt)
     for idx, chunk in enumerate(chunks, start=1):
@@ -225,22 +245,43 @@ def run_build_textbook_deck(cfg: AppConfig, options: BuildTextbookDeckOptions) -
             str(getattr(chunk, "source_text", "")),
             max_concepts_per_chunk=max_concepts_per_chunk,
         )
+        if not concepts:
+            errors.append(
+                {
+                    "stage": "candidate_extract",
+                    "chunk_id": chunk.chunk_id,
+                    "reason": "no_concept_candidates",
+                }
+            )
         for concept_idx, (concept_title, sentence, explanation) in enumerate(concepts, start=1):
+            excerpt = sentence if keep_source_excerpt else ""
+            raw_candidate = {
+                "chunk_id": chunk.chunk_id,
+                "candidate_type": "textbook_concept",
+                "concept_title": concept_title,
+                "excerpt": excerpt,
+                "explanation": explanation,
+                "learning_mode": options.learning_mode,
+            }
+            raw_candidates.append(raw_candidate)
+
             cloze_text = _build_textbook_cloze(sentence, concept_title)
             if not cloze_text:
+                errors.append(
+                    {
+                        "stage": "candidate_validate",
+                        "chunk_id": chunk.chunk_id,
+                        "reason": "empty_cloze_text",
+                        "item": raw_candidate,
+                    }
+                )
                 continue
-            excerpt = sentence if keep_source_excerpt else ""
+
             card_id = (
                 f"textbook_{idx:06d}_{concept_idx:02d}_{stable_hash(sentence, length=6)}"
             )
-            candidates.append(
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "concept_title": concept_title,
-                    "excerpt": excerpt,
-                    "explanation": explanation,
-                    "text": cloze_text,
-                }
+            validated_candidates.append(
+                {**raw_candidate, "text": cloze_text}
             )
             cards.append(
                 CardRecord(
@@ -263,7 +304,7 @@ def run_build_textbook_deck(cfg: AppConfig, options: BuildTextbookDeckOptions) -
 
     if options.max_notes and options.max_notes > 0:
         cards = cards[: options.max_notes]
-        candidates = candidates[: options.max_notes]
+        validated_candidates = validated_candidates[: options.max_notes]
 
     if not cards and not cfg.allow_empty_deck:
         raise build_error(
@@ -285,16 +326,28 @@ def run_build_textbook_deck(cfg: AppConfig, options: BuildTextbookDeckOptions) -
     save_intermediate = cfg.save_intermediate if options.save_intermediate is None else options.save_intermediate
     if save_intermediate:
         dump_json(run_ctx.run_dir / "document.json", document.model_dump(mode="json"))
+        (run_ctx.run_dir / "document.md").write_text(document.cleaned_text, encoding="utf-8")
         dump_jsonl(run_ctx.run_dir / "chunks.jsonl", [chunk.model_dump(mode="json") for chunk in chunks])
-        dump_jsonl(run_ctx.run_dir / "textbook_candidates.jsonl", candidates)
+        dump_candidate_artifacts(
+            run_dir=run_ctx.run_dir,
+            raw_candidates=raw_candidates,
+            validated_candidates=validated_candidates,
+        )
         dump_jsonl(run_ctx.run_dir / "cards.final.jsonl", [card.model_dump(mode="json") for card in cards])
-        if errors:
-            dump_jsonl(run_ctx.run_dir / "errors.jsonl", errors)
+        dump_jsonl(run_ctx.run_dir / "errors.jsonl", errors)
         dump_json(
             run_ctx.run_dir / "run_summary.json",
             {
                 "run_id": run_ctx.run_id,
                 "domain": "textbook",
+                "learning_mode": options.learning_mode,
+                "schema_name": "textbook_concepts_v1",
+                "models": {
+                    "candidate_extraction_model": "heuristic_local",
+                    "card_generation_model": "heuristic_local",
+                },
+                "raw_candidates": len(raw_candidates),
+                "validated_candidates": len(validated_candidates),
                 "cards": len(cards),
                 "errors": len(errors),
                 "output_path": str(output_path),

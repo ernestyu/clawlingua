@@ -11,9 +11,16 @@ from clawlearn_web import handlers_run
 from clawlearn_web.ui.tab_analytics import AnalyticsTabComponents
 
 
-def domain_visibility_flags(domain_val: Any) -> tuple[bool, bool]:
-    normalized = str(domain_val or "").strip().lower()
-    is_textbook = normalized == "textbook"
+def learning_mode_to_domain(learning_mode_val: Any) -> str:
+    normalized = str(learning_mode_val or "").strip().lower()
+    if normalized.startswith("textbook_"):
+        return "textbook"
+    return "lingua"
+
+
+def learning_mode_visibility_flags(learning_mode_val: Any) -> tuple[bool, bool]:
+    domain = learning_mode_to_domain(learning_mode_val)
+    is_textbook = domain == "textbook"
     return (not is_textbook, is_textbook)
 
 
@@ -22,7 +29,6 @@ class RunTabComponents:
     run_tab: Any
     input_file: Any
     deck_title: Any
-    domain: Any
     lingua_options_group: Any
     textbook_options_group: Any
     source_lang: Any
@@ -79,12 +85,21 @@ def build_tab(
                 )
             )
 
+        initial_learning_mode = str(
+            getattr(cfg, "learning_mode", "lingua_expression") or "lingua_expression"
+        ).strip().lower()
+        if initial_learning_mode not in {
+            "lingua_expression",
+            "lingua_reading",
+            "textbook_focus",
+            "textbook_review",
+        }:
+            initial_learning_mode = "lingua_expression"
+        show_lingua_options, show_textbook_options = learning_mode_visibility_flags(
+            initial_learning_mode
+        )
+
         with gr.Row():
-            domain = gr.Dropdown(
-                choices=["lingua", "textbook"],
-                value="lingua",
-                label=tr(initial_ui_lang, "Domain", "Domain"),
-            )
             source_lang = gr.Dropdown(
                 choices=["en", "zh", "ja", "de", "fr"],
                 value=cfg.default_source_lang,
@@ -95,8 +110,18 @@ def build_tab(
                 value=cfg.default_target_lang,
                 label=tr(initial_ui_lang, "Target language", "鐩爣璇█"),
             )
+            learning_mode = gr.Dropdown(
+                choices=[
+                    "lingua_expression",
+                    "lingua_reading",
+                    "textbook_focus",
+                    "textbook_review",
+                ],
+                value=initial_learning_mode,
+                label=tr(initial_ui_lang, "Learning mode", "瀛︿範妯″紡"),
+            )
 
-        with gr.Group(visible=True) as lingua_options_group:
+        with gr.Group(visible=show_lingua_options) as lingua_options_group:
             with gr.Row():
                 content_profile = gr.Dropdown(
                     choices=[
@@ -106,11 +131,6 @@ def build_tab(
                     ],
                     value=cfg.content_profile,
                     label=tr(initial_ui_lang, "Content profile", "鍐呭绫诲瀷"),
-                )
-                learning_mode = gr.Dropdown(
-                    choices=["expression_mining", "reading_support"],
-                    value=getattr(cfg, "learning_mode", "expression_mining"),
-                    label=tr(initial_ui_lang, "Learning mode", "瀛︿範妯″紡"),
                 )
                 difficulty = gr.Dropdown(
                     choices=["beginner", "intermediate", "advanced"],
@@ -148,7 +168,7 @@ def build_tab(
                     ),
                 )
 
-        with gr.Group(visible=False) as textbook_options_group:
+        with gr.Group(visible=show_textbook_options) as textbook_options_group:
             with gr.Row():
                 textbook_max_concepts_per_chunk = gr.Number(
                     label=tr(
@@ -218,6 +238,7 @@ def build_tab(
                 ),
                 value=cfg.cloze_min_chars,
                 precision=0,
+                visible=show_lingua_options,
             )
             chunk_max_chars = gr.Number(
                 label=tr(
@@ -301,7 +322,6 @@ def build_tab(
         run_tab=run_tab,
         input_file=input_file,
         deck_title=deck_title,
-        domain=domain,
         lingua_options_group=lingua_options_group,
         textbook_options_group=textbook_options_group,
         source_lang=source_lang,
@@ -339,8 +359,8 @@ def bind_events(
     ui_lang: Any,
     deps: handlers_run.RunDeps,
 ) -> None:
-    def _on_domain_change(domain_val: Any) -> tuple[Any, Any, Any]:
-        show_lingua, show_textbook = domain_visibility_flags(domain_val)
+    def _on_learning_mode_change(learning_mode_val: Any) -> tuple[Any, Any, Any]:
+        show_lingua, show_textbook = learning_mode_visibility_flags(learning_mode_val)
         return (
             gr.update(visible=show_lingua),
             gr.update(visible=show_textbook),
@@ -353,7 +373,6 @@ def bind_events(
     def _on_run(
         file_obj: Any,
         deck_title_val: Any,
-        domain_val: Any,
         src: Any,
         tgt: Any,
         profile: Any,
@@ -375,7 +394,6 @@ def bind_events(
         return handlers_run.on_run(
             file_obj,
             deck_title_val,
-            domain_val,
             src,
             tgt,
             profile,
@@ -396,9 +414,9 @@ def bind_events(
             deps=deps,
         )
 
-    components.domain.change(
-        _on_domain_change,
-        inputs=[components.domain],
+    components.learning_mode.change(
+        _on_learning_mode_change,
+        inputs=[components.learning_mode],
         outputs=[
             components.lingua_options_group,
             components.textbook_options_group,
@@ -437,7 +455,6 @@ def bind_events(
         inputs=[
             components.input_file,
             components.deck_title,
-            components.domain,
             components.source_lang,
             components.target_lang,
             components.content_profile,

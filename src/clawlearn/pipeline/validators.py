@@ -180,9 +180,9 @@ def _validate_expression_transfer(
     if "\n" in transfer:
         return _reject("format", "expression_transfer must be one short line")
     diff = (difficulty or "intermediate").strip().lower()
-    mode = (learning_mode or "expression_mining").strip().lower()
-    if mode == "reading_support" and len(transfer.split()) > 18:
-        return _reject("quality", "reading_support expression_transfer should stay concise")
+    mode = (learning_mode or "lingua_expression").strip().lower()
+    if mode == "lingua_reading" and len(transfer.split()) > 18:
+        return _reject("quality", "lingua_reading expression_transfer should stay concise")
     if diff == "beginner" and len(transfer) > 0 and len(transfer.split()) > 20:
         return _reject("difficulty", "beginner expression_transfer should stay lightweight")
     return True, ""
@@ -285,9 +285,9 @@ def _passes_difficulty(phrases: Iterable[str], *, difficulty: str, learning_mode
     min_score = min(scores)
 
     diff = (difficulty or "intermediate").strip().lower()
-    mode = (learning_mode or "expression_mining").strip().lower()
-    if mode == "reading_support":
-        # reading_support favors understandability over aggressiveness.
+    mode = (learning_mode or "lingua_expression").strip().lower()
+    if mode == "lingua_reading":
+        # lingua_reading favors understandability over aggressiveness.
         if diff == "beginner":
             return max_score >= -1.2
         if diff == "advanced":
@@ -327,16 +327,16 @@ def _passes_material_profile(
     learning_mode: str,
 ) -> tuple[bool, str]:
     profile = (material_profile or "prose_article").strip().lower()
-    mode = (learning_mode or "expression_mining").strip().lower()
+    mode = (learning_mode or "lingua_expression").strip().lower()
     if profile == "transcript_dialogue":
         if len(original) < 20:
             return _reject("context", "transcript candidate context is too short")
         # transcript cards should stay concise and conversational
-        transcript_max_sentences = 2 if mode == "reading_support" else 3
+        transcript_max_sentences = 2 if mode == "lingua_reading" else 3
         if count_sentences(text) > transcript_max_sentences:
             return _reject("difficulty", "transcript candidate has too many sentences")
     elif profile == "prose_article":
-        min_original_len = 24 if mode == "reading_support" else 28
+        min_original_len = 24 if mode == "lingua_reading" else 28
         if len(original) < min_original_len:
             return _reject("context", "prose candidate context is too short")
     return True, ""
@@ -349,7 +349,7 @@ def validate_text_candidate(
     min_chars: int = 0,
     difficulty: str = "intermediate",
     material_profile: str = "prose_article",
-    learning_mode: str = "expression_mining",
+    learning_mode: str = "lingua_expression",
 ) -> tuple[bool, str]:
     text = str(item.get("text", "")).strip()
     original = str(item.get("original", "")).strip()
@@ -435,11 +435,11 @@ def validate_text_candidate(
     )
     if not transfer_ok:
         diff = (difficulty or "").strip().lower()
-        mode = (learning_mode or "expression_mining").strip().lower()
+        mode = (learning_mode or "lingua_expression").strip().lower()
         if "duplicates note_hint" in transfer_reason or "duplicates target phrase" in transfer_reason:
             return transfer_ok, transfer_reason
-        if diff == "advanced" or mode == "reading_support":
-            # Advanced/reading-support can drop invalid transfer hints instead of
+        if diff == "advanced" or mode == "lingua_reading":
+            # Advanced/lingua_reading can drop invalid transfer hints instead of
             # rejecting an otherwise useful card.
             item["expression_transfer"] = ""
         else:
@@ -458,7 +458,7 @@ def validate_text_candidate(
     if (difficulty or "").strip().lower() == "advanced" and _ADVANCED_LOW_VALUE_RE.search(text):
         return _reject("quality", "advanced candidate contains low-value expression")
 
-    mode = (learning_mode or "expression_mining").strip().lower()
+    mode = (learning_mode or "lingua_expression").strip().lower()
     phrases_for_difficulty = target_phrases or cloze_phrases
     if not _passes_difficulty(
         phrases_for_difficulty,
@@ -467,19 +467,19 @@ def validate_text_candidate(
     ):
         return _reject("difficulty", f"candidate does not match {difficulty} difficulty")
 
-    if mode == "reading_support":
+    if mode == "lingua_reading":
         cloze_count = len(cloze_phrases)
         if cloze_count > 2:
-            return _reject("difficulty", "reading_support candidate has too many clozes")
+            return _reject("difficulty", "lingua_reading candidate has too many clozes")
         if len(target_phrases) > 2:
-            return _reject("difficulty", "reading_support target_phrases should be 1-2 key items")
+            return _reject("difficulty", "lingua_reading target_phrases should be 1-2 key items")
         if material_profile == "transcript_dialogue" and count_sentences(text) > 2:
-            return _reject("difficulty", "reading_support transcript candidate should stay compact")
+            return _reject("difficulty", "lingua_reading transcript candidate should stay compact")
         if len(original) > 420:
-            return _reject("context", "reading_support candidate context is too long")
+            return _reject("context", "lingua_reading candidate context is too long")
 
     diff = (difficulty or "").strip().lower()
-    if diff == "advanced" and mode != "reading_support":
+    if diff == "advanced" and mode != "lingua_reading":
         if phrase_types and not any(pt in HIGH_VALUE_ADVANCED_TYPES for pt in phrase_types):
             phrase_scores = [_phrase_score(p) for p in phrases_for_difficulty]
             if max(phrase_scores or [-10.0]) < 1.2:

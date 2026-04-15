@@ -4,7 +4,7 @@
   "description": "Phrase extraction prompt for expression_mining_v2 pipeline.",
   "mode": "extraction",
   "content_type": "all",
-  "learning_mode": "expression_mining_v2",
+  "learning_mode": "lingua_expression",
   "difficulty_level": "all",
   "system_prompt": {
     "en": "You are a language-learning phrase extractor. Return JSON arrays only.",

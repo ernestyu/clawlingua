@@ -26,6 +26,6 @@
     "expect_json_array": true
   },
   "content_type": "transcript_dialogue",
-  "learning_mode": "reading_support",
+  "learning_mode": "lingua_reading",
   "difficulty_level": "beginner"
 }

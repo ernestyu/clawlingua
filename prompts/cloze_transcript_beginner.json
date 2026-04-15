@@ -26,6 +26,6 @@
     "expect_json_array": true
   },
   "content_type": "transcript_dialogue",
-  "learning_mode": "expression_mining",
+  "learning_mode": "lingua_expression",
   "difficulty_level": "beginner"
 }

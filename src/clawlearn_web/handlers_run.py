@@ -43,7 +43,6 @@ class RunServiceDeps:
 def run_single_build(
     uploaded_file: Any,
     deck_title: str,
-    domain: str,
     source_lang: str,
     target_lang: str,
     content_profile: str,
@@ -87,13 +86,14 @@ def run_single_build(
 
     source_lang_value = source_lang or cfg.default_source_lang
     target_lang_value = target_lang or cfg.default_target_lang
-    domain_value = (domain or "lingua").strip().lower()
-    if domain_value not in {"lingua", "textbook"}:
+    learning_mode_value = str(learning_mode or cfg.learning_mode or "").strip().lower()
+    if learning_mode_value.startswith("textbook_"):
+        domain_value = "textbook"
+    else:
         domain_value = "lingua"
     profile_value = (
         content_profile or getattr(cfg, "material_profile", None) or cfg.content_profile
     )
-    learning_mode_value = learning_mode or cfg.learning_mode
     title_value = (deck_title or "").strip() or local_input.stem
     run_history.record_run_start(
         summary_path,
@@ -119,6 +119,7 @@ def run_single_build(
                 run_id=run_id,
                 source_lang=source_lang or None,
                 target_lang=target_lang or None,
+                learning_mode=learning_mode_value or None,
                 input_char_limit=input_char_limit,
                 deck_name=deck_title or None,
                 max_chars=chunk_max_chars,
@@ -137,7 +138,7 @@ def run_single_build(
                 target_lang=target_lang or None,
                 content_profile=content_profile or None,
                 material_profile=content_profile or None,
-                learning_mode=learning_mode or None,
+                learning_mode=learning_mode_value or None,
                 input_char_limit=input_char_limit,
                 deck_name=deck_title or None,
                 max_chars=chunk_max_chars,
@@ -199,7 +200,6 @@ def on_run_start(ui_lang_val: str, *, deps: RunDeps) -> tuple[str, None]:
 def on_run(
     file_obj: Any,
     deck_title_val: Any,
-    domain_val: Any,
     src: Any,
     tgt: Any,
     profile: Any,
@@ -224,7 +224,6 @@ def on_run(
     result = deps.run_single_build(
         uploaded_file=file_obj,
         deck_title=deck_title_val or "",
-        domain=domain_val or "lingua",
         source_lang=src,
         target_lang=tgt,
         content_profile=profile,

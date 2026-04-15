@@ -21,4 +21,6 @@ SUPPORTED_INPUT_TYPES = {"file"}
 # Legacy alias "general" maps to "prose_article".
 SUPPORTED_MATERIAL_PROFILES = {"general", "prose_article", "transcript_dialogue", "textbook_examples"}
 SUPPORTED_CONTENT_PROFILES = SUPPORTED_MATERIAL_PROFILES
-SUPPORTED_LEARNING_MODES = {"expression_mining", "expression_mining_v2", "reading_support"}
+SUPPORTED_LINGUA_LEARNING_MODES = {"lingua_expression", "lingua_reading"}
+SUPPORTED_TEXTBOOK_LEARNING_MODES = {"textbook_focus", "textbook_review"}
+SUPPORTED_LEARNING_MODES = SUPPORTED_LINGUA_LEARNING_MODES | SUPPORTED_TEXTBOOK_LEARNING_MODES

@@ -11,7 +11,11 @@ from typing import Any
 import httpx
 import typer
 
-from .constants import SUPPORTED_LEARNING_MODES, SUPPORTED_MATERIAL_PROFILES
+from .constants import (
+    SUPPORTED_LINGUA_LEARNING_MODES,
+    SUPPORTED_MATERIAL_PROFILES,
+    SUPPORTED_TEXTBOOK_LEARNING_MODES,
+)
 from .config import load_config, validate_base_config, validate_runtime_config
 from .errors import ClawLearnError, build_error, format_error
 from .exit_codes import ExitCode
@@ -331,7 +335,7 @@ def lingua_build_deck(
     learning_mode: str | None = typer.Option(
         None,
         "--learning-mode",
-        help="Learning mode override: expression_mining|expression_mining_v2|reading_support.",
+        help="Learning mode override: lingua_expression|lingua_reading.",
     ),
     content_profile: str | None = typer.Option(
         None,
@@ -408,8 +412,8 @@ def lingua_build_deck(
                 next_steps=[f"Use one of: {allowed}"],
                 exit_code=ExitCode.ARGUMENT_ERROR,
             )
-        if learning_mode is not None and learning_mode.strip().lower() not in SUPPORTED_LEARNING_MODES:
-            allowed = ",".join(sorted(SUPPORTED_LEARNING_MODES))
+        if learning_mode is not None and learning_mode.strip().lower() not in SUPPORTED_LINGUA_LEARNING_MODES:
+            allowed = ",".join(sorted(SUPPORTED_LINGUA_LEARNING_MODES))
             raise build_error(
                 error_code="ARG_LEARNING_MODE_INVALID",
                 cause="learning-mode value is invalid.",
@@ -466,6 +470,11 @@ def textbook_build_deck(
     output: Path | None = typer.Option(None, "--output", help="Output .apkg path."),
     deck_name: str | None = typer.Option(None, "--deck-name", help="Deck name override."),
     max_chars: int | None = typer.Option(None, "--max-chars", help="Chunk max chars."),
+    learning_mode: str | None = typer.Option(
+        None,
+        "--learning-mode",
+        help="Learning mode override: textbook_focus|textbook_review.",
+    ),
     max_notes: int | None = typer.Option(None, "--max-notes", help="Max notes to export."),
     save_intermediate: bool | None = typer.Option(None, "--save-intermediate/--no-save-intermediate"),
     continue_on_error: bool = typer.Option(False, "--continue-on-error"),
@@ -475,6 +484,16 @@ def textbook_build_deck(
     def _impl() -> None:
         cfg = load_config(env_file=env_file)
         setup_logging(cfg.log_level if not verbose else "DEBUG", log_dir=cfg.log_dir)
+        mode = (learning_mode or "textbook_focus").strip().lower()
+        if mode not in SUPPORTED_TEXTBOOK_LEARNING_MODES:
+            allowed = ",".join(sorted(SUPPORTED_TEXTBOOK_LEARNING_MODES))
+            raise build_error(
+                error_code="ARG_LEARNING_MODE_INVALID",
+                cause="learning-mode value is invalid.",
+                detail=f"learning_mode={learning_mode!r}",
+                next_steps=[f"Use one of: {allowed}"],
+                exit_code=ExitCode.ARGUMENT_ERROR,
+            )
         if input_char_limit is not None and input_char_limit <= 0:
             raise build_error(
                 error_code="ARG_INPUT_CHAR_LIMIT_INVALID",
@@ -493,6 +512,7 @@ def textbook_build_deck(
                 output=output,
                 deck_name=deck_name,
                 max_chars=max_chars,
+                learning_mode=mode,
                 max_notes=max_notes,
                 save_intermediate=save_intermediate,
                 continue_on_error=continue_on_error,

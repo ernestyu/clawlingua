@@ -146,10 +146,10 @@ def _resolve_expression_transfer(
 ) -> str:
     raw = normalize_expression_transfer(item.get("expression_transfer", ""))
     diff = (difficulty or "intermediate").strip().lower()
-    mode = (learning_mode or "expression_mining").strip().lower()
+    mode = (learning_mode or "lingua_expression").strip().lower()
     if raw:
         return raw
-    if mode == "reading_support":
+    if mode == "lingua_reading":
         return ""
     if diff == "beginner" or not phrase_types:
         return ""
@@ -267,7 +267,7 @@ def score_candidate(
     *,
     difficulty: str,
     material_profile: str,
-    learning_mode: str = "expression_mining",
+    learning_mode: str = "lingua_expression",
 ) -> tuple[float, list[str], list[str], str, dict[str, list[str]]]:
     text = str(item.get("text", "")).strip()
     original = str(item.get("original", "")).strip()
@@ -287,7 +287,7 @@ def score_candidate(
         difficulty=difficulty,
         learning_mode=learning_mode,
     )
-    mode = (learning_mode or "expression_mining").strip().lower()
+    mode = (learning_mode or "lingua_expression").strip().lower()
 
     score = 0.0
     reasons: list[str] = []
@@ -303,7 +303,7 @@ def score_candidate(
         reasons.append("context_short")
 
     sentence_count = count_sentences(text)
-    sentence_limit = 2 if mode == "reading_support" else 3
+    sentence_limit = 2 if mode == "lingua_reading" else 3
     if sentence_count <= sentence_limit:
         score += 0.6
     else:
@@ -327,7 +327,7 @@ def score_candidate(
 
     for ptype in phrase_types:
         type_weight = phrase_type_weight(label=ptype, difficulty=difficulty)
-        if mode == "reading_support":
+        if mode == "lingua_reading":
             type_weight *= 0.35
         score += type_weight
     if pattern_reasons:
@@ -337,15 +337,15 @@ def score_candidate(
 
     diff = (difficulty or "intermediate").strip().lower()
     high_value_count = len([ptype for ptype in phrase_types if ptype in HIGH_VALUE_ADVANCED_TYPES])
-    if mode == "reading_support":
-        # reading_support: prioritize readability and discourse continuity.
+    if mode == "lingua_reading":
+        # lingua_reading: prioritize readability and discourse continuity.
         if sentence_count > 2:
             score -= 0.8
-            reasons.append("reading_support_too_many_sentences")
+            reasons.append("lingua_reading_too_many_sentences")
         cloze_count = text.count("{{c")
         if cloze_count > 2:
             score -= 1.0
-            reasons.append("reading_support_too_many_clozes")
+            reasons.append("lingua_reading_too_many_clozes")
         discourse_help = len(
             [
                 p
@@ -355,10 +355,10 @@ def score_candidate(
         )
         if discourse_help:
             score += 0.9 + 0.2 * (discourse_help - 1)
-            reasons.append("reading_support_discourse_help")
+            reasons.append("lingua_reading_discourse_help")
         if high_value_count and diff == "advanced":
             score += 0.25
-            reasons.append("reading_support_advanced_signal")
+            reasons.append("lingua_reading_advanced_signal")
         if expression_transfer:
             score += 0.1
             reasons.append("transfer_optional")
@@ -388,7 +388,7 @@ def rank_candidates(
     *,
     difficulty: str,
     material_profile: str,
-    learning_mode: str = "expression_mining",
+    learning_mode: str = "lingua_expression",
 ) -> list[dict[str, Any]]:
     ranked: list[dict[str, Any]] = []
     for item in items:

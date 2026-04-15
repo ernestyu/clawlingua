@@ -35,6 +35,15 @@ def _read_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _read_candidates_stage(run_dir: Path, *, stage: str) -> list[dict[str, Any]]:
+    stage_name = "validated" if stage == "validated" else "raw"
+    primary = run_dir / f"candidates.{stage_name}.jsonl"
+    if primary.exists():
+        return _read_jsonl_dicts(primary)
+    legacy = run_dir / f"text_candidates.{stage_name}.jsonl"
+    return _read_jsonl_dicts(legacy)
+
+
 def _bar(value: float, max_value: float, *, width: int = 18) -> str:
     if max_value <= 0:
         return "." * width
@@ -82,8 +91,8 @@ def _run_analysis_payload(run_id: str | None, cfg: Any) -> dict[str, Any]:
     if not isinstance(metrics, dict):
         metrics = {}
 
-    selected_candidates = _read_jsonl_dicts(run_dir / "text_candidates.validated.jsonl")
-    raw_candidates = _read_jsonl_dicts(run_dir / "text_candidates.raw.jsonl")
+    selected_candidates = _read_candidates_stage(run_dir, stage="validated")
+    raw_candidates = _read_candidates_stage(run_dir, stage="raw")
     cards = _read_jsonl_dicts(run_dir / "cards.final.jsonl")
     errors = _read_jsonl_dicts(run_dir / "errors.jsonl")
     chunks = _read_jsonl_dicts(run_dir / "chunks.jsonl")
@@ -257,7 +266,7 @@ def build_run_analysis(
 
     learning_mode = _as_str(
         summary.get("learning_mode"),
-        default=_as_str(metrics.get("learning_mode"), default="expression_mining"),
+        default=_as_str(metrics.get("learning_mode"), default="lingua_expression"),
     )
     material_profile = _as_str(
         summary.get("material_profile"),

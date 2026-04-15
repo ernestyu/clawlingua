@@ -25,6 +25,6 @@
     "expect_json_array": true
   },
   "content_type": "textbook_examples",
-  "learning_mode": "expression_mining",
+  "learning_mode": "textbook_focus",
   "difficulty_level": "all"
 }

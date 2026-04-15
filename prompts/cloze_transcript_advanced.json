@@ -4,7 +4,7 @@
   "description": "Advanced expression mining for transcript/dialogue style text.",
   "mode": "extraction",
   "content_type": "transcript_dialogue",
-  "learning_mode": "expression_mining",
+  "learning_mode": "lingua_expression",
   "difficulty_level": "advanced",
   "target_langs_supported": "zh",
   "source_langs_suggested": "en",

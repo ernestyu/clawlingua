@@ -108,12 +108,12 @@ def build_interface() -> gr.Blocks:
         cfg.resolve_extract_prompt_path(
             material_profile=cfg.material_profile,
             difficulty=cfg.cloze_difficulty,
-            learning_mode=getattr(cfg, "learning_mode", "expression_mining"),
+            learning_mode=getattr(cfg, "learning_mode", "lingua_expression"),
         )
         cfg.resolve_explain_prompt_path(
             material_profile=cfg.material_profile,
             difficulty=cfg.cloze_difficulty,
-            learning_mode=getattr(cfg, "learning_mode", "expression_mining"),
+            learning_mode=getattr(cfg, "learning_mode", "lingua_expression"),
         )
     except Exception:
         logger.warning("prompt auto-seed during web startup failed", exc_info=True)
@@ -136,7 +136,7 @@ def build_interface() -> gr.Blocks:
     initial_ui_lang = _normalize_ui_lang(getattr(cfg, "prompt_lang", "en"))
     initial_run_content_type = prompt_io.normalize_prompt_content_type(cfg.content_profile)
     initial_run_learning_mode = prompt_io.normalize_prompt_learning_mode(
-        getattr(cfg, "learning_mode", "expression_mining")
+        getattr(cfg, "learning_mode", "lingua_expression")
     )
     initial_run_difficulty = prompt_io.normalize_prompt_difficulty(cfg.cloze_difficulty)
 
