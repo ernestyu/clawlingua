@@ -444,6 +444,37 @@ def build_run_analysis(
         )
         else {}
     )
+    secondary_metrics = (
+        metrics.get("secondary_extraction")
+        if isinstance(metrics.get("secondary_extraction"), dict)
+        else {}
+    )
+    secondary_enabled = bool(secondary_metrics.get("enabled", False))
+    secondary_requested = bool(secondary_metrics.get("requested", False))
+    secondary_model = _as_str(secondary_metrics.get("secondary_model"))
+    secondary_primary_count = _as_int(
+        secondary_metrics.get("candidates_primary_count"),
+        default=0,
+    )
+    secondary_count = _as_int(
+        secondary_metrics.get("candidates_secondary_count"),
+        default=0,
+    )
+    secondary_merged_count = _as_int(
+        secondary_metrics.get("candidates_merged_count"),
+        default=0,
+    )
+    secondary_dedup_removed = _as_int(
+        secondary_metrics.get("dedup_removed_count"),
+        default=0,
+    )
+    secondary_unique_gain = _as_int(
+        secondary_metrics.get("unique_phrase_gain_from_secondary"),
+        default=0,
+    )
+    secondary_error_type = _as_str(secondary_metrics.get("secondary_error_type"))
+    secondary_error_message = _as_str(secondary_metrics.get("secondary_error_message"))
+    secondary_fallback = bool(secondary_metrics.get("fallback_to_primary", False))
 
     lines = [
         f"### {tr(lang, 'Run analytics', 'Run analytics')}",
@@ -460,7 +491,19 @@ def build_run_analysis(
         f"- {tr(lang, 'Avg selected per chunk', 'Avg selected per chunk')}: **{avg_selected_per_chunk:.2f}**",
         f"- {tr(lang, 'Filtered selected items', 'Filtered selected items')}: **{len(filtered_selected)}**",
         f"- {tr(lang, 'Filtered rejected items', 'Filtered rejected items')}: **{len(filtered_rejected)}**",
+        f"- {tr(lang, 'Secondary extraction requested', 'Secondary extraction requested')}: **{secondary_requested}**",
+        f"- {tr(lang, 'Secondary extraction enabled', 'Secondary extraction enabled')}: **{secondary_enabled}**",
+        f"- {tr(lang, 'Secondary extraction model', 'Secondary extraction model')}: `{secondary_model or '-'}`",
+        f"- {tr(lang, 'Secondary candidates (primary/secondary/merged)', 'Secondary candidates (primary/secondary/merged)')}: **{secondary_primary_count}/{secondary_count}/{secondary_merged_count}**",
+        f"- {tr(lang, 'Secondary dedup removed', 'Secondary dedup removed')}: **{secondary_dedup_removed}**",
+        f"- {tr(lang, 'Secondary unique phrase gain', 'Secondary unique phrase gain')}: **{secondary_unique_gain}**",
+        f"- {tr(lang, 'Secondary fallback to primary', 'Secondary fallback to primary')}: **{secondary_fallback}**",
     ]
+    if secondary_error_type or secondary_error_message:
+        lines.append(
+            f"- {tr(lang, 'Secondary error', 'Secondary error')}: "
+            f"`{secondary_error_type or 'other'}` {secondary_error_message}"
+        )
     if truncated_files:
         lines.append(
             f"- {tr(lang, 'Samples truncated', 'Samples truncated')}: "

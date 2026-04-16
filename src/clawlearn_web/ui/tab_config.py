@@ -25,6 +25,16 @@ class ConfigTabComponents:
     llm_list_models_btn: Any
     llm_test_btn: Any
     llm_status: Any
+    secondary_extract_accordion: Any
+    secondary_extract_enable_env: Any
+    secondary_extract_base_url: Any
+    secondary_extract_api_key: Any
+    secondary_extract_model: Any
+    secondary_extract_timeout: Any
+    secondary_extract_temperature: Any
+    secondary_extract_max_retries: Any
+    secondary_extract_retry_backoff: Any
+    secondary_extract_chunk_batch_size: Any
     translate_accordion: Any
     translate_base_url: Any
     translate_api_key: Any
@@ -157,6 +167,68 @@ def build_tab(
                     "Extraction LLM status",
                     "Extraction LLM status",
                 )
+            )
+
+        with gr.Accordion(
+            tr(initial_ui_lang, "Secondary Extraction LLM", "Secondary Extraction LLM"),
+            open=False,
+        ) as secondary_extract_accordion:
+            secondary_extract_enable_env = gr.Textbox(
+                label="CLAWLEARN_SECONDARY_EXTRACT_ENABLE",
+                value=cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_ENABLE", "false"),
+                info=tr(
+                    initial_ui_lang,
+                    "Enable optional second-pass phrase extraction.",
+                    "Enable optional second-pass phrase extraction.",
+                ),
+            )
+            secondary_extract_base_url = gr.Textbox(
+                label="CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL",
+                value=cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL", ""),
+                info=tr(
+                    initial_ui_lang,
+                    "Optional base URL for secondary extraction model. Empty uses primary.",
+                    "Optional base URL for secondary extraction model. Empty uses primary.",
+                ),
+            )
+            secondary_extract_api_key = gr.Textbox(
+                label="CLAWLEARN_SECONDARY_EXTRACT_LLM_API_KEY",
+                value=cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_API_KEY", ""),
+                type="password",
+                info=tr(
+                    initial_ui_lang,
+                    "Optional API key for secondary extraction model. Empty uses primary.",
+                    "Optional API key for secondary extraction model. Empty uses primary.",
+                ),
+            )
+            secondary_extract_model = gr.Textbox(
+                label="CLAWLEARN_SECONDARY_EXTRACT_LLM_MODEL",
+                value=cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_MODEL", ""),
+                info=tr(
+                    initial_ui_lang,
+                    "Model name for secondary extraction. Empty disables secondary pass.",
+                    "Model name for secondary extraction. Empty disables secondary pass.",
+                ),
+            )
+            secondary_extract_timeout = gr.Textbox(
+                label="CLAWLEARN_SECONDARY_EXTRACT_LLM_TIMEOUT_SECONDS",
+                value=cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_TIMEOUT_SECONDS", ""),
+            )
+            secondary_extract_temperature = gr.Textbox(
+                label="CLAWLEARN_SECONDARY_EXTRACT_LLM_TEMPERATURE",
+                value=cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_TEMPERATURE", ""),
+            )
+            secondary_extract_max_retries = gr.Textbox(
+                label="CLAWLEARN_SECONDARY_EXTRACT_LLM_MAX_RETRIES",
+                value=cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_MAX_RETRIES", ""),
+            )
+            secondary_extract_retry_backoff = gr.Textbox(
+                label="CLAWLEARN_SECONDARY_EXTRACT_LLM_RETRY_BACKOFF_SECONDS",
+                value=cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_RETRY_BACKOFF_SECONDS", ""),
+            )
+            secondary_extract_chunk_batch_size = gr.Textbox(
+                label="CLAWLEARN_SECONDARY_EXTRACT_LLM_CHUNK_BATCH_SIZE",
+                value=cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_CHUNK_BATCH_SIZE", ""),
             )
 
         with gr.Accordion(
@@ -412,6 +484,16 @@ def build_tab(
         llm_list_models_btn=llm_list_models_btn,
         llm_test_btn=llm_test_btn,
         llm_status=llm_status,
+        secondary_extract_accordion=secondary_extract_accordion,
+        secondary_extract_enable_env=secondary_extract_enable_env,
+        secondary_extract_base_url=secondary_extract_base_url,
+        secondary_extract_api_key=secondary_extract_api_key,
+        secondary_extract_model=secondary_extract_model,
+        secondary_extract_timeout=secondary_extract_timeout,
+        secondary_extract_temperature=secondary_extract_temperature,
+        secondary_extract_max_retries=secondary_extract_max_retries,
+        secondary_extract_retry_backoff=secondary_extract_retry_backoff,
+        secondary_extract_chunk_batch_size=secondary_extract_chunk_batch_size,
         translate_accordion=translate_accordion,
         translate_base_url=translate_base_url,
         translate_api_key=translate_api_key,
@@ -492,6 +574,15 @@ def bind_events(
         components.tts_voice2_env,
         components.tts_voice3_env,
         components.tts_voice4_env,
+        components.secondary_extract_enable_env,
+        components.secondary_extract_base_url,
+        components.secondary_extract_api_key,
+        components.secondary_extract_model,
+        components.secondary_extract_timeout,
+        components.secondary_extract_temperature,
+        components.secondary_extract_max_retries,
+        components.secondary_extract_retry_backoff,
+        components.secondary_extract_chunk_batch_size,
     ]
 
     def _on_list_models(base_url: str, api_key: str, timeout_raw: Any, ui_lang_val: str) -> str:
@@ -577,6 +668,15 @@ def bind_events(
         tts_voice2_val: str,
         tts_voice3_val: str,
         tts_voice4_val: str,
+        secondary_extract_enable_val: str,
+        secondary_extract_base_url_val: str,
+        secondary_extract_api_key_val: str,
+        secondary_extract_model_val: str,
+        secondary_extract_timeout_val: str,
+        secondary_extract_temperature_val: str,
+        secondary_extract_max_retries_val: str,
+        secondary_extract_retry_backoff_val: str,
+        secondary_extract_chunk_batch_size_val: str,
         ui_lang_val: str,
     ) -> tuple[str, ...]:
         return handlers_config.on_load_defaults(
@@ -613,6 +713,15 @@ def bind_events(
             tts_voice2_val,
             tts_voice3_val,
             tts_voice4_val,
+            secondary_extract_enable_val,
+            secondary_extract_base_url_val,
+            secondary_extract_api_key_val,
+            secondary_extract_model_val,
+            secondary_extract_timeout_val,
+            secondary_extract_temperature_val,
+            secondary_extract_max_retries_val,
+            secondary_extract_retry_backoff_val,
+            secondary_extract_chunk_batch_size_val,
             ui_lang_val,
             deps=deps,
         )
@@ -653,6 +762,15 @@ def bind_events(
             components.tts_voice2_env,
             components.tts_voice3_env,
             components.tts_voice4_env,
+            components.secondary_extract_enable_env,
+            components.secondary_extract_base_url,
+            components.secondary_extract_api_key,
+            components.secondary_extract_model,
+            components.secondary_extract_timeout,
+            components.secondary_extract_temperature,
+            components.secondary_extract_max_retries,
+            components.secondary_extract_retry_backoff,
+            components.secondary_extract_chunk_batch_size,
             ui_lang,
         ],
         outputs=config_value_outputs + [components.save_config_status],
@@ -692,6 +810,15 @@ def bind_events(
         tts_voice2_val: Any,
         tts_voice3_val: Any,
         tts_voice4_val: Any,
+        secondary_extract_enable_val: Any,
+        secondary_extract_base_url_val: Any,
+        secondary_extract_api_key_val: Any,
+        secondary_extract_model_val: Any,
+        secondary_extract_timeout_val: Any,
+        secondary_extract_temperature_val: Any,
+        secondary_extract_max_retries_val: Any,
+        secondary_extract_retry_backoff_val: Any,
+        secondary_extract_chunk_batch_size_val: Any,
         ui_lang_val: Any,
     ) -> tuple[str, ...]:
         return handlers_config.on_save_config(
@@ -728,6 +855,15 @@ def bind_events(
             tts_voice2_val,
             tts_voice3_val,
             tts_voice4_val,
+            secondary_extract_enable_val,
+            secondary_extract_base_url_val,
+            secondary_extract_api_key_val,
+            secondary_extract_model_val,
+            secondary_extract_timeout_val,
+            secondary_extract_temperature_val,
+            secondary_extract_max_retries_val,
+            secondary_extract_retry_backoff_val,
+            secondary_extract_chunk_batch_size_val,
             ui_lang_val,
             deps=deps,
         )
@@ -778,6 +914,15 @@ def bind_events(
             components.tts_voice2_env,
             components.tts_voice3_env,
             components.tts_voice4_env,
+            components.secondary_extract_enable_env,
+            components.secondary_extract_base_url,
+            components.secondary_extract_api_key,
+            components.secondary_extract_model,
+            components.secondary_extract_timeout,
+            components.secondary_extract_temperature,
+            components.secondary_extract_max_retries,
+            components.secondary_extract_retry_backoff,
+            components.secondary_extract_chunk_batch_size,
             ui_lang,
         ],
         outputs=config_value_outputs + [components.save_config_status],

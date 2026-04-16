@@ -239,6 +239,16 @@ class AppConfig(BaseModel):
     cloze_max_per_chunk: int | None = None
     # LLM chunk-level batch size; 1 means per-chunk requests.
     llm_chunk_batch_size: int = 1
+    # Optional second-pass extraction model settings.
+    secondary_extract_enable: bool = False
+    secondary_extract_llm_base_url: str | None = None
+    secondary_extract_llm_api_key: str | None = None
+    secondary_extract_llm_model: str | None = None
+    secondary_extract_llm_timeout_seconds: int | None = Field(default=None, ge=1)
+    secondary_extract_llm_temperature: float | None = None
+    secondary_extract_llm_max_retries: int | None = Field(default=None, ge=1)
+    secondary_extract_llm_retry_backoff_seconds: float | None = Field(default=None, ge=0.0)
+    secondary_extract_llm_chunk_batch_size: int | None = Field(default=None, ge=1)
     # Format-only validation retry controls.
     validate_format_retry_enable: bool = True
     # Retry attempts after initial validation failure.
@@ -825,6 +835,39 @@ def load_config(
         "cloze_difficulty": _env_value(merged.get("CLAWLEARN_CLOZE_DIFFICULTY"), "intermediate"),
         "cloze_max_per_chunk": _env_value(merged.get("CLAWLEARN_CLOZE_MAX_PER_CHUNK"), None),
         "llm_chunk_batch_size": _env_value(merged.get("CLAWLEARN_LLM_CHUNK_BATCH_SIZE"), 1),
+        "secondary_extract_enable": _env_value(merged.get("CLAWLEARN_SECONDARY_EXTRACT_ENABLE"), False),
+        "secondary_extract_llm_base_url": _env_value(
+            merged.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL"),
+            None,
+        ),
+        "secondary_extract_llm_api_key": _env_value(
+            merged.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_API_KEY"),
+            None,
+        ),
+        "secondary_extract_llm_model": _env_value(
+            merged.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_MODEL"),
+            None,
+        ),
+        "secondary_extract_llm_timeout_seconds": _env_value(
+            merged.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_TIMEOUT_SECONDS"),
+            None,
+        ),
+        "secondary_extract_llm_temperature": _env_value(
+            merged.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_TEMPERATURE"),
+            None,
+        ),
+        "secondary_extract_llm_max_retries": _env_value(
+            merged.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_MAX_RETRIES"),
+            None,
+        ),
+        "secondary_extract_llm_retry_backoff_seconds": _env_value(
+            merged.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_RETRY_BACKOFF_SECONDS"),
+            None,
+        ),
+        "secondary_extract_llm_chunk_batch_size": _env_value(
+            merged.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_CHUNK_BATCH_SIZE"),
+            None,
+        ),
         "validate_format_retry_enable": _env_value(merged.get("CLAWLEARN_VALIDATE_FORMAT_RETRY_ENABLE"), True),
         "validate_format_retry_max": _env_value(merged.get("CLAWLEARN_VALIDATE_FORMAT_RETRY_MAX"), 3),
         "validate_format_retry_llm_enable": _env_value(

@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
@@ -89,6 +89,28 @@ _CONTEXT_EXPAND_MAX_SENTENCE_CHARS = 360
 _CONTEXT_SUBSTRING_MATCH_MIN_CHARS = 24
 _CONTEXT_LEADING_CONNECTOR_RE = re.compile(r"^(?:and|but|so|then)\s+", re.IGNORECASE)
 _EMPTY_RAW_CANDIDATE_RATIO_GUARD = 0.95
+_SECONDARY_CONTEXT_OVERLAP_MIN = 0.6
+_SECONDARY_CONTEXT_TOKEN_RE = re.compile(r"[a-z0-9']+")
+_SECONDARY_CONTEXT_STOPWORDS = {
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "to",
+    "of",
+    "in",
+    "on",
+    "for",
+    "with",
+    "that",
+    "this",
+    "it",
+    "is",
+    "are",
+    "was",
+    "were",
+}
 
 
 def _empty_phrase_filter_stats(*, enabled: bool, source_lang: str, language: str = "") -> dict[str, Any]:
@@ -208,6 +230,7 @@ class PhraseCandidate:
     learning_value_score: float | None = None
     expression_transfer: str | None = None
     chunk_text: str | None = None
+    extract_sources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -220,6 +243,7 @@ class ClozeUnit:
     expression_transfer: str | None = None
     learning_value_score: float | None = None
     chunk_text: str | None = None
+    extract_sources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -245,6 +269,7 @@ class BuildDeckOptions:
     content_profile: str | None = None
     save_intermediate: bool | None = None
     continue_on_error: bool = False
+    secondary_extract_enable: bool | None = None
 
 
 @dataclass
@@ -280,6 +305,11 @@ def _normalize_phrase_candidate_item(item: dict[str, Any]) -> PhraseCandidate | 
     phrase_types = normalize_phrase_types(item.get("phrase_types"), max_items=2)
     expression_transfer = str(item.get("expression_transfer") or "").strip() or None
     chunk_text = str(item.get("chunk_text") or "").strip() or None
+    extract_sources = [
+        str(source).strip()
+        for source in (item.get("extract_sources") or [])
+        if str(source).strip()
+    ]
     return PhraseCandidate(
         chunk_id=chunk_id,
         sentence_text=sentence_text,
@@ -289,6 +319,7 @@ def _normalize_phrase_candidate_item(item: dict[str, Any]) -> PhraseCandidate | 
         learning_value_score=_coerce_learning_value_score(item.get("learning_value_score")),
         expression_transfer=expression_transfer,
         chunk_text=chunk_text,
+        extract_sources=extract_sources,
     )
 
 
@@ -336,6 +367,7 @@ def _select_non_overlapping_spans(
                 "reason": candidate.reason or "",
                 "learning_value_score": candidate.learning_value_score,
                 "expression_transfer": candidate.expression_transfer or "",
+                "extract_sources": list(candidate.extract_sources or []),
             }
         )
     if not spans:
@@ -454,6 +486,13 @@ def _build_cloze_units_from_phrases(
         scores = [span.get("learning_value_score") for span in spans if isinstance(span.get("learning_value_score"), float)]
         learning_value_score = (sum(scores) / len(scores)) if scores else None
         chunk_text = next((c.chunk_text for c in group if c.chunk_text), None)
+        extract_sources: list[str] = []
+        for span in spans:
+            for source in (span.get("extract_sources") or []):
+                source_text = str(source).strip()
+                if not source_text or source_text in extract_sources:
+                    continue
+                extract_sources.append(source_text)
         units.append(
             ClozeUnit(
                 chunk_id=chunk_id,
@@ -464,6 +503,7 @@ def _build_cloze_units_from_phrases(
                 expression_transfer=expression_transfer or None,
                 learning_value_score=learning_value_score,
                 chunk_text=chunk_text,
+                extract_sources=extract_sources,
             )
         )
     return units, phrase_filter_stats
@@ -484,6 +524,8 @@ def _cloze_unit_to_candidate(unit: ClozeUnit) -> dict[str, Any]:
         candidate["learning_value_score"] = unit.learning_value_score
     if unit.chunk_text:
         candidate["chunk_text"] = unit.chunk_text
+    if unit.extract_sources:
+        candidate["extract_sources"] = list(unit.extract_sources)
     return candidate
 
 
@@ -949,6 +991,271 @@ def _extract_chunk_index(chunk_id: str | None) -> int | None:
         return None
 
 
+def _empty_secondary_extract_stats(*, requested: bool, model: str) -> dict[str, Any]:
+    return {
+        "requested": bool(requested),
+        "enabled": False,
+        "configured": False,
+        "secondary_model": str(model or "").strip(),
+        "candidates_primary_count": 0,
+        "candidates_secondary_count": 0,
+        "candidates_merged_count": 0,
+        "dedup_removed_count": 0,
+        "unique_phrase_gain_from_secondary": 0,
+        "secondary_error_type": "",
+        "secondary_error_message": "",
+        "fallback_to_primary": False,
+    }
+
+
+def _secondary_error_type(exc: Exception) -> str:
+    if isinstance(exc, ClawLearnError):
+        code = str(exc.error_code or "").strip().lower()
+        if "timeout" in code:
+            return "timeout"
+        if "parse" in code or "shape" in code:
+            return "parse"
+    text = str(exc).strip().lower()
+    if "timeout" in text:
+        return "timeout"
+    return "other"
+
+
+def _context_token_set(value: str) -> set[str]:
+    normalized = normalize_for_dedupe(value)
+    if not normalized:
+        return set()
+    tokens = [
+        token
+        for token in _SECONDARY_CONTEXT_TOKEN_RE.findall(normalized)
+        if len(token) >= 3 and token not in _SECONDARY_CONTEXT_STOPWORDS
+    ]
+    return set(tokens)
+
+
+def _context_overlap_ratio(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    common = len(left.intersection(right))
+    baseline = float(max(1, min(len(left), len(right))))
+    return common / baseline
+
+
+def _merge_phrase_extraction_candidates(
+    *,
+    primary_items: list[dict[str, Any]],
+    secondary_items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    normalized_primary = [
+        candidate
+        for item in primary_items
+        if isinstance(item, dict)
+        if (candidate := _normalize_phrase_candidate_item(item)) is not None
+    ]
+    normalized_secondary = [
+        candidate
+        for item in secondary_items
+        if isinstance(item, dict)
+        if (candidate := _normalize_phrase_candidate_item(item)) is not None
+    ]
+    if not normalized_secondary:
+        merged_primary: list[dict[str, Any]] = []
+        for candidate in normalized_primary:
+            merged_primary.append(
+                {
+                    "chunk_id": candidate.chunk_id,
+                    "sentence_text": candidate.sentence_text,
+                    "phrase_text": candidate.phrase_text,
+                    "extract_sources": ["primary"],
+                }
+            )
+        return merged_primary, 0
+
+    groups: list[dict[str, Any]] = []
+
+    def _add_candidate(candidate: PhraseCandidate, source: str) -> None:
+        context_text = str(candidate.sentence_text or "").strip()
+        if not context_text:
+            return
+        context_tokens = _context_token_set(context_text)
+        normalized_context = normalize_for_dedupe(context_text)
+        phrase_key = normalize_for_dedupe(candidate.phrase_text)
+        if not phrase_key:
+            return
+
+        best_idx = -1
+        best_score = 0.0
+        for idx, group in enumerate(groups):
+            if normalized_context and normalized_context == group["context_norm"]:
+                best_idx = idx
+                best_score = 1.0
+                break
+            overlap = _context_overlap_ratio(context_tokens, group["context_tokens"])
+            if overlap >= _SECONDARY_CONTEXT_OVERLAP_MIN and overlap > best_score:
+                best_idx = idx
+                best_score = overlap
+
+        if best_idx < 0:
+            groups.append(
+                {
+                    "chunk_id": candidate.chunk_id,
+                    "context_text": context_text,
+                    "context_norm": normalized_context,
+                    "context_tokens": context_tokens,
+                    "phrases": {},
+                }
+            )
+            best_idx = len(groups) - 1
+
+        group = groups[best_idx]
+        if source == "primary":
+            group["chunk_id"] = candidate.chunk_id
+            group["context_text"] = context_text
+            group["context_norm"] = normalized_context
+            group["context_tokens"] = context_tokens
+
+        phrase_bucket = group["phrases"].setdefault(
+            phrase_key,
+            {"candidate": candidate, "sources": set()},
+        )
+        if source == "primary":
+            phrase_bucket["candidate"] = candidate
+        phrase_bucket["sources"].add(source)
+
+    for item in normalized_primary:
+        _add_candidate(item, "primary")
+    for item in normalized_secondary:
+        _add_candidate(item, "secondary")
+
+    primary_phrase_keys = {
+        normalize_for_dedupe(candidate.phrase_text)
+        for candidate in normalized_primary
+        if normalize_for_dedupe(candidate.phrase_text)
+    }
+    secondary_phrase_keys = {
+        normalize_for_dedupe(candidate.phrase_text)
+        for candidate in normalized_secondary
+        if normalize_for_dedupe(candidate.phrase_text)
+    }
+    unique_gain = len([key for key in secondary_phrase_keys if key not in primary_phrase_keys])
+
+    merged: list[dict[str, Any]] = []
+    for group in groups:
+        context_text = str(group.get("context_text") or "").strip()
+        context_key = f"ctx_{stable_hash(context_text, length=8)}" if context_text else ""
+        for phrase_key, payload in group.get("phrases", {}).items():
+            candidate = payload.get("candidate")
+            if not isinstance(candidate, PhraseCandidate):
+                continue
+            merged.append(
+                {
+                    "chunk_id": str(group.get("chunk_id") or candidate.chunk_id).strip(),
+                    "sentence_text": context_text or candidate.sentence_text,
+                    "phrase_text": candidate.phrase_text,
+                    "extract_sources": sorted(
+                        str(source) for source in payload.get("sources", set()) if str(source).strip()
+                    ),
+                    "extract_context_key": context_key or phrase_key,
+                }
+            )
+    return merged, unique_gain
+
+
+def _merge_cloze_extraction_candidates(
+    *,
+    primary_items: list[dict[str, Any]],
+    secondary_items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    merged: dict[str, dict[str, Any]] = {}
+
+    def _candidate_key(item: dict[str, Any]) -> str:
+        chunk_id = str(item.get("chunk_id") or "").strip().lower()
+        original = normalize_for_dedupe(str(item.get("original") or item.get("text") or ""))
+        if not chunk_id or not original:
+            return ""
+        return f"{chunk_id}|{original}"
+
+    def _append(items: list[dict[str, Any]], source: str) -> None:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            key = _candidate_key(item)
+            if not key:
+                continue
+            if key not in merged:
+                created = dict(item)
+                created["extract_sources"] = [source]
+                merged[key] = created
+                continue
+            existing = merged[key]
+            existing_sources = {
+                str(value).strip()
+                for value in (existing.get("extract_sources") or [])
+                if str(value).strip()
+            }
+            existing_sources.add(source)
+            existing["extract_sources"] = sorted(existing_sources)
+
+            existing_phrases = [
+                str(value).strip()
+                for value in (existing.get("target_phrases") or [])
+                if str(value).strip()
+            ]
+            incoming_phrases = [
+                str(value).strip()
+                for value in (item.get("target_phrases") or [])
+                if str(value).strip()
+            ]
+            seen_keys = {normalize_for_dedupe(value) for value in existing_phrases}
+            for phrase in incoming_phrases:
+                key_norm = normalize_for_dedupe(phrase)
+                if not key_norm or key_norm in seen_keys:
+                    continue
+                seen_keys.add(key_norm)
+                existing_phrases.append(phrase)
+            if existing_phrases:
+                existing["target_phrases"] = existing_phrases
+
+    _append(primary_items, "primary")
+    _append(secondary_items, "secondary")
+
+    primary_phrase_keys = {
+        normalize_for_dedupe(str(phrase))
+        for item in primary_items
+        if isinstance(item, dict)
+        for phrase in (item.get("target_phrases") or [])
+        if normalize_for_dedupe(str(phrase))
+    }
+    secondary_phrase_keys = {
+        normalize_for_dedupe(str(phrase))
+        for item in secondary_items
+        if isinstance(item, dict)
+        for phrase in (item.get("target_phrases") or [])
+        if normalize_for_dedupe(str(phrase))
+    }
+    unique_gain = len([key for key in secondary_phrase_keys if key not in primary_phrase_keys])
+    return list(merged.values()), unique_gain
+
+
+def _merge_secondary_extraction_candidates(
+    *,
+    use_phrase_pipeline: bool,
+    primary_items: list[dict[str, Any]],
+    secondary_items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    if not secondary_items:
+        return list(primary_items), 0
+    if use_phrase_pipeline:
+        return _merge_phrase_extraction_candidates(
+            primary_items=primary_items,
+            secondary_items=secondary_items,
+        )
+    return _merge_cloze_extraction_candidates(
+        primary_items=primary_items,
+        secondary_items=secondary_items,
+    )
+
+
 def _build_pipeline_metrics(
     *,
     chunks: list[Any],
@@ -960,6 +1267,7 @@ def _build_pipeline_metrics(
     learning_mode: str = "lingua_expression",
     format_retry_stats: _FormatRetryStats | None = None,
     phrase_filter_stats: dict[str, Any] | None = None,
+    secondary_extract_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     chunk_ids = {str(getattr(chunk, "chunk_id", "")) for chunk in chunks if str(getattr(chunk, "chunk_id", ""))}
     raw_by_chunk: dict[str, int] = {}
@@ -1079,6 +1387,10 @@ def _build_pipeline_metrics(
     pass_rate = (len(valid_candidates) / len(raw_candidates)) if raw_candidates else 0.0
     stats = format_retry_stats or _FormatRetryStats()
     filter_stats = phrase_filter_stats or _empty_phrase_filter_stats(enabled=False, source_lang="", language="")
+    secondary_stats = secondary_extract_stats or _empty_secondary_extract_stats(
+        requested=False,
+        model="",
+    )
     return {
         "learning_mode": learning_mode,
         "chunks_total": len(chunks),
@@ -1130,6 +1442,22 @@ def _build_pipeline_metrics(
             "dropped_count": int(filter_stats.get("dropped_count", 0)),
             "dropped_by_rule": dict(filter_stats.get("dropped_by_rule", {})),
             "examples_by_rule": dict(filter_stats.get("examples_by_rule", {})),
+        },
+        "secondary_extraction": {
+            "requested": bool(secondary_stats.get("requested", False)),
+            "enabled": bool(secondary_stats.get("enabled", False)),
+            "configured": bool(secondary_stats.get("configured", False)),
+            "secondary_model": str(secondary_stats.get("secondary_model", "")).strip(),
+            "candidates_primary_count": int(secondary_stats.get("candidates_primary_count", 0)),
+            "candidates_secondary_count": int(secondary_stats.get("candidates_secondary_count", 0)),
+            "candidates_merged_count": int(secondary_stats.get("candidates_merged_count", 0)),
+            "dedup_removed_count": int(secondary_stats.get("dedup_removed_count", 0)),
+            "unique_phrase_gain_from_secondary": int(
+                secondary_stats.get("unique_phrase_gain_from_secondary", 0)
+            ),
+            "secondary_error_type": str(secondary_stats.get("secondary_error_type", "")).strip(),
+            "secondary_error_message": str(secondary_stats.get("secondary_error_message", "")).strip(),
+            "fallback_to_primary": bool(secondary_stats.get("fallback_to_primary", False)),
         },
     }
 
@@ -2392,6 +2720,15 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
         enabled=False,
         source_lang=document.source_lang,
     )
+    secondary_requested = bool(
+        cfg.secondary_extract_enable
+        if options.secondary_extract_enable is None
+        else options.secondary_extract_enable
+    )
+    secondary_extract_stats = _empty_secondary_extract_stats(
+        requested=secondary_requested,
+        model=str(cfg.secondary_extract_llm_model or "").strip(),
+    )
 
     def _save_failure_snapshot(exc: ClawLearnError) -> None:
         if not save_intermediate:
@@ -2444,7 +2781,14 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
     # LLM chunk batch：一次可以处理多个 chunk。
     batch_size = max(1, int(cfg.llm_chunk_batch_size or 1))
 
-    def _append_raw_items(batch: list[Any], items: list[dict[str, Any]]) -> None:
+    def _append_raw_items(
+        batch: list[Any],
+        items: list[dict[str, Any]],
+        *,
+        sink: list[dict[str, Any]],
+        stage_name: str,
+        fail_hard: bool,
+    ) -> None:
         chunk_map = {c.chunk_id: c for c in batch}
         chunk_index_map: dict[int, Any | None] = {}
         for chunk in batch:
@@ -2469,13 +2813,13 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
             if chunk is None:
                 errors.append(
                     {
-                        "stage": "cloze_batch_mapping",
+                        "stage": f"{stage_name}_batch_mapping",
                         "reason": "missing_or_unknown_chunk_id",
                         "chunk_id": cid,
                         "item": item,
                     }
                 )
-                if options.continue_on_error:
+                if not fail_hard:
                     continue
                 err = build_error(
                     error_code="CLOZE_BATCH_CHUNK_ID_MISSING",
@@ -2488,57 +2832,182 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
                 raise err
             item["chunk_id"] = chunk.chunk_id
             item["chunk_text"] = chunk.source_text
-            raw_extraction_candidates.append(item)
+            sink.append(item)
 
-    for batch in iter_batches(chunks, batch_size):
-        try:
-            if len(batch) == 1:
-                chunk = batch[0]
-                if use_phrase_pipeline:
-                    items = generate_phrase_candidates_for_chunk(
-                        client=client,
-                        prompt=extract_prompt,
-                        document=document,
-                        chunk=chunk,
-                        temperature=options.temperature,
-                    )
-                else:
-                    items = generate_cloze_candidates_for_chunk(
-                        client=client,
-                        prompt=extract_prompt,
-                        document=document,
-                        chunk=chunk,
-                        temperature=options.temperature,
-                    )
-            else:
-                if use_phrase_pipeline:
-                    items = generate_phrase_candidates_for_batch(
-                        client=client,
-                        prompt=extract_prompt,
-                        document=document,
-                        chunks=batch,
-                        temperature=options.temperature,
-                    )
-                else:
-                    items = generate_cloze_candidates_for_batch(
-                        client=client,
-                        prompt=extract_prompt,
-                        document=document,
-                        chunks=batch,
-                        temperature=options.temperature,
-                    )
-            _append_raw_items(batch, items)
-        except ClawLearnError as exc:
-            if not options.continue_on_error:
-                _save_failure_snapshot(exc)
-                raise
+    def _extract_batch_items(
+        *,
+        client_for_pass: OpenAICompatibleClient,
+        batch: list[Any],
+    ) -> list[dict[str, Any]]:
+        if len(batch) == 1:
+            chunk = batch[0]
+            if use_phrase_pipeline:
+                return generate_phrase_candidates_for_chunk(
+                    client=client_for_pass,
+                    prompt=extract_prompt,
+                    document=document,
+                    chunk=chunk,
+                    temperature=options.temperature,
+                )
+            return generate_cloze_candidates_for_chunk(
+                client=client_for_pass,
+                prompt=extract_prompt,
+                document=document,
+                chunk=chunk,
+                temperature=options.temperature,
+            )
+
+        if use_phrase_pipeline:
+            return generate_phrase_candidates_for_batch(
+                client=client_for_pass,
+                prompt=extract_prompt,
+                document=document,
+                chunks=batch,
+                temperature=options.temperature,
+            )
+        return generate_cloze_candidates_for_batch(
+            client=client_for_pass,
+            prompt=extract_prompt,
+            document=document,
+            chunks=batch,
+            temperature=options.temperature,
+        )
+
+    def _run_extraction_pass(
+        *,
+        stage_name: str,
+        client_for_pass: OpenAICompatibleClient,
+        batch_size_for_pass: int,
+        sink: list[dict[str, Any]],
+        fail_hard: bool,
+    ) -> Exception | None:
+        last_error: Exception | None = None
+        for batch in iter_batches(chunks, batch_size_for_pass):
+            try:
+                items = _extract_batch_items(
+                    client_for_pass=client_for_pass,
+                    batch=batch,
+                )
+                _append_raw_items(
+                    batch,
+                    items,
+                    sink=sink,
+                    stage_name=stage_name,
+                    fail_hard=fail_hard,
+                )
+            except ClawLearnError as exc:
+                last_error = exc
+                if fail_hard:
+                    _save_failure_snapshot(exc)
+                    raise
+                errors.append(
+                    {
+                        "stage": stage_name,
+                        "chunk_ids": [c.chunk_id for c in batch],
+                        "error": exc.to_lines(),
+                    }
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                last_error = exc
+                if fail_hard:
+                    raise
+                errors.append(
+                    {
+                        "stage": stage_name,
+                        "chunk_ids": [c.chunk_id for c in batch],
+                        "error": [str(exc)],
+                    }
+                )
+        return last_error
+
+    primary_raw_extraction_candidates: list[dict[str, Any]] = []
+    _run_extraction_pass(
+        stage_name="cloze",
+        client_for_pass=client,
+        batch_size_for_pass=batch_size,
+        sink=primary_raw_extraction_candidates,
+        fail_hard=not options.continue_on_error,
+    )
+    raw_extraction_candidates = list(primary_raw_extraction_candidates)
+
+    secondary_extract_stats["candidates_primary_count"] = len(primary_raw_extraction_candidates)
+    secondary_extract_stats["candidates_merged_count"] = len(primary_raw_extraction_candidates)
+
+    secondary_model_name = str(cfg.secondary_extract_llm_model or "").strip()
+    if secondary_requested:
+        if not secondary_model_name:
+            secondary_extract_stats["fallback_to_primary"] = True
             errors.append(
                 {
-                    "stage": "cloze",
-                    "chunk_ids": [c.chunk_id for c in batch],
-                    "error": exc.to_lines(),
+                    "stage": "secondary_extract_disabled_missing_config",
+                    "reason": "secondary model is missing",
                 }
             )
+            logger.warning("secondary extraction requested but secondary model is not configured")
+        else:
+            secondary_extract_stats["configured"] = True
+            secondary_extract_stats["enabled"] = True
+            secondary_cfg = cfg.model_copy(deep=True)
+            secondary_cfg.llm_model = secondary_model_name
+            if cfg.secondary_extract_llm_base_url:
+                secondary_cfg.llm_base_url = cfg.secondary_extract_llm_base_url
+            if cfg.secondary_extract_llm_api_key:
+                secondary_cfg.llm_api_key = cfg.secondary_extract_llm_api_key
+            if cfg.secondary_extract_llm_timeout_seconds is not None:
+                secondary_cfg.llm_timeout_seconds = cfg.secondary_extract_llm_timeout_seconds
+            if cfg.secondary_extract_llm_temperature is not None:
+                secondary_cfg.llm_temperature = cfg.secondary_extract_llm_temperature
+            if cfg.secondary_extract_llm_max_retries is not None:
+                secondary_cfg.llm_max_retries = cfg.secondary_extract_llm_max_retries
+            if cfg.secondary_extract_llm_retry_backoff_seconds is not None:
+                secondary_cfg.llm_retry_backoff_seconds = (
+                    cfg.secondary_extract_llm_retry_backoff_seconds
+                )
+            if cfg.secondary_extract_llm_chunk_batch_size is not None:
+                secondary_cfg.llm_chunk_batch_size = (
+                    cfg.secondary_extract_llm_chunk_batch_size
+                )
+
+            secondary_client = OpenAICompatibleClient(secondary_cfg)
+            secondary_batch_size = max(1, int(secondary_cfg.llm_chunk_batch_size or 1))
+            secondary_raw_extraction_candidates: list[dict[str, Any]] = []
+            secondary_error = _run_extraction_pass(
+                stage_name="secondary_extract",
+                client_for_pass=secondary_client,
+                batch_size_for_pass=secondary_batch_size,
+                sink=secondary_raw_extraction_candidates,
+                fail_hard=False,
+            )
+            secondary_extract_stats["candidates_secondary_count"] = len(
+                secondary_raw_extraction_candidates
+            )
+            merged_raw, unique_gain = _merge_secondary_extraction_candidates(
+                use_phrase_pipeline=use_phrase_pipeline,
+                primary_items=primary_raw_extraction_candidates,
+                secondary_items=secondary_raw_extraction_candidates,
+            )
+            raw_extraction_candidates = merged_raw
+            secondary_extract_stats["candidates_merged_count"] = len(merged_raw)
+            secondary_extract_stats["dedup_removed_count"] = max(
+                0,
+                len(primary_raw_extraction_candidates)
+                + len(secondary_raw_extraction_candidates)
+                - len(merged_raw),
+            )
+            secondary_extract_stats["unique_phrase_gain_from_secondary"] = unique_gain
+
+            if secondary_error is not None:
+                secondary_extract_stats["secondary_error_type"] = _secondary_error_type(
+                    secondary_error
+                )
+                secondary_extract_stats["secondary_error_message"] = str(secondary_error).strip()
+                if not secondary_raw_extraction_candidates:
+                    secondary_extract_stats["fallback_to_primary"] = True
+                logger.warning(
+                    "secondary extraction had errors | type=%s msg=%s",
+                    secondary_extract_stats["secondary_error_type"],
+                    secondary_extract_stats["secondary_error_message"],
+                )
 
     if use_phrase_pipeline:
         raw_candidates, initial_phrase_filter_stats = _materialize_cloze_candidates_from_phrase_items(
@@ -3256,6 +3725,7 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
         learning_mode=learning_mode,
         format_retry_stats=format_retry_stats,
         phrase_filter_stats=phrase_filter_stats,
+        secondary_extract_stats=secondary_extract_stats,
     )
     pipeline_metrics["taxonomy_reject_count"] = taxonomy_repair_stats.taxonomy_reject_count
     pipeline_metrics["taxonomy_repair_attempted"] = taxonomy_repair_stats.taxonomy_repair_attempted

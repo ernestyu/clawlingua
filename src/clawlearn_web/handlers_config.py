@@ -56,6 +56,15 @@ def _config_values_from_view(cfg_view: dict[str, str]) -> tuple[str, ...]:
         cfg_view.get("CLAWLEARN_TTS_EDGE_VOICE2", ""),
         cfg_view.get("CLAWLEARN_TTS_EDGE_VOICE3", ""),
         cfg_view.get("CLAWLEARN_TTS_EDGE_VOICE4", ""),
+        cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_ENABLE", "false"),
+        cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL", ""),
+        cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_API_KEY", ""),
+        cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_MODEL", ""),
+        cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_TIMEOUT_SECONDS", ""),
+        cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_TEMPERATURE", ""),
+        cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_MAX_RETRIES", ""),
+        cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_RETRY_BACKOFF_SECONDS", ""),
+        cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_CHUNK_BATCH_SIZE", ""),
     )
 
 
@@ -265,6 +274,15 @@ def on_load_defaults(
     tts_voice2_val: str,
     tts_voice3_val: str,
     tts_voice4_val: str,
+    secondary_extract_enable_val: str,
+    secondary_extract_base_url_val: str,
+    secondary_extract_api_key_val: str,
+    secondary_extract_model_val: str,
+    secondary_extract_timeout_val: str,
+    secondary_extract_temperature_val: str,
+    secondary_extract_max_retries_val: str,
+    secondary_extract_retry_backoff_val: str,
+    secondary_extract_chunk_batch_size_val: str,
     ui_lang_val: str,
     *,
     deps: ConfigDeps,
@@ -318,6 +336,36 @@ def on_load_defaults(
         dv("CLAWLEARN_TTS_EDGE_VOICE2", tts_voice2_val),
         dv("CLAWLEARN_TTS_EDGE_VOICE3", tts_voice3_val),
         dv("CLAWLEARN_TTS_EDGE_VOICE4", tts_voice4_val),
+        dv("CLAWLEARN_SECONDARY_EXTRACT_ENABLE", secondary_extract_enable_val),
+        dv(
+            "CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL",
+            secondary_extract_base_url_val,
+        ),
+        dv(
+            "CLAWLEARN_SECONDARY_EXTRACT_LLM_API_KEY",
+            secondary_extract_api_key_val,
+        ),
+        dv("CLAWLEARN_SECONDARY_EXTRACT_LLM_MODEL", secondary_extract_model_val),
+        dv(
+            "CLAWLEARN_SECONDARY_EXTRACT_LLM_TIMEOUT_SECONDS",
+            secondary_extract_timeout_val,
+        ),
+        dv(
+            "CLAWLEARN_SECONDARY_EXTRACT_LLM_TEMPERATURE",
+            secondary_extract_temperature_val,
+        ),
+        dv(
+            "CLAWLEARN_SECONDARY_EXTRACT_LLM_MAX_RETRIES",
+            secondary_extract_max_retries_val,
+        ),
+        dv(
+            "CLAWLEARN_SECONDARY_EXTRACT_LLM_RETRY_BACKOFF_SECONDS",
+            secondary_extract_retry_backoff_val,
+        ),
+        dv(
+            "CLAWLEARN_SECONDARY_EXTRACT_LLM_CHUNK_BATCH_SIZE",
+            secondary_extract_chunk_batch_size_val,
+        ),
         f"✅ {deps.tr(lang, 'Loaded defaults from ENV_EXAMPLE.md (not yet saved).', 'Loaded defaults from ENV_EXAMPLE.md (not yet saved).')}",
     )
 
@@ -356,6 +404,15 @@ def on_save_config(
     tts_voice2_val: Any,
     tts_voice3_val: Any,
     tts_voice4_val: Any,
+    secondary_extract_enable_val: Any,
+    secondary_extract_base_url_val: Any,
+    secondary_extract_api_key_val: Any,
+    secondary_extract_model_val: Any,
+    secondary_extract_timeout_val: Any,
+    secondary_extract_temperature_val: Any,
+    secondary_extract_max_retries_val: Any,
+    secondary_extract_retry_backoff_val: Any,
+    secondary_extract_chunk_batch_size_val: Any,
     ui_lang_val: Any,
     *,
     deps: ConfigDeps,
@@ -394,6 +451,22 @@ def on_save_config(
         "CLAWLEARN_TTS_EDGE_VOICE2": tts_voice2_val or "",
         "CLAWLEARN_TTS_EDGE_VOICE3": tts_voice3_val or "",
         "CLAWLEARN_TTS_EDGE_VOICE4": tts_voice4_val or "",
+        "CLAWLEARN_SECONDARY_EXTRACT_ENABLE": secondary_extract_enable_val or "",
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL": secondary_extract_base_url_val
+        or "",
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_API_KEY": secondary_extract_api_key_val
+        or "",
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_MODEL": secondary_extract_model_val or "",
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_TIMEOUT_SECONDS": secondary_extract_timeout_val
+        or "",
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_TEMPERATURE": secondary_extract_temperature_val
+        or "",
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_MAX_RETRIES": secondary_extract_max_retries_val
+        or "",
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_RETRY_BACKOFF_SECONDS": secondary_extract_retry_backoff_val
+        or "",
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_CHUNK_BATCH_SIZE": secondary_extract_chunk_batch_size_val
+        or "",
     }
     save_status = deps.save_env_v2(updated, lang=deps.normalize_ui_lang(ui_lang_val))
     reloaded = on_reload_env(ui_lang_val, deps=deps)

@@ -61,6 +61,7 @@ def run_single_build(
     temperature: float | None,
     save_intermediate: bool,
     continue_on_error: bool,
+    secondary_extract_enable: bool | None = None,
     prompt_lang: str | None = None,
     extract_prompt: str | None = None,
     explain_prompt: str | None = None,
@@ -119,6 +120,11 @@ def run_single_build(
             "CLAWLEARN_LEARNING_MODE": learning_mode_value,
             "CLAWLEARN_EXTRACT_PROMPT": deps.as_str(extract_prompt),
             "CLAWLEARN_EXPLAIN_PROMPT": deps.as_str(explain_prompt),
+            "CLAWLEARN_SECONDARY_EXTRACT_ENABLE": (
+                str(secondary_extract_enable)
+                if secondary_extract_enable is not None
+                else ""
+            ),
         },
     )
 
@@ -160,6 +166,7 @@ def run_single_build(
                 explain_prompt=Path(explain_prompt) if deps.as_str(explain_prompt) else None,
                 save_intermediate=save_intermediate,
                 continue_on_error=continue_on_error,
+                secondary_extract_enable=secondary_extract_enable,
             )
             result = run_build_lingua_deck(cfg, options)
     except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -357,6 +364,7 @@ def on_run(
     textbook_keep_excerpt_val: Any,
     chunk_max_val: Any,
     temperature_val: Any,
+    secondary_extract_enable_val: Any,
     save_inter_val: Any,
     continue_on_error_val: Any,
     ui_lang_val: Any,
@@ -386,6 +394,11 @@ def on_run(
                 textbook_keep_source_excerpt=bool(textbook_keep_excerpt_val),
                 chunk_max_chars=deps.to_optional_int(chunk_max_val, min_value=1),
                 temperature=deps.to_optional_float(temperature_val),
+                secondary_extract_enable=(
+                    None
+                    if secondary_extract_enable_val is None
+                    else bool(secondary_extract_enable_val)
+                ),
                 save_intermediate=bool(save_inter_val),
                 continue_on_error=bool(continue_on_error_val),
                 prompt_lang=lang,

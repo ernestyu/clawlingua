@@ -46,6 +46,7 @@ class RunTabComponents:
     cloze_min_chars: Any
     chunk_max_chars: Any
     temperature: Any
+    secondary_extract_enable: Any
     save_intermediate: Any
     continue_on_error: Any
     run_button: Any
@@ -270,6 +271,20 @@ def build_tab(
                     "0 is more deterministic; higher values are more random.",
                 ),
             )
+            secondary_extract_enable = gr.Checkbox(
+                label=tr(
+                    initial_ui_lang,
+                    "Enable second-pass phrase extraction",
+                    "Enable second-pass phrase extraction",
+                ),
+                info=tr(
+                    initial_ui_lang,
+                    "Use a secondary extraction model for higher recall (extra cost).",
+                    "Use a secondary extraction model for higher recall (extra cost).",
+                ),
+                value=bool(getattr(cfg, "secondary_extract_enable", False)),
+                visible=show_lingua_options,
+            )
             save_intermediate = gr.Checkbox(
                 label=tr(
                     initial_ui_lang,
@@ -339,6 +354,7 @@ def build_tab(
         cloze_min_chars=cloze_min_chars,
         chunk_max_chars=chunk_max_chars,
         temperature=temperature,
+        secondary_extract_enable=secondary_extract_enable,
         save_intermediate=save_intermediate,
         continue_on_error=continue_on_error,
         run_button=run_button,
@@ -359,11 +375,12 @@ def bind_events(
     ui_lang: Any,
     deps: handlers_run.RunDeps,
 ) -> None:
-    def _on_learning_mode_change(learning_mode_val: Any) -> tuple[Any, Any, Any]:
+    def _on_learning_mode_change(learning_mode_val: Any) -> tuple[Any, Any, Any, Any]:
         show_lingua, show_textbook = learning_mode_visibility_flags(learning_mode_val)
         return (
             gr.update(visible=show_lingua),
             gr.update(visible=show_textbook),
+            gr.update(visible=show_lingua),
             gr.update(visible=show_lingua),
         )
 
@@ -387,6 +404,7 @@ def bind_events(
         textbook_keep_excerpt_val: Any,
         chunk_max_val: Any,
         temperature_val: Any,
+        secondary_extract_enable_val: Any,
         save_inter_val: Any,
         continue_on_error_val: Any,
         ui_lang_val: Any,
@@ -408,6 +426,7 @@ def bind_events(
             textbook_keep_excerpt_val,
             chunk_max_val,
             temperature_val,
+            secondary_extract_enable_val,
             save_inter_val,
             continue_on_error_val,
             ui_lang_val,
@@ -421,6 +440,7 @@ def bind_events(
             components.lingua_options_group,
             components.textbook_options_group,
             components.cloze_min_chars,
+            components.secondary_extract_enable,
         ],
         queue=False,
     )
@@ -469,6 +489,7 @@ def bind_events(
             components.textbook_keep_source_excerpt,
             components.chunk_max_chars,
             components.temperature,
+            components.secondary_extract_enable,
             components.save_intermediate,
             components.continue_on_error,
             ui_lang,

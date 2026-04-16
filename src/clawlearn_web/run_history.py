@@ -81,6 +81,30 @@ def build_env_snapshot(
 ) -> dict[str, str]:
     snapshot = {
         "CLAWLEARN_LLM_MODEL": as_str(getattr(cfg, "llm_model", "")),
+        "CLAWLEARN_SECONDARY_EXTRACT_ENABLE": as_str(
+            getattr(cfg, "secondary_extract_enable", "")
+        ),
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL": as_str(
+            getattr(cfg, "secondary_extract_llm_base_url", "")
+        ),
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_MODEL": as_str(
+            getattr(cfg, "secondary_extract_llm_model", "")
+        ),
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_TIMEOUT_SECONDS": as_str(
+            getattr(cfg, "secondary_extract_llm_timeout_seconds", "")
+        ),
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_TEMPERATURE": as_str(
+            getattr(cfg, "secondary_extract_llm_temperature", "")
+        ),
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_MAX_RETRIES": as_str(
+            getattr(cfg, "secondary_extract_llm_max_retries", "")
+        ),
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_RETRY_BACKOFF_SECONDS": as_str(
+            getattr(cfg, "secondary_extract_llm_retry_backoff_seconds", "")
+        ),
+        "CLAWLEARN_SECONDARY_EXTRACT_LLM_CHUNK_BATCH_SIZE": as_str(
+            getattr(cfg, "secondary_extract_llm_chunk_batch_size", "")
+        ),
         "CLAWLEARN_TRANSLATE_LLM_MODEL": as_str(
             getattr(cfg, "translate_llm_model", "")
         ),
