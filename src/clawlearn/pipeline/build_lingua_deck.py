@@ -44,6 +44,7 @@ from ..llm.translation_generator import (
 )
 from ..models.card import CardRecord
 from ..models.document import DocumentRecord
+from ..phrase_filters import filter_phrases
 from ..runtime import create_run_context
 from ..tts.provider_registry import get_tts_provider
 from ..tts.voice_selector import UniformVoiceSelector
@@ -85,6 +86,61 @@ _TAXONOMY_RETRYABLE_REASONS = (
 _TAXONOMY_RETRYABLE_REASONS_LOWER = tuple(prefix.lower() for prefix in _TAXONOMY_RETRYABLE_REASONS)
 _CONTEXT_EXPAND_MAX_SENTENCE_CHARS = 360
 _EMPTY_RAW_CANDIDATE_RATIO_GUARD = 0.95
+
+
+def _empty_phrase_filter_stats(*, enabled: bool, source_lang: str, language: str = "") -> dict[str, Any]:
+    return {
+        "enabled": bool(enabled),
+        "source_lang": str(source_lang or "").strip().lower(),
+        "language": str(language or "").strip().lower(),
+        "dropped_count": 0,
+        "dropped_by_rule": {},
+        "examples_by_rule": {},
+    }
+
+
+def _merge_phrase_filter_stats(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    merged["enabled"] = bool(merged.get("enabled", False) or incoming.get("enabled", False))
+    merged["source_lang"] = str(incoming.get("source_lang") or merged.get("source_lang") or "").strip().lower()
+    merged["language"] = str(incoming.get("language") or merged.get("language") or "").strip().lower()
+    merged["dropped_count"] = int(merged.get("dropped_count", 0)) + int(incoming.get("dropped_count", 0))
+
+    dropped_by_rule: dict[str, int] = {}
+    for mapping in (merged.get("dropped_by_rule", {}), incoming.get("dropped_by_rule", {})):
+        if not isinstance(mapping, dict):
+            continue
+        for key, value in mapping.items():
+            rule = str(key).strip()
+            if not rule:
+                continue
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                count = 0
+            if count <= 0:
+                continue
+            dropped_by_rule[rule] = dropped_by_rule.get(rule, 0) + count
+    merged["dropped_by_rule"] = dropped_by_rule
+
+    examples_by_rule: dict[str, list[str]] = {}
+    for mapping in (merged.get("examples_by_rule", {}), incoming.get("examples_by_rule", {})):
+        if not isinstance(mapping, dict):
+            continue
+        for key, value in mapping.items():
+            rule = str(key).strip()
+            if not rule or not isinstance(value, list):
+                continue
+            bucket = examples_by_rule.setdefault(rule, [])
+            for item in value:
+                text = str(item).strip()
+                if not text or text in bucket:
+                    continue
+                if len(bucket) >= 3:
+                    break
+                bucket.append(text)
+    merged["examples_by_rule"] = examples_by_rule
+    return merged
 
 
 @dataclass
@@ -315,15 +371,53 @@ def _collect_phrase_types_from_spans(spans: list[dict[str, Any]]) -> list[str]:
     return labels
 
 
-def _build_cloze_units_from_phrases(phrase_candidates: list[PhraseCandidate]) -> list[ClozeUnit]:
+def _build_cloze_units_from_phrases(
+    phrase_candidates: list[PhraseCandidate],
+    *,
+    source_lang: str,
+    learning_mode: str,
+    difficulty: str,
+) -> tuple[list[ClozeUnit], dict[str, Any]]:
     grouped: dict[tuple[str, str], list[PhraseCandidate]] = {}
     for candidate in phrase_candidates:
         key = (candidate.chunk_id, candidate.sentence_text)
         grouped.setdefault(key, []).append(candidate)
 
+    filter_enabled = learning_mode in {"lingua_expression", "lingua_reading"}
+    phrase_filter_stats = _empty_phrase_filter_stats(
+        enabled=filter_enabled,
+        source_lang=source_lang,
+        language=(source_lang or "").strip().lower(),
+    )
     units: list[ClozeUnit] = []
     for (chunk_id, sentence_text), group in grouped.items():
-        spans = _select_non_overlapping_spans(sentence_text, group)
+        filtered_group = group
+        if filter_enabled:
+            kept_phrases, stats = filter_phrases(
+                source_lang=source_lang,
+                phrases=[candidate.phrase_text for candidate in group],
+                context=sentence_text,
+                difficulty=difficulty,
+            )
+            phrase_filter_stats = _merge_phrase_filter_stats(
+                phrase_filter_stats,
+                {
+                    **stats,
+                    "enabled": True,
+                    "source_lang": source_lang,
+                },
+            )
+            kept_keys = {normalize_for_dedupe(phrase) for phrase in kept_phrases}
+            filtered_group = []
+            seen_keys: set[str] = set()
+            for candidate in group:
+                key = normalize_for_dedupe(candidate.phrase_text)
+                if not key or key not in kept_keys or key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                filtered_group.append(candidate)
+
+        spans = _select_non_overlapping_spans(sentence_text, filtered_group)
         if not spans:
             continue
         text_cloze, target_phrases = _build_cloze_text_from_spans(sentence_text, spans)
@@ -353,7 +447,7 @@ def _build_cloze_units_from_phrases(phrase_candidates: list[PhraseCandidate]) ->
                 chunk_text=chunk_text,
             )
         )
-    return units
+    return units, phrase_filter_stats
 
 
 def _cloze_unit_to_candidate(unit: ClozeUnit) -> dict[str, Any]:
@@ -376,14 +470,23 @@ def _cloze_unit_to_candidate(unit: ClozeUnit) -> dict[str, Any]:
 
 def _materialize_cloze_candidates_from_phrase_items(
     phrase_items: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+    *,
+    source_lang: str,
+    learning_mode: str,
+    difficulty: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     phrase_candidates = [
         candidate
         for item in phrase_items
         if (candidate := _normalize_phrase_candidate_item(item)) is not None
     ]
-    units = _build_cloze_units_from_phrases(phrase_candidates)
-    return [_cloze_unit_to_candidate(unit) for unit in units]
+    units, phrase_filter_stats = _build_cloze_units_from_phrases(
+        phrase_candidates,
+        source_lang=source_lang,
+        learning_mode=learning_mode,
+        difficulty=difficulty,
+    )
+    return [_cloze_unit_to_candidate(unit) for unit in units], phrase_filter_stats
 
 
 def _sanitize_cloze_hint_text(text: str) -> str:
@@ -767,6 +870,7 @@ def _build_pipeline_metrics(
     errors: list[dict[str, Any]],
     learning_mode: str = "lingua_expression",
     format_retry_stats: _FormatRetryStats | None = None,
+    phrase_filter_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     chunk_ids = {str(getattr(chunk, "chunk_id", "")) for chunk in chunks if str(getattr(chunk, "chunk_id", ""))}
     raw_by_chunk: dict[str, int] = {}
@@ -885,6 +989,7 @@ def _build_pipeline_metrics(
     avg_raw_per_chunk = (raw_candidates_attributed / len(chunks)) if chunks else 0.0
     pass_rate = (len(valid_candidates) / len(raw_candidates)) if raw_candidates else 0.0
     stats = format_retry_stats or _FormatRetryStats()
+    filter_stats = phrase_filter_stats or _empty_phrase_filter_stats(enabled=False, source_lang="", language="")
     return {
         "learning_mode": learning_mode,
         "chunks_total": len(chunks),
@@ -928,6 +1033,14 @@ def _build_pipeline_metrics(
             "llm_regen_success_count": stats.llm_regen_success_count,
             "total_extra_llm_calls": stats.total_extra_llm_calls,
             "recovered_candidates": stats.recovered_candidates,
+        },
+        "phrase_filter": {
+            "enabled": bool(filter_stats.get("enabled", False)),
+            "source_lang": str(filter_stats.get("source_lang", "")).strip(),
+            "language": str(filter_stats.get("language", "")).strip(),
+            "dropped_count": int(filter_stats.get("dropped_count", 0)),
+            "dropped_by_rule": dict(filter_stats.get("dropped_by_rule", {})),
+            "examples_by_rule": dict(filter_stats.get("examples_by_rule", {})),
         },
     }
 
@@ -1752,6 +1865,10 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
     chunks: list = []
     format_retry_stats = _FormatRetryStats()
     taxonomy_repair_stats = _TaxonomyRepairStats()
+    phrase_filter_stats = _empty_phrase_filter_stats(
+        enabled=False,
+        source_lang=document.source_lang,
+    )
 
     def _save_failure_snapshot(exc: ClawLearnError) -> None:
         if not save_intermediate:
@@ -1901,7 +2018,22 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
             )
 
     if use_phrase_pipeline:
-        raw_candidates = _materialize_cloze_candidates_from_phrase_items(raw_extraction_candidates)
+        raw_candidates, initial_phrase_filter_stats = _materialize_cloze_candidates_from_phrase_items(
+            raw_extraction_candidates,
+            source_lang=document.source_lang,
+            learning_mode=learning_mode,
+            difficulty=cfg.cloze_difficulty,
+        )
+        phrase_filter_stats = _merge_phrase_filter_stats(phrase_filter_stats, initial_phrase_filter_stats)
+        if initial_phrase_filter_stats.get("dropped_count", 0):
+            errors.append(
+                {
+                    "stage": "phrase_filter",
+                    "dropped_count": int(initial_phrase_filter_stats.get("dropped_count", 0)),
+                    "dropped_by_rule": dict(initial_phrase_filter_stats.get("dropped_by_rule", {})),
+                    "examples_by_rule": dict(initial_phrase_filter_stats.get("examples_by_rule", {})),
+                }
+            )
         if raw_extraction_candidates and not raw_candidates:
             errors.append(
                 {
@@ -2004,10 +2136,27 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
             generate_fn=fallback_generate_fn,
         )
         fallback_raw = (
-            _materialize_cloze_candidates_from_phrase_items(fallback_raw_extraction)
+            _materialize_cloze_candidates_from_phrase_items(
+                fallback_raw_extraction,
+                source_lang=document.source_lang,
+                learning_mode=learning_mode,
+                difficulty=cfg.cloze_difficulty,
+            )
             if use_phrase_pipeline
             else fallback_raw_extraction
         )
+        if use_phrase_pipeline:
+            fallback_raw, fallback_phrase_filter_stats = fallback_raw
+            phrase_filter_stats = _merge_phrase_filter_stats(phrase_filter_stats, fallback_phrase_filter_stats)
+            if fallback_phrase_filter_stats.get("dropped_count", 0):
+                errors.append(
+                    {
+                        "stage": "phrase_filter_fallback",
+                        "dropped_count": int(fallback_phrase_filter_stats.get("dropped_count", 0)),
+                        "dropped_by_rule": dict(fallback_phrase_filter_stats.get("dropped_by_rule", {})),
+                        "examples_by_rule": dict(fallback_phrase_filter_stats.get("examples_by_rule", {})),
+                    }
+                )
         if use_phrase_pipeline and fallback_raw_extraction and not fallback_raw:
             errors.append(
                 {
@@ -2546,6 +2695,7 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
         errors=errors,
         learning_mode=learning_mode,
         format_retry_stats=format_retry_stats,
+        phrase_filter_stats=phrase_filter_stats,
     )
     pipeline_metrics["taxonomy_reject_count"] = taxonomy_repair_stats.taxonomy_reject_count
     pipeline_metrics["taxonomy_repair_attempted"] = taxonomy_repair_stats.taxonomy_repair_attempted

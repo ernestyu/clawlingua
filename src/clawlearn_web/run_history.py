@@ -85,6 +85,12 @@ def build_env_snapshot(cfg: Any) -> dict[str, str]:
         "CLAWLEARN_EXPLAIN_PROMPT": as_str(getattr(cfg, "explain_prompt", "")),
         "CLAWLEARN_MATERIAL_PROFILE": as_str(getattr(cfg, "material_profile", "")),
         "CLAWLEARN_LEARNING_MODE": as_str(getattr(cfg, "learning_mode", "")),
+        "CLAWLEARN_LINGUA_TRANSCRIPT_MIN_CONTEXT_SENTENCES": as_str(
+            getattr(cfg, "lingua_transcript_min_context_sentences", "")
+        ),
+        "CLAWLEARN_LINGUA_ANNOTATE_ENABLE": as_str(getattr(cfg, "lingua_annotate_enable", "")),
+        "CLAWLEARN_LINGUA_ANNOTATE_BATCH_SIZE": as_str(getattr(cfg, "lingua_annotate_batch_size", "")),
+        "CLAWLEARN_LINGUA_ANNOTATE_MAX_ITEMS": as_str(getattr(cfg, "lingua_annotate_max_items", "")),
     }
 
 

@@ -170,9 +170,6 @@ def _extract_pattern_type_scores(*, text: str, original: str, phrases: list[str]
     if _PHRASAL_VERB_RE.search(merged):
         scores["phrasal_verb"] = max(scores.get("phrasal_verb", 0.0), 0.8)
         reasons.append("pattern:phrasal_verb")
-    if any(_token_count(p) >= 3 for p in phrases):
-        scores["reusable_high_frequency_chunk"] = max(scores.get("reusable_high_frequency_chunk", 0.0), 0.6)
-        reasons.append("pattern:reusable_chunk")
     return scores, reasons
 
 
@@ -191,7 +188,7 @@ def _model_label_supported(
     if label == "strong_collocation":
         return bool(_STRONG_COLLOCATION_RE.search(merged))
     if label == "reusable_high_frequency_chunk":
-        return bool(_TRANSFER_CHUNK_RE.search(merged)) or any(_token_count(p) >= 3 for p in phrases)
+        return bool(_TRANSFER_CHUNK_RE.search(merged))
     # Structural discourse labels should have explicit contextual cues to remain stable.
     if label in STRUCTURAL_DISCOURSE_TYPES:
         return False
