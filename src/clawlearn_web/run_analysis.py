@@ -9,6 +9,11 @@ from typing import Any, Callable
 from clawlearn.pipeline.validators import classify_rejection_reason
 from clawlearn_web import run_history
 
+_DEFAULT_SAMPLE_MAX_LINES = 200
+_DEFAULT_SAMPLE_MAX_BYTES = 5 * 1024 * 1024
+_DEFAULT_FULL_CANDIDATE_MAX_LINES = 2000
+_DEFAULT_FULL_CANDIDATE_MAX_BYTES = 20 * 1024 * 1024
+
 
 def _as_str(value: Any, *, default: str = "") -> str:
     return run_history.as_str(value, default=default)
@@ -18,30 +23,59 @@ def _as_int(value: Any, *, default: int = 0) -> int:
     return run_history.as_int(value, default=default)
 
 
-def _read_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl_dicts(
+    path: Path,
+    *,
+    max_lines: int | None = None,
+    max_bytes: int | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
     if not path.exists():
-        return []
+        return [], False
     rows: list[dict[str, Any]] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            item = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(item, dict):
-            rows.append(item)
-    return rows
+    line_limit = max_lines if max_lines and max_lines > 0 else None
+    byte_limit = max_bytes if max_bytes and max_bytes > 0 else None
+    consumed_bytes = 0
+    read_lines = 0
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for raw in handle:
+                raw_bytes = len(raw.encode("utf-8"))
+                if byte_limit is not None and (consumed_bytes + raw_bytes) > byte_limit:
+                    return rows, True
+                consumed_bytes += raw_bytes
+                read_lines += 1
+                if line_limit is not None and read_lines > line_limit:
+                    return rows, True
+
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(item, dict):
+                    rows.append(item)
+    except Exception:
+        return rows, False
+
+    return rows, False
 
 
-def _read_candidates_stage(run_dir: Path, *, stage: str) -> list[dict[str, Any]]:
+def _read_candidates_stage(
+    run_dir: Path,
+    *,
+    stage: str,
+    max_lines: int | None = None,
+    max_bytes: int | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
     stage_name = "validated" if stage == "validated" else "raw"
     primary = run_dir / f"candidates.{stage_name}.jsonl"
     if primary.exists():
-        return _read_jsonl_dicts(primary)
+        return _read_jsonl_dicts(primary, max_lines=max_lines, max_bytes=max_bytes)
     legacy = run_dir / f"text_candidates.{stage_name}.jsonl"
-    return _read_jsonl_dicts(legacy)
+    return _read_jsonl_dicts(legacy, max_lines=max_lines, max_bytes=max_bytes)
 
 
 def _bar(value: float, max_value: float, *, width: int = 18) -> str:
@@ -79,7 +113,12 @@ def _short_text(value: str, *, limit: int = 120) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
-def _run_analysis_payload(run_id: str | None, cfg: Any) -> dict[str, Any]:
+def _run_analysis_payload(
+    run_id: str | None,
+    cfg: Any,
+    *,
+    load_full_candidates: bool = False,
+) -> dict[str, Any]:
     selected = _as_str(run_id)
     if not selected:
         return {}
@@ -91,11 +130,40 @@ def _run_analysis_payload(run_id: str | None, cfg: Any) -> dict[str, Any]:
     if not isinstance(metrics, dict):
         metrics = {}
 
-    selected_candidates = _read_candidates_stage(run_dir, stage="validated")
-    raw_candidates = _read_candidates_stage(run_dir, stage="raw")
-    cards = _read_jsonl_dicts(run_dir / "cards.final.jsonl")
-    errors = _read_jsonl_dicts(run_dir / "errors.jsonl")
-    chunks = _read_jsonl_dicts(run_dir / "chunks.jsonl")
+    cards, cards_truncated = _read_jsonl_dicts(
+        run_dir / "cards.final.jsonl",
+        max_lines=_DEFAULT_SAMPLE_MAX_LINES,
+        max_bytes=_DEFAULT_SAMPLE_MAX_BYTES,
+    )
+    errors, errors_truncated = _read_jsonl_dicts(
+        run_dir / "errors.jsonl",
+        max_lines=_DEFAULT_SAMPLE_MAX_LINES,
+        max_bytes=_DEFAULT_SAMPLE_MAX_BYTES,
+    )
+    chunks, chunks_truncated = _read_jsonl_dicts(
+        run_dir / "chunks.jsonl",
+        max_lines=_DEFAULT_SAMPLE_MAX_LINES,
+        max_bytes=_DEFAULT_SAMPLE_MAX_BYTES,
+    )
+
+    selected_candidates: list[dict[str, Any]] = cards
+    raw_candidates: list[dict[str, Any]] = []
+    validated_truncated = False
+    raw_truncated = False
+
+    if load_full_candidates:
+        selected_candidates, validated_truncated = _read_candidates_stage(
+            run_dir,
+            stage="validated",
+            max_lines=_DEFAULT_FULL_CANDIDATE_MAX_LINES,
+            max_bytes=_DEFAULT_FULL_CANDIDATE_MAX_BYTES,
+        )
+        raw_candidates, raw_truncated = _read_candidates_stage(
+            run_dir,
+            stage="raw",
+            max_lines=_DEFAULT_FULL_CANDIDATE_MAX_LINES,
+            max_bytes=_DEFAULT_FULL_CANDIDATE_MAX_BYTES,
+        )
 
     rejected: list[dict[str, Any]] = []
     for item in errors:
@@ -126,6 +194,17 @@ def _run_analysis_payload(run_id: str | None, cfg: Any) -> dict[str, Any]:
         "cards": cards,
         "rejected": rejected,
         "chunks": chunks,
+        "truncated_files": [
+            name
+            for name, truncated in (
+                ("cards.final.jsonl", cards_truncated),
+                ("errors.jsonl", errors_truncated),
+                ("chunks.jsonl", chunks_truncated),
+                ("candidates.validated.jsonl", validated_truncated),
+                ("candidates.raw.jsonl", raw_truncated),
+            )
+            if truncated
+        ],
     }
 
 
@@ -223,6 +302,11 @@ def build_run_analysis(
     metrics = payload["metrics"]
     selected_candidates = payload["selected_candidates"]
     rejected = payload["rejected"]
+    truncated_files = (
+        payload.get("truncated_files", [])
+        if isinstance(payload.get("truncated_files"), list)
+        else []
+    )
     taxonomy_choices, rejection_choices, chunk_choices = _analysis_filter_choices(
         payload
     )
@@ -335,6 +419,14 @@ def build_run_analysis(
         f"- {tr(lang, 'Avg selected per chunk', 'Avg selected per chunk')}: **{avg_selected_per_chunk:.2f}**",
         f"- {tr(lang, 'Filtered selected items', 'Filtered selected items')}: **{len(filtered_selected)}**",
         f"- {tr(lang, 'Filtered rejected items', 'Filtered rejected items')}: **{len(filtered_rejected)}**",
+    ]
+    if truncated_files:
+        lines.append(
+            f"- {tr(lang, 'Samples truncated', 'Samples truncated')}: "
+            f"`{', '.join(sorted(_as_str(name) for name in truncated_files if _as_str(name)))}`"
+        )
+    lines.extend(
+        [
         "",
         _render_count_histogram(
             tr(lang, "Model taxonomy histogram", "Model taxonomy histogram"),
@@ -364,7 +456,8 @@ def build_run_analysis(
             ),
             transfer_by_tax,
         ),
-    ]
+        ]
+    )
 
     sample_rows: list[list[Any]] = []
     seen: set[tuple[str, str, str]] = set()

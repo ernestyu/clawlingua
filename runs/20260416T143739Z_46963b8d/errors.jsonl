@@ -1,0 +1,4 @@
+{"stage":"phrase_filter","dropped_count":25,"dropped_by_rule":{"drop:advanced_min_phrase_score":16,"drop:placeholder_token":4,"drop:stopword_ratio":4,"drop:discourse_placeholder_blacklist":1},"examples_by_rule":{"drop:advanced_min_phrase_score":["all of this is real","we get used to things","what does it mean"],"drop:placeholder_token":["all this AI stuff","do these amazing things"],"drop:stopword_ratio":["you see it in the news","seems to be","because of this"],"drop:discourse_placeholder_blacklist":["another explanation"]}}
+{"stage":"lingua_taxonomy_pre_rank_batch_partial_retry","attempt":1,"received":9,"remaining":1}
+{"stage":"lingua_taxonomy_pre_rank_phrase_quality_drop","candidate_id":"candidate_000013","dropped_count":2}
+{"stage":"lingua_taxonomy_pre_rank_phrase_quality_drop","candidate_id":"candidate_000016","dropped_count":2}

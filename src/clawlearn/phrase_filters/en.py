@@ -18,10 +18,45 @@ _WHITELIST = {
     "as a result",
     "in spite of",
     "in terms of",
+    "make things happen",
     "on the one hand",
     "on the other hand",
     "that said",
     "to be fair",
+}
+_PLACEHOLDER_TOKEN_WHITELIST = {
+    "make things happen",
+}
+_DISCOURSE_PLACEHOLDER_BLACKLIST = {
+    "another thing",
+    "another explanation",
+    "there is another explanation",
+}
+_PLACEHOLDER_SINGLE_TOKENS = {
+    "stuff",
+    "thing",
+    "things",
+    "somewhere",
+    "someone",
+    "something",
+    "anyone",
+    "anything",
+}
+_PLACEHOLDER_PHRASE_PATTERNS = (
+    ("some", "place"),
+)
+_PLACEHOLDER_DETERMINERS = {
+    "a",
+    "an",
+    "the",
+    "some",
+    "any",
+    "another",
+    "to",
+    "of",
+    "in",
+    "on",
+    "at",
 }
 _OPEN_ENDING_WORDS = {
     "from",
@@ -153,6 +188,27 @@ def phrase_quality_score(phrase: str) -> float:
     return score
 
 
+def _contains_placeholder_pattern(tokens: list[str]) -> bool:
+    if any(token in _PLACEHOLDER_SINGLE_TOKENS for token in tokens):
+        return True
+    for left, right in _PLACEHOLDER_PHRASE_PATTERNS:
+        for idx in range(len(tokens) - 1):
+            if tokens[idx] == left and tokens[idx + 1] == right:
+                return True
+    return False
+
+
+def _has_descriptive_non_placeholder_token(tokens: list[str]) -> bool:
+    for token in tokens:
+        if token in _PLACEHOLDER_SINGLE_TOKENS:
+            continue
+        if token in _PLACEHOLDER_DETERMINERS:
+            continue
+        if len(token) >= 8:
+            return True
+    return False
+
+
 def filter_phrases(
     *,
     source_lang: str,
@@ -177,6 +233,19 @@ def filter_phrases(
             kept.append(value)
             continue
         tokens = [token.lower() for token in _TOKEN_RE.findall(value)]
+        token_count = len(tokens)
+        if advanced_mode and key in _DISCOURSE_PLACEHOLDER_BLACKLIST:
+            _record_drop(stats, rule="drop:discourse_placeholder_blacklist", phrase=value)
+            continue
+        if (
+            advanced_mode
+            and 0 < token_count <= 4
+            and key not in _PLACEHOLDER_TOKEN_WHITELIST
+            and _contains_placeholder_pattern(tokens)
+            and not _has_descriptive_non_placeholder_token(tokens)
+        ):
+            _record_drop(stats, rule="drop:placeholder_token", phrase=value)
+            continue
         if key in _BLACKLIST:
             _record_drop(stats, rule="drop:blacklist_ngram", phrase=value)
             continue

@@ -284,14 +284,26 @@ def scan_runs(cfg: Any, *, limit: int = 30) -> list[RunInfo]:
     if not runs_root.exists() or not runs_root.is_dir():
         return []
 
+    max_items = max(0, int(limit))
+    candidate_limit = max(max_items * 3, 30) if max_items else 0
+
+    def _dir_sort_key(entry: Path) -> tuple[str, float]:
+        try:
+            mtime = float(entry.stat().st_mtime)
+        except OSError:
+            mtime = 0.0
+        return entry.name, mtime
+
+    run_dirs = [entry for entry in runs_root.iterdir() if entry.is_dir()]
+    run_dirs.sort(key=_dir_sort_key, reverse=True)
+    if candidate_limit:
+        run_dirs = run_dirs[:candidate_limit]
+
     infos: list[RunInfo] = []
-    for entry in runs_root.iterdir():
-        if not entry.is_dir():
-            continue
+    for entry in run_dirs:
         infos.append(run_info_from_dir(cfg, entry))
 
     infos.sort(key=lambda item: run_started_sort_key(item.started_at), reverse=True)
-    max_items = max(0, int(limit))
     if max_items:
         infos = infos[:max_items]
     return infos

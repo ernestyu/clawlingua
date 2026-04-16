@@ -20,7 +20,6 @@ from clawlearn.utils.time import make_run_id, utc_now_iso
 from clawlearn_web import run_history, upload_io
 
 _RUN_PROGRESS_POLL_SECONDS = 2.0
-_RUN_POSTPROCESS_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -208,31 +207,6 @@ def on_run_start(ui_lang_val: str, *, deps: RunDeps) -> tuple[str, None]:
     return deps.tr(lang, "Running", "Running"), None
 
 
-def _run_with_timeout(
-    fn: Callable[..., Any],
-    *args: Any,
-    timeout_seconds: float,
-    **kwargs: Any,
-) -> tuple[bool, Any]:
-    payload: dict[str, Any] = {}
-    errors: dict[str, Exception] = {}
-
-    def _worker() -> None:
-        try:
-            payload["value"] = fn(*args, **kwargs)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            errors["error"] = exc
-
-    worker = threading.Thread(target=_worker, daemon=True)
-    worker.start()
-    worker.join(timeout=max(0.01, float(timeout_seconds)))
-    if worker.is_alive():
-        return False, None
-    if "error" in errors:
-        raise errors["error"]
-    return True, payload.get("value")
-
-
 def _safe_refresh_recent_runs(
     *,
     cfg_now: Any,
@@ -244,12 +218,10 @@ def _safe_refresh_recent_runs(
     fallback_detail = deps.tr(lang, "Run details unavailable", "Run details unavailable")
     fallback_download = None
     try:
-        ok, result = _run_with_timeout(
-            deps.refresh_recent_runs,
+        result = deps.refresh_recent_runs(
             cfg_now,
             lang=lang,
             preferred_run_id=preferred_run_id,
-            timeout_seconds=_RUN_POSTPROCESS_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return (
@@ -257,13 +229,13 @@ def _safe_refresh_recent_runs(
             f"{fallback_detail}\n\n- {deps.tr(lang, 'Error', 'Error')}: `{exc}`",
             fallback_download,
         )
-    if not ok or not isinstance(result, tuple) or len(result) != 3:
+    if not isinstance(result, tuple) or len(result) != 3:
         return (
             fallback_selector,
             (
                 f"{fallback_detail}\n\n"
                 f"- {deps.tr(lang, 'Error', 'Error')}: "
-                f"`{deps.tr(lang, 'timeout while refreshing run history', 'timeout while refreshing run history')}`"
+                f"`{deps.tr(lang, 'invalid response while refreshing run history', 'invalid response while refreshing run history')}`"
             ),
             fallback_download,
         )
@@ -279,7 +251,11 @@ def _safe_build_run_analysis(
     deps: RunDeps,
 ) -> tuple[str, list[list[Any]], list[Any], list[Any], list[Any]]:
     fallback_title = deps.tr(lang, "Run analytics unavailable", "Run analytics unavailable")
-    fallback_error = deps.tr(lang, "timeout while building analysis", "timeout while building analysis")
+    fallback_error = deps.tr(
+        lang,
+        "invalid response while building analysis",
+        "invalid response while building analysis",
+    )
     fallback = (
         (
             f"{fallback_title}\n\n"
@@ -291,8 +267,7 @@ def _safe_build_run_analysis(
         [("all", "all")],
     )
     try:
-        ok, result = _run_with_timeout(
-            deps.build_run_analysis,
+        result = deps.build_run_analysis(
             run_id,
             cfg_now,
             lang=lang,
@@ -300,7 +275,6 @@ def _safe_build_run_analysis(
             transfer_filter="all",
             rejection_filter="all",
             chunk_filter="all",
-            timeout_seconds=_RUN_POSTPROCESS_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return (
@@ -313,7 +287,7 @@ def _safe_build_run_analysis(
             [("all", "all")],
             [("all", "all")],
         )
-    if not ok or not isinstance(result, tuple) or len(result) != 5:
+    if not isinstance(result, tuple) or len(result) != 5:
         return fallback
     return result
 
@@ -330,7 +304,11 @@ def _safe_build_run_analysis_with_filters(
     chunk_filter: str,
 ) -> tuple[str, list[list[Any]]]:
     fallback_title = deps.tr(lang, "Run analytics unavailable", "Run analytics unavailable")
-    fallback_error = deps.tr(lang, "timeout while building analysis", "timeout while building analysis")
+    fallback_error = deps.tr(
+        lang,
+        "invalid response while building analysis",
+        "invalid response while building analysis",
+    )
     fallback = (
         (
             f"{fallback_title}\n\n"
@@ -339,8 +317,7 @@ def _safe_build_run_analysis_with_filters(
         [],
     )
     try:
-        ok, result = _run_with_timeout(
-            deps.build_run_analysis,
+        result = deps.build_run_analysis(
             run_id,
             cfg_now,
             lang=lang,
@@ -348,7 +325,6 @@ def _safe_build_run_analysis_with_filters(
             transfer_filter=transfer_filter,
             rejection_filter=rejection_filter,
             chunk_filter=chunk_filter,
-            timeout_seconds=_RUN_POSTPROCESS_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return (
@@ -358,7 +334,7 @@ def _safe_build_run_analysis_with_filters(
             ),
             [],
         )
-    if not ok or not isinstance(result, tuple) or len(result) != 5:
+    if not isinstance(result, tuple) or len(result) != 5:
         return fallback
     analysis_md, sample_rows, _taxonomy_choices, _rejection_choices, _chunk_choices = result
     return analysis_md, sample_rows
