@@ -203,60 +203,10 @@ def _compose_phrase_types(
     phrases: list[str],
     difficulty: str,
 ) -> tuple[list[str], list[str]]:
-    score_by_type: dict[str, float] = {}
-    correction_reasons: list[str] = []
-    unsupported_structural: set[str] = set()
-    for label in model_phrase_types:
-        if _model_label_supported(
-            label=label,
-            pattern_scores=pattern_scores,
-            text=text,
-            phrases=phrases,
-        ):
-            score_by_type[label] = score_by_type.get(label, 0.0) + 0.7
-            continue
-        # Conservative fallback: keep weak evidence for lexical classes, but
-        # downweight unsupported structural tags from the model.
-        if label in {"phrasal_verb", "strong_collocation", "reusable_high_frequency_chunk"}:
-            score_by_type[label] = score_by_type.get(label, 0.0) + 0.25
-        else:
-            score_by_type[label] = score_by_type.get(label, 0.0) + 0.05
-            if label in STRUCTURAL_DISCOURSE_TYPES:
-                unsupported_structural.add(label)
-        correction_reasons.append(f"model_label_downweighted:{label}")
-    for label, score in pattern_scores.items():
-        score_by_type[label] = score_by_type.get(label, 0.0) + score
-        if label not in model_phrase_types:
-            correction_reasons.append(f"programmatic_label_added:{label}")
-    if score_by_type and all(label in unsupported_structural for label in score_by_type):
-        fallback = "reusable_high_frequency_chunk"
-        if difficulty == "beginner":
-            fallback = "strong_collocation"
-        correction_reasons.append("model_structural_labels_replaced_by_fallback")
-        return [fallback], correction_reasons
-
-    for label in list(score_by_type):
-        weight = phrase_type_weight(label=label, difficulty=difficulty)
-        if label in unsupported_structural:
-            weight *= 0.1
-        score_by_type[label] += weight
-
-    if not score_by_type:
-        fallback = "reusable_high_frequency_chunk"
-        if difficulty == "beginner":
-            fallback = "strong_collocation"
-        return [fallback], correction_reasons
-
-    ranked = sorted(score_by_type.items(), key=lambda kv: kv[1], reverse=True)
-    phrase_types = [label for label, _ in ranked[:2]]
-    if (
-        (difficulty or "").strip().lower() == "advanced"
-        and len(phrase_types) == 2
-        and phrase_types[0] == "phrasal_verb"
-        and phrase_types[1] in HIGH_VALUE_ADVANCED_TYPES
-    ):
-        phrase_types = [phrase_types[1], phrase_types[0]]
-    return phrase_types, correction_reasons
+    # Keep taxonomy as a strict pre-rank signal from LLM stage.
+    # Do not add/replace labels programmatically in ranking.
+    _ = pattern_scores, text, phrases, difficulty
+    return list(model_phrase_types[:2]), []
 
 
 def score_candidate(

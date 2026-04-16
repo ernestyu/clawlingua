@@ -20,6 +20,7 @@ from clawlearn.utils.time import make_run_id, utc_now_iso
 from clawlearn_web import run_history, upload_io
 
 _RUN_PROGRESS_POLL_SECONDS = 2.0
+_RUN_POSTPROCESS_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -207,6 +208,69 @@ def on_run_start(ui_lang_val: str, *, deps: RunDeps) -> tuple[str, None]:
     return deps.tr(lang, "Running", "Running"), None
 
 
+def _run_with_timeout(
+    fn: Callable[..., Any],
+    *args: Any,
+    timeout_seconds: float,
+    **kwargs: Any,
+) -> tuple[bool, Any]:
+    payload: dict[str, Any] = {}
+    errors: dict[str, Exception] = {}
+
+    def _worker() -> None:
+        try:
+            payload["value"] = fn(*args, **kwargs)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            errors["error"] = exc
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+    worker.join(timeout=max(0.01, float(timeout_seconds)))
+    if worker.is_alive():
+        return False, None
+    if "error" in errors:
+        raise errors["error"]
+    return True, payload.get("value")
+
+
+def _safe_refresh_recent_runs(
+    *,
+    cfg_now: Any,
+    lang: str,
+    preferred_run_id: str | None,
+    deps: RunDeps,
+) -> tuple[Any, str, str | None]:
+    fallback_selector = gr.update(value=preferred_run_id)
+    fallback_detail = deps.tr(lang, "Run details unavailable", "Run details unavailable")
+    fallback_download = None
+    try:
+        ok, result = _run_with_timeout(
+            deps.refresh_recent_runs,
+            cfg_now,
+            lang=lang,
+            preferred_run_id=preferred_run_id,
+            timeout_seconds=_RUN_POSTPROCESS_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return (
+            fallback_selector,
+            f"{fallback_detail}\n\n- {deps.tr(lang, 'Error', 'Error')}: `{exc}`",
+            fallback_download,
+        )
+    if not ok or not isinstance(result, tuple) or len(result) != 3:
+        return (
+            fallback_selector,
+            (
+                f"{fallback_detail}\n\n"
+                f"- {deps.tr(lang, 'Error', 'Error')}: "
+                f"`{deps.tr(lang, 'timeout while refreshing run history', 'timeout while refreshing run history')}`"
+            ),
+            fallback_download,
+        )
+    selector_update, detail_md, history_download = result
+    return selector_update, detail_md, history_download
+
+
 def _safe_build_run_analysis(
     *,
     run_id: str | None,
@@ -214,8 +278,21 @@ def _safe_build_run_analysis(
     lang: str,
     deps: RunDeps,
 ) -> tuple[str, list[list[Any]], list[Any], list[Any], list[Any]]:
+    fallback_title = deps.tr(lang, "Run analytics unavailable", "Run analytics unavailable")
+    fallback_error = deps.tr(lang, "timeout while building analysis", "timeout while building analysis")
+    fallback = (
+        (
+            f"{fallback_title}\n\n"
+            f"- {deps.tr(lang, 'Error', 'Error')}: `{fallback_error}`"
+        ),
+        [],
+        [("all", "all")],
+        [("all", "all")],
+        [("all", "all")],
+    )
     try:
-        return deps.build_run_analysis(
+        ok, result = _run_with_timeout(
+            deps.build_run_analysis,
             run_id,
             cfg_now,
             lang=lang,
@@ -223,6 +300,7 @@ def _safe_build_run_analysis(
             transfer_filter="all",
             rejection_filter="all",
             chunk_filter="all",
+            timeout_seconds=_RUN_POSTPROCESS_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return (
@@ -235,6 +313,55 @@ def _safe_build_run_analysis(
             [("all", "all")],
             [("all", "all")],
         )
+    if not ok or not isinstance(result, tuple) or len(result) != 5:
+        return fallback
+    return result
+
+
+def _safe_build_run_analysis_with_filters(
+    *,
+    run_id: str | None,
+    cfg_now: Any,
+    lang: str,
+    deps: RunDeps,
+    taxonomy_filter: str,
+    transfer_filter: str,
+    rejection_filter: str,
+    chunk_filter: str,
+) -> tuple[str, list[list[Any]]]:
+    fallback_title = deps.tr(lang, "Run analytics unavailable", "Run analytics unavailable")
+    fallback_error = deps.tr(lang, "timeout while building analysis", "timeout while building analysis")
+    fallback = (
+        (
+            f"{fallback_title}\n\n"
+            f"- {deps.tr(lang, 'Error', 'Error')}: `{fallback_error}`"
+        ),
+        [],
+    )
+    try:
+        ok, result = _run_with_timeout(
+            deps.build_run_analysis,
+            run_id,
+            cfg_now,
+            lang=lang,
+            taxonomy_filter=taxonomy_filter,
+            transfer_filter=transfer_filter,
+            rejection_filter=rejection_filter,
+            chunk_filter=chunk_filter,
+            timeout_seconds=_RUN_POSTPROCESS_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return (
+            (
+                f"{deps.tr(lang, 'Run analytics unavailable', 'Run analytics unavailable')}\n\n"
+                f"- {deps.tr(lang, 'Error', 'Error')}: `{exc}`"
+            ),
+            [],
+        )
+    if not ok or not isinstance(result, tuple) or len(result) != 5:
+        return fallback
+    analysis_md, sample_rows, _taxonomy_choices, _rejection_choices, _chunk_choices = result
+    return analysis_md, sample_rows
 
 
 def on_run(
@@ -328,10 +455,11 @@ def on_run(
 
     cfg_now = deps.load_app_config()
     run_id = deps.as_str(result.get("run_id")) or None
-    selector_update, detail_md, history_download = deps.refresh_recent_runs(
-        cfg_now,
+    selector_update, detail_md, history_download = _safe_refresh_recent_runs(
+        cfg_now=cfg_now,
         lang=lang,
         preferred_run_id=run_id,
+        deps=deps,
     )
     (
         analysis_md,
@@ -405,10 +533,11 @@ def on_refresh_runs(
 ) -> tuple[Any, str, str | None, str, list[list[Any]], Any, Any, Any, Any]:
     lang = deps.normalize_ui_lang(ui_lang_val)
     cfg_now = deps.load_app_config()
-    selector_update, detail_md, history_download = deps.refresh_recent_runs(
-        cfg_now,
+    selector_update, detail_md, history_download = _safe_refresh_recent_runs(
+        cfg_now=cfg_now,
         lang=lang,
         preferred_run_id=selected_run_id,
+        deps=deps,
     )
     run_id_next = deps.as_str(
         selector_update.get("value") if isinstance(selector_update, dict) else selected_run_id
@@ -419,14 +548,11 @@ def on_refresh_runs(
         taxonomy_choices,
         rejection_choices,
         chunk_choices,
-    ) = deps.build_run_analysis(
-        run_id_next,
-        cfg_now,
+    ) = _safe_build_run_analysis(
+        run_id=run_id_next,
+        cfg_now=cfg_now,
         lang=lang,
-        taxonomy_filter="all",
-        transfer_filter="all",
-        rejection_filter="all",
-        chunk_filter="all",
+        deps=deps,
     )
     return (
         selector_update,
@@ -456,14 +582,11 @@ def on_run_selected(
         taxonomy_choices,
         rejection_choices,
         chunk_choices,
-    ) = deps.build_run_analysis(
-        run_id_val,
-        cfg_now,
+    ) = _safe_build_run_analysis(
+        run_id=run_id_val,
+        cfg_now=cfg_now,
         lang=lang,
-        taxonomy_filter="all",
-        transfer_filter="all",
-        rejection_filter="all",
-        chunk_filter="all",
+        deps=deps,
     )
     return (
         detail_md,
@@ -489,10 +612,11 @@ def on_apply_analysis_filters(
 ) -> tuple[str, list[list[Any]]]:
     lang = deps.normalize_ui_lang(ui_lang_val)
     cfg_now = deps.load_app_config()
-    analysis_md, sample_rows, _, _, _ = deps.build_run_analysis(
-        run_id_val,
-        cfg_now,
+    analysis_md, sample_rows = _safe_build_run_analysis_with_filters(
+        run_id=run_id_val,
+        cfg_now=cfg_now,
         lang=lang,
+        deps=deps,
         taxonomy_filter=taxonomy_val or "all",
         transfer_filter=transfer_val or "all",
         rejection_filter=rejection_val or "all",

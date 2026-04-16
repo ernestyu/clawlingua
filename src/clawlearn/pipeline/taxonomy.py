@@ -16,6 +16,15 @@ PHRASE_TAXONOMY: tuple[str, ...] = (
 )
 
 _TAXONOMY_SET = set(PHRASE_TAXONOMY)
+PRERANK_HIGH_VALUE_TAXONOMY: tuple[str, ...] = (
+    "discourse_organizer",
+    "concession_contrast",
+    "stance_positioning",
+    "abstraction_bridge",
+    "strong_collocation",
+    "phrasal_verb",
+)
+_PRERANK_HIGH_VALUE_SET = set(PRERANK_HIGH_VALUE_TAXONOMY)
 
 _TAXONOMY_ALIASES: dict[str, str] = {
     # Legacy/debug labels from earlier versions.
@@ -109,6 +118,13 @@ def get_allowed_taxonomy(source_lang: str | None) -> tuple[tuple[str, ...], dict
     return PHRASE_TAXONOMY, _TAXONOMY_ALIASES
 
 
+def get_prerank_taxonomy(source_lang: str | None) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Return v2 high-value taxonomy labels for pre-rank phrase classification."""
+
+    _labels, aliases = get_allowed_taxonomy(source_lang)
+    return PRERANK_HIGH_VALUE_TAXONOMY, aliases
+
+
 def normalize_phrase_type(value: str) -> str | None:
     key = _NORMALIZE_LABEL_RE.sub("_", str(value or "").strip().lower())
     if not key:
@@ -117,6 +133,22 @@ def normalize_phrase_type(value: str) -> str | None:
     if key in _TAXONOMY_SET:
         return key
     return None
+
+
+def normalize_prerank_phrase_label(value: object) -> str:
+    """Normalize phrase label for pre-rank classifier; empty string means none."""
+
+    if value is None:
+        return ""
+    text = str(value).strip().lower()
+    if not text or text in {"none", "null", "unknown", "n/a", "na"}:
+        return ""
+    normalized = normalize_phrase_type(text)
+    if not normalized:
+        return ""
+    if normalized not in _PRERANK_HIGH_VALUE_SET:
+        return ""
+    return normalized
 
 
 def normalize_phrase_types(value: object, *, max_items: int = 2) -> list[str]:

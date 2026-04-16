@@ -503,6 +503,7 @@ def bind_events(
             analytics.rejection_filter,
             analytics.chunk_filter,
         ],
+        queue=False,
     )
 
     components.run_selector.change(
@@ -518,4 +519,5 @@ def bind_events(
             analytics.rejection_filter,
             analytics.chunk_filter,
         ],
+        queue=False,
     )

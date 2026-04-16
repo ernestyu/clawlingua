@@ -103,6 +103,10 @@ def classify_lingua_prerank_taxonomy_batch(
     allow_partial: bool = False,
     source_lang: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Backward-compatible candidate-level pre-rank taxonomy classifier.
+
+    New pipeline should prefer `classify_lingua_prerank_phrases_batch`.
+    """
     if not items:
         return []
     from ..pipeline.taxonomy import get_allowed_taxonomy, normalize_phrase_types as normalize_phrase_types_fn
@@ -176,6 +180,108 @@ def classify_lingua_prerank_taxonomy_batch(
             {
                 "id": item_id,
                 "phrase_types": phrase_types,
+            }
+        )
+    return normalized
+
+
+def classify_lingua_prerank_phrases_batch(
+    *,
+    client: OpenAICompatibleClient,
+    items: list[dict[str, Any]],
+    temperature: float | None = None,
+    allow_partial: bool = False,
+    source_lang: str | None = None,
+) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    from ..pipeline.taxonomy import get_prerank_taxonomy, normalize_prerank_phrase_label
+
+    payload_items = [
+        {
+            "id": str(item.get("id") or "").strip(),
+            "phrase_text": str(item.get("phrase_text", "")).strip(),
+            "text_original": str(item.get("text_original", "")).strip(),
+            "text_cloze": str(item.get("text_cloze", "")).strip(),
+            "local_context": str(item.get("local_context", "")).strip(),
+            "difficulty": str(item.get("difficulty", "")).strip(),
+            "learning_mode": str(item.get("learning_mode", "")).strip(),
+        }
+        for item in items
+    ]
+    allowed_taxonomy, _ = get_prerank_taxonomy(source_lang)
+    taxonomy_list = ", ".join(allowed_taxonomy)
+    content = client.chat(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict phrase-level taxonomy classifier for language-learning pre-rank filtering. "
+                    "Return JSON only."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Classify each phrase using only these labels:\n"
+                    f"{taxonomy_list}\n\n"
+                    "Rules:\n"
+                    "1) Return a JSON array.\n"
+                    "2) Each output item must be: "
+                    "{\"id\":\"...\",\"label\":\"label_or_none\",\"keep\":true_or_false,\"confidence\":0_to_1}.\n"
+                    "3) id must come from input ids only; do not invent ids.\n"
+                    "4) label can be one of allowed labels or \"none\".\n"
+                    "5) If label is \"none\", keep must be false.\n"
+                    "6) If uncertain, return label=\"none\" and keep=false.\n"
+                    "7) Do not output reason/selection_reason or any extra fields.\n"
+                    "8) Do not translate or rewrite text.\n\n"
+                    "input_json:\n"
+                    f"{json.dumps(payload_items, ensure_ascii=False)}"
+                ),
+            },
+        ],
+        temperature=temperature,
+        max_retries=1,
+    )
+    data = parse_json_content(content, expect_array=True)
+    if len(data) != len(items) and not allow_partial:
+        raise build_error(
+            error_code="LLM_RESPONSE_SHAPE_INVALID",
+            cause="Lingua pre-rank phrase response length mismatch.",
+            detail=f"expected={len(items)}, got={len(data)}",
+            next_steps=["Strengthen pre-rank phrase output contract", "Retry with lower temperature"],
+            exit_code=ExitCode.LLM_PARSE_ERROR,
+        )
+    if allow_partial and len(data) > len(items):
+        data = data[: len(items)]
+
+    normalized: list[dict[str, Any]] = []
+    for idx, item in enumerate(data):
+        payload = item if isinstance(item, dict) else {}
+        item_id = str(payload.get("id") or "").strip()
+        if not item_id and idx < len(payload_items):
+            item_id = str(payload_items[idx].get("id") or "").strip()
+        label = normalize_prerank_phrase_label(payload.get("label"))
+        keep_raw = payload.get("keep")
+        keep = bool(keep_raw) if isinstance(keep_raw, bool) else bool(label)
+        if not label:
+            keep = False
+        confidence_value = payload.get("confidence")
+        confidence = 0.0
+        try:
+            confidence = float(confidence_value)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if confidence < 0.0:
+            confidence = 0.0
+        if confidence > 1.0:
+            confidence = 1.0
+        normalized.append(
+            {
+                "id": item_id,
+                "label": label or "none",
+                "keep": keep,
+                "confidence": round(confidence, 4),
             }
         )
     return normalized

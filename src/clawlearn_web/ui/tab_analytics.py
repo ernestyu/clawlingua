@@ -134,4 +134,5 @@ def bind_events(
             components.chunk_filter,
         ],
         outputs=[components.run_analysis, components.run_samples],
+        queue=False,
     )

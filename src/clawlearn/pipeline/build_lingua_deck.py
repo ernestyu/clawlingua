@@ -34,7 +34,7 @@ from ..llm.cloze_generator import (
     generate_phrase_candidates_for_chunk,
 )
 from ..llm.taxonomy_classifier import classify_phrase_types_batch
-from ..llm.taxonomy_classifier import classify_lingua_prerank_taxonomy_batch
+from ..llm.taxonomy_classifier import classify_lingua_prerank_phrases_batch
 from ..llm.prompt_loader import load_prompt
 from ..llm.response_parser import parse_json_content
 from ..llm.translation_generator import (
@@ -44,6 +44,7 @@ from ..llm.translation_generator import (
 )
 from ..models.card import CardRecord
 from ..models.document import DocumentRecord
+from ..phrase_filters.en import phrase_quality_score
 from ..phrase_filters import filter_phrases
 from ..runtime import create_run_context
 from ..tts.provider_registry import get_tts_provider
@@ -179,6 +180,22 @@ class _TaxonomyRepairStats:
         self.taxonomy_repair_attempted += int(other.taxonomy_repair_attempted)
         self.taxonomy_repair_success += int(other.taxonomy_repair_success)
         self.taxonomy_repair_failed += int(other.taxonomy_repair_failed)
+
+
+@dataclass
+class _LinguaPreRankStats:
+    candidates_input: int = 0
+    candidates_output: int = 0
+    candidates_context_only: int = 0
+    candidates_empty_label_dropped: int = 0
+    phrases_total: int = 0
+    phrases_annotated: int = 0
+    phrases_kept: int = 0
+    phrases_none: int = 0
+    phrases_dropped: int = 0
+    partial_retry_count: int = 0
+    exhausted_count: int = 0
+    batch_error_count: int = 0
 
 
 @dataclass
@@ -718,6 +735,61 @@ def _apply_per_chunk_cap(items: list[dict[str, Any]], *, max_per_chunk: int | No
         if current >= max_per_chunk:
             continue
         counts[cid] = current + 1
+        limited.append(item)
+    return limited
+
+
+def _apply_contrastive_rerank(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    primary_label_freq: dict[str, int] = {}
+    for item in items:
+        labels = [str(x).strip() for x in (item.get("phrase_types") or []) if str(x).strip()]
+        primary = labels[0] if labels else ""
+        if not primary:
+            continue
+        primary_label_freq[primary] = primary_label_freq.get(primary, 0) + 1
+
+    reranked: list[dict[str, Any]] = []
+    for item in items:
+        row = dict(item)
+        base = float(row.get("learning_value_score", 0.0))
+        labels = [str(x).strip() for x in (row.get("phrase_types") or []) if str(x).strip()]
+        primary = labels[0] if labels else ""
+        freq = primary_label_freq.get(primary, 0)
+        bonus = (0.2 / freq) if freq > 0 else 0.0
+        row["learning_value_score"] = round(base + bonus, 4)
+        reranked.append(row)
+    reranked.sort(
+        key=lambda row: (
+            float(row.get("learning_value_score", 0.0)),
+            len(str(row.get("original", ""))),
+            len(str(row.get("text", ""))),
+        ),
+        reverse=True,
+    )
+    return reranked
+
+
+def _apply_phrase_diversity_cap(
+    items: list[dict[str, Any]],
+    *,
+    max_per_primary_phrase: int,
+) -> list[dict[str, Any]]:
+    if max_per_primary_phrase <= 0:
+        return list(items)
+    limited: list[dict[str, Any]] = []
+    primary_phrase_counts: dict[str, int] = {}
+    for item in items:
+        phrases = [str(x).strip() for x in (item.get("target_phrases") or []) if str(x).strip()]
+        primary_key = normalize_for_dedupe(phrases[0]) if phrases else ""
+        if not primary_key:
+            limited.append(item)
+            continue
+        current = primary_phrase_counts.get(primary_key, 0)
+        if current >= max_per_primary_phrase:
+            continue
+        primary_phrase_counts[primary_key] = current + 1
         limited.append(item)
     return limited
 
@@ -1721,6 +1793,171 @@ def _repair_taxonomy_candidates(
     return repaired_valid, stats
 
 
+def _extract_candidate_cloze_occurrences(text: str) -> list[dict[str, Any]]:
+    value = str(text or "")
+    if not value:
+        return []
+    occurrences: list[dict[str, Any]] = []
+    for match in _CLOZE_WITH_HINT_RE.finditer(value):
+        full = match.group(0)
+        phrase = str(match.group(2) or "").strip()
+        if not full:
+            continue
+        occurrences.append(
+            {
+                "full": full,
+                "phrase": phrase,
+            }
+        )
+    if occurrences:
+        return occurrences
+    for match in _CLOZE_BLOCK_GENERIC_RE.finditer(value):
+        full = str(match.group(0) or "")
+        body = str(match.group(2) or "")
+        phrase = re.sub(r"</?b>", "", body, flags=re.IGNORECASE).strip()
+        if not full:
+            continue
+        occurrences.append(
+            {
+                "full": full,
+                "phrase": phrase,
+            }
+        )
+    return occurrences
+
+
+def _reindex_candidate_cloze_numbers(text: str) -> str:
+    counter = {"n": 0}
+
+    def _repl(match: re.Match[str]) -> str:
+        counter["n"] += 1
+        body = match.group(2)
+        return f"{{{{c{counter['n']}::{body}}}}}"
+
+    return _CLOZE_BLOCK_GENERIC_RE.sub(_repl, str(text or ""))
+
+
+def _map_phrase_indices_to_cloze_occurrences(
+    *,
+    target_phrases: list[str],
+    occurrences: list[dict[str, Any]],
+) -> dict[int, int]:
+    if not target_phrases or not occurrences:
+        return {}
+    if len(target_phrases) == len(occurrences):
+        return {idx: idx for idx in range(len(target_phrases))}
+    mapping: dict[int, int] = {}
+    unused = set(range(len(occurrences)))
+    for phrase_idx, phrase in enumerate(target_phrases):
+        key = normalize_for_dedupe(phrase)
+        matched_occ: int | None = None
+        for occ_idx in sorted(unused):
+            occ_key = normalize_for_dedupe(str(occurrences[occ_idx].get("phrase", "")))
+            if key and occ_key and key == occ_key:
+                matched_occ = occ_idx
+                break
+        if matched_occ is None and phrase_idx in unused:
+            matched_occ = phrase_idx
+        if matched_occ is None and unused:
+            matched_occ = min(unused)
+        if matched_occ is None:
+            continue
+        mapping[phrase_idx] = matched_occ
+        unused.discard(matched_occ)
+    return mapping
+
+
+def _rewrite_candidate_by_kept_phrase_indices(
+    *,
+    item: dict[str, Any],
+    kept_phrase_indices: set[int],
+) -> dict[str, Any] | None:
+    text = str(item.get("text", "")).strip()
+    target_phrases = [str(x).strip() for x in (item.get("target_phrases") or []) if str(x).strip()]
+    if not target_phrases:
+        return None
+
+    occurrences = _extract_candidate_cloze_occurrences(text)
+    mapping = _map_phrase_indices_to_cloze_occurrences(
+        target_phrases=target_phrases,
+        occurrences=occurrences,
+    )
+    rewritten = text
+    for phrase_idx in range(len(target_phrases)):
+        if phrase_idx in kept_phrase_indices:
+            continue
+        occ_idx = mapping.get(phrase_idx)
+        if occ_idx is None or occ_idx >= len(occurrences):
+            continue
+        full = str(occurrences[occ_idx].get("full", ""))
+        phrase_text = str(occurrences[occ_idx].get("phrase", "")).strip() or target_phrases[phrase_idx]
+        if not full:
+            continue
+        rewritten = rewritten.replace(full, phrase_text, 1)
+
+    kept_phrases = [target_phrases[idx] for idx in range(len(target_phrases)) if idx in kept_phrase_indices]
+    rewritten = re.sub(r"\s+", " ", _reindex_candidate_cloze_numbers(rewritten)).strip()
+    if not kept_phrases or not CLOZE_MARK_RE.search(rewritten):
+        return None
+    updated = dict(item)
+    updated["text"] = rewritten
+    updated["target_phrases"] = kept_phrases
+    return updated
+
+
+def _apply_advanced_phrase_quality_gate(
+    *,
+    item: dict[str, Any],
+    source_lang: str,
+    difficulty: str,
+) -> tuple[dict[str, Any] | None, int]:
+    lang = str(source_lang or "").strip().lower()
+    diff = str(difficulty or "").strip().lower()
+    if lang != "en" or diff != "advanced":
+        return item, 0
+
+    target_phrases = [str(x).strip() for x in (item.get("target_phrases") or []) if str(x).strip()]
+    if not target_phrases:
+        return None, 0
+    kept_indices: set[int] = set()
+    for idx, phrase in enumerate(target_phrases):
+        if phrase_quality_score(phrase) >= 1.0:
+            kept_indices.add(idx)
+    if len(kept_indices) == len(target_phrases):
+        return item, 0
+    rewritten = _rewrite_candidate_by_kept_phrase_indices(
+        item=item,
+        kept_phrase_indices=kept_indices,
+    )
+    dropped_count = len(target_phrases) - len(kept_indices)
+    return rewritten, max(0, dropped_count)
+
+
+def _drop_candidates_without_taxonomy_labels(
+    *,
+    items: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    filtered: list[dict[str, Any]] = []
+    dropped = 0
+    for item in items:
+        labels = normalize_phrase_types(item.get("phrase_types"), max_items=2)
+        if not labels:
+            dropped += 1
+            continue
+        updated = dict(item)
+        updated["phrase_types"] = labels
+        filtered.append(updated)
+    if dropped > 0:
+        errors.append(
+            {
+                "stage": "lingua_taxonomy_pre_rank_empty_label_drop",
+                "dropped_count": dropped,
+            }
+        )
+    return filtered, dropped
+
+
 def _annotate_lingua_candidates_pre_rank(
     *,
     items: list[dict[str, Any]],
@@ -1730,30 +1967,53 @@ def _annotate_lingua_candidates_pre_rank(
     client: OpenAICompatibleClient,
     errors: list[dict[str, Any]],
     temperature: float | None = None,
-    classify_fn: Callable[..., list[dict[str, Any]]] = classify_lingua_prerank_taxonomy_batch,
-) -> int:
+    classify_fn: Callable[..., list[dict[str, Any]]] = classify_lingua_prerank_phrases_batch,
+) -> tuple[list[dict[str, Any]], _LinguaPreRankStats]:
+    stats = _LinguaPreRankStats(candidates_input=len(items))
     if not items:
-        return 0
-    if not cfg.lingua_annotate_enable:
-        return 0
-    if learning_mode not in SUPPORTED_LINGUA_LEARNING_MODES:
-        return 0
+        return [], stats
+    if not cfg.lingua_annotate_enable or learning_mode not in SUPPORTED_LINGUA_LEARNING_MODES:
+        stats.candidates_output = len(items)
+        return list(items), stats
 
     max_items = int(cfg.lingua_annotate_max_items or 0)
     target_items = items[:max_items] if max_items > 0 else items
+    untouched_tail = items[max_items:] if max_items > 0 else []
     if not target_items:
-        return 0
+        stats.candidates_output = len(items)
+        return list(items), stats
 
-    batch_size = max(1, int(cfg.lingua_annotate_batch_size or 50))
-    annotated = 0
-    indexed_items = [
-        {
-            "id": f"candidate_{idx:06d}",
-            "item": item,
-        }
+    candidate_entries = [
+        {"id": f"candidate_{idx:06d}", "item": item}
         for idx, item in enumerate(target_items)
     ]
-    for batch in iter_batches(indexed_items, batch_size):
+    phrase_units: list[dict[str, Any]] = []
+    for entry in candidate_entries:
+        candidate_id = str(entry.get("id") or "").strip()
+        item = entry.get("item", {})
+        phrase_values = [str(x).strip() for x in (item.get("target_phrases") or []) if str(x).strip()]
+        for phrase_idx, phrase in enumerate(phrase_values):
+            phrase_units.append(
+                {
+                    "id": f"{candidate_id}_phrase_{phrase_idx:02d}",
+                    "candidate_id": candidate_id,
+                    "phrase_index": phrase_idx,
+                    "phrase_text": phrase,
+                    "text_original": str(item.get("original", "")).strip(),
+                    "text_cloze": str(item.get("text", "")).strip(),
+                    "local_context": str(item.get("original", "")).strip(),
+                    "difficulty": cfg.cloze_difficulty,
+                    "learning_mode": learning_mode,
+                }
+            )
+    stats.phrases_total = len(phrase_units)
+    if not phrase_units:
+        stats.candidates_output = len(items)
+        return list(items), stats
+
+    phrase_decisions: dict[str, dict[str, Any]] = {}
+    batch_size = max(1, int(cfg.lingua_annotate_batch_size or 50))
+    for batch in iter_batches(phrase_units, batch_size):
         remaining = list(batch)
         attempt = 0
         while remaining:
@@ -1761,11 +2021,10 @@ def _annotate_lingua_candidates_pre_rank(
             classifier_input = [
                 {
                     "id": str(entry.get("id") or "").strip(),
-                    "text_cloze": str(entry.get("item", {}).get("text", "")).strip(),
-                    "text_original": str(entry.get("item", {}).get("original", "")).strip(),
-                    "target_phrases": [
-                        str(x).strip() for x in (entry.get("item", {}).get("target_phrases") or []) if str(x).strip()
-                    ],
+                    "phrase_text": str(entry.get("phrase_text", "")).strip(),
+                    "text_original": str(entry.get("text_original", "")).strip(),
+                    "text_cloze": str(entry.get("text_cloze", "")).strip(),
+                    "local_context": str(entry.get("local_context", "")).strip(),
                     "difficulty": cfg.cloze_difficulty,
                     "learning_mode": learning_mode,
                 }
@@ -1781,6 +2040,7 @@ def _annotate_lingua_candidates_pre_rank(
                 )
             except ClawLearnError as exc:
                 if _is_retryable_translation_batch_error(exc) and attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                    stats.partial_retry_count += 1
                     errors.append(
                         {
                             "stage": "lingua_taxonomy_pre_rank_batch_retry",
@@ -1793,6 +2053,8 @@ def _annotate_lingua_candidates_pre_rank(
                     if delay > 0:
                         time.sleep(delay)
                     continue
+                stats.batch_error_count += 1
+                stats.exhausted_count += len(remaining)
                 errors.append(
                     {
                         "stage": "lingua_taxonomy_pre_rank_batch_error",
@@ -1803,32 +2065,49 @@ def _annotate_lingua_candidates_pre_rank(
                     }
                 )
                 for entry in remaining:
-                    entry.get("item", {})["phrase_types"] = []
+                    pid = str(entry.get("id") or "").strip()
+                    if not pid:
+                        continue
+                    phrase_decisions[pid] = {
+                        "label": "none",
+                        "keep": False,
+                        "confidence": 0.0,
+                    }
                 break
 
             remaining_by_id = {
-                str(entry.get("id") or "").strip(): entry for entry in remaining if str(entry.get("id") or "").strip()
+                str(entry.get("id") or "").strip(): entry
+                for entry in remaining
+                if str(entry.get("id") or "").strip()
             }
             processed_ids: set[str] = set()
             for payload in annotations:
                 payload_id = str((payload or {}).get("id") or "").strip()
                 if not payload_id or payload_id in processed_ids:
                     continue
-                entry = remaining_by_id.get(payload_id)
-                if entry is None:
+                if payload_id not in remaining_by_id:
                     continue
-                item = entry.get("item", {})
-                labels = normalize_phrase_types(
-                    payload.get("phrase_types") if isinstance(payload, dict) else [],
-                    max_items=1,
-                )
-                item["phrase_types"] = labels
+                label = str(payload.get("label") or "").strip().lower()
+                keep = bool(payload.get("keep", False))
+                confidence = payload.get("confidence", 0.0)
+                try:
+                    confidence_f = float(confidence)
+                except (TypeError, ValueError):
+                    confidence_f = 0.0
+                if label in {"", "none", "null"}:
+                    label = "none"
+                    keep = False
+                phrase_decisions[payload_id] = {
+                    "label": label,
+                    "keep": keep and label != "none",
+                    "confidence": max(0.0, min(1.0, confidence_f)),
+                }
                 processed_ids.add(payload_id)
-                annotated += 1
 
             usable_count = len(processed_ids)
             if usable_count == 0:
                 if attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                    stats.partial_retry_count += 1
                     errors.append(
                         {
                             "stage": "lingua_taxonomy_pre_rank_batch_partial_retry",
@@ -1841,6 +2120,8 @@ def _annotate_lingua_candidates_pre_rank(
                     if delay > 0:
                         time.sleep(delay)
                     continue
+                stats.batch_error_count += 1
+                stats.exhausted_count += len(remaining)
                 errors.append(
                     {
                         "stage": "lingua_taxonomy_pre_rank_batch_error",
@@ -1854,13 +2135,21 @@ def _annotate_lingua_candidates_pre_rank(
                     }
                 )
                 for entry in remaining:
-                    entry.get("item", {})["phrase_types"] = []
+                    pid = str(entry.get("id") or "").strip()
+                    if not pid:
+                        continue
+                    phrase_decisions[pid] = {
+                        "label": "none",
+                        "keep": False,
+                        "confidence": 0.0,
+                    }
                 break
 
             remaining = [entry for entry in remaining if str(entry.get("id") or "").strip() not in processed_ids]
             if not remaining:
                 break
             if attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                stats.partial_retry_count += 1
                 errors.append(
                     {
                         "stage": "lingua_taxonomy_pre_rank_batch_partial_retry",
@@ -1873,6 +2162,8 @@ def _annotate_lingua_candidates_pre_rank(
                 if delay > 0:
                     time.sleep(delay)
                 continue
+            stats.batch_error_count += 1
+            stats.exhausted_count += len(remaining)
             errors.append(
                 {
                     "stage": "lingua_taxonomy_pre_rank_batch_error",
@@ -1886,9 +2177,70 @@ def _annotate_lingua_candidates_pre_rank(
                 }
             )
             for entry in remaining:
-                entry.get("item", {})["phrase_types"] = []
+                pid = str(entry.get("id") or "").strip()
+                if not pid:
+                    continue
+                phrase_decisions[pid] = {
+                    "label": "none",
+                    "keep": False,
+                    "confidence": 0.0,
+                }
             break
-    return annotated
+
+    output: list[dict[str, Any]] = []
+    for entry in candidate_entries:
+        candidate_id = str(entry.get("id") or "").strip()
+        item = dict(entry.get("item", {}))
+        phrases = [str(x).strip() for x in (item.get("target_phrases") or []) if str(x).strip()]
+        keep_indices: set[int] = set()
+        labels: list[str] = []
+        for phrase_idx in range(len(phrases)):
+            pid = f"{candidate_id}_phrase_{phrase_idx:02d}"
+            decision = phrase_decisions.get(pid)
+            if decision is None:
+                decision = {"label": "none", "keep": False, "confidence": 0.0}
+            stats.phrases_annotated += 1
+            if bool(decision.get("keep", False)):
+                keep_indices.add(phrase_idx)
+                label = str(decision.get("label") or "").strip()
+                if label and label not in labels:
+                    labels.append(label)
+                stats.phrases_kept += 1
+            else:
+                stats.phrases_none += 1
+
+        rewritten = _rewrite_candidate_by_kept_phrase_indices(
+            item=item,
+            kept_phrase_indices=keep_indices,
+        )
+        if rewritten is None:
+            stats.candidates_context_only += 1
+            continue
+        rewritten["phrase_types"] = labels[:2]
+        rewritten_after_quality, dropped_by_quality = _apply_advanced_phrase_quality_gate(
+            item=rewritten,
+            source_lang=source_lang,
+            difficulty=cfg.cloze_difficulty,
+        )
+        if dropped_by_quality > 0:
+            stats.phrases_none += dropped_by_quality
+            stats.phrases_kept = max(0, stats.phrases_kept - dropped_by_quality)
+            errors.append(
+                {
+                    "stage": "lingua_taxonomy_pre_rank_phrase_quality_drop",
+                    "candidate_id": candidate_id,
+                    "dropped_count": dropped_by_quality,
+                }
+            )
+        if rewritten_after_quality is None:
+            stats.candidates_context_only += 1
+            continue
+        output.append(rewritten_after_quality)
+
+    output.extend(untouched_tail)
+    stats.candidates_output = len(output)
+    stats.phrases_dropped = max(0, stats.phrases_total - stats.phrases_kept)
+    return output, stats
 
 
 def _build_document(cfg: AppConfig, run_id: str, options: BuildDeckOptions) -> DocumentRecord:
@@ -2035,6 +2387,7 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
     chunks: list = []
     format_retry_stats = _FormatRetryStats()
     taxonomy_repair_stats = _TaxonomyRepairStats()
+    lingua_pre_rank_stats = _LinguaPreRankStats()
     phrase_filter_stats = _empty_phrase_filter_stats(
         enabled=False,
         source_lang=document.source_lang,
@@ -2387,7 +2740,7 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
 
     pre_rank_annotated_count = 0
     if valid_candidates:
-        pre_rank_annotated_count = _annotate_lingua_candidates_pre_rank(
+        valid_candidates, lingua_pre_rank_stats = _annotate_lingua_candidates_pre_rank(
             items=valid_candidates,
             cfg=cfg,
             learning_mode=learning_mode,
@@ -2396,19 +2749,55 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
             errors=errors,
             temperature=options.temperature,
         )
+        pre_rank_annotated_count = int(lingua_pre_rank_stats.phrases_annotated)
         if pre_rank_annotated_count > 0:
             logger.info(
                 "lingua taxonomy pre-rank complete | annotated=%d batch_size=%d",
                 pre_rank_annotated_count,
                 max(1, int(cfg.lingua_annotate_batch_size or 50)),
             )
+        if not valid_candidates:
+            errors.append(
+                {
+                    "stage": "lingua_taxonomy_pre_rank_empty",
+                    "reason": "all candidates degraded to context-only after phrase-level taxonomy",
+                }
+            )
+        elif cfg.lingua_annotate_enable and learning_mode in SUPPORTED_LINGUA_LEARNING_MODES:
+            valid_candidates, empty_label_dropped = _drop_candidates_without_taxonomy_labels(
+                items=valid_candidates,
+                errors=errors,
+            )
+            lingua_pre_rank_stats.candidates_empty_label_dropped = int(empty_label_dropped)
+            if empty_label_dropped > 0:
+                logger.info(
+                    "lingua taxonomy hard gate dropped empty-label candidates | dropped=%d",
+                    empty_label_dropped,
+                )
+            if not valid_candidates:
+                errors.append(
+                    {
+                        "stage": "lingua_taxonomy_pre_rank_empty",
+                        "reason": "all candidates dropped by taxonomy hard gate",
+                    }
+                )
         ranked_candidates = rank_candidates(
             valid_candidates,
             difficulty=cfg.cloze_difficulty,
             material_profile=material_profile,
             learning_mode=learning_mode,
         )
+        if (
+            (cfg.cloze_difficulty or "").strip().lower() == "advanced"
+            and learning_mode == "lingua_expression"
+        ):
+            ranked_candidates = _apply_contrastive_rerank(ranked_candidates)
         deduped = dedupe_candidates(ranked_candidates)
+        if (
+            (cfg.cloze_difficulty or "").strip().lower() == "advanced"
+            and learning_mode == "lingua_expression"
+        ):
+            deduped = _apply_phrase_diversity_cap(deduped, max_per_primary_phrase=2)
         deduped = _apply_per_chunk_cap(deduped, max_per_chunk=cfg.cloze_max_per_chunk)
     else:
         deduped = []
@@ -2872,6 +3261,33 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
     pipeline_metrics["taxonomy_repair_attempted"] = taxonomy_repair_stats.taxonomy_repair_attempted
     pipeline_metrics["taxonomy_repair_success"] = taxonomy_repair_stats.taxonomy_repair_success
     pipeline_metrics["taxonomy_repair_failed"] = taxonomy_repair_stats.taxonomy_repair_failed
+    pipeline_metrics["taxonomy_pre_rank"] = {
+        "schema_version": "taxonomy_v2_phrase_level",
+        "candidates_input": lingua_pre_rank_stats.candidates_input,
+        "candidates_output": lingua_pre_rank_stats.candidates_output,
+        "candidates_context_only": lingua_pre_rank_stats.candidates_context_only,
+        "candidates_empty_label_dropped": lingua_pre_rank_stats.candidates_empty_label_dropped,
+        "phrases_total": lingua_pre_rank_stats.phrases_total,
+        "phrases_annotated": lingua_pre_rank_stats.phrases_annotated,
+        "phrases_kept": lingua_pre_rank_stats.phrases_kept,
+        "phrases_none": lingua_pre_rank_stats.phrases_none,
+        "phrases_dropped": lingua_pre_rank_stats.phrases_dropped,
+        "phrase_hit_rate": round(
+            lingua_pre_rank_stats.phrases_kept / lingua_pre_rank_stats.phrases_total,
+            4,
+        )
+        if lingua_pre_rank_stats.phrases_total
+        else 0.0,
+        "phrase_none_rate": round(
+            lingua_pre_rank_stats.phrases_none / lingua_pre_rank_stats.phrases_total,
+            4,
+        )
+        if lingua_pre_rank_stats.phrases_total
+        else 0.0,
+        "partial_retry_count": lingua_pre_rank_stats.partial_retry_count,
+        "exhausted_count": lingua_pre_rank_stats.exhausted_count,
+        "batch_error_count": lingua_pre_rank_stats.batch_error_count,
+    }
     pipeline_metrics["translation"] = {
         "cards_total": len(cards),
         "translated_non_empty": translated_non_empty_count,
