@@ -18,8 +18,20 @@ _WHITELIST = {
     "as a result",
     "in spite of",
     "in terms of",
+    "on the one hand",
+    "on the other hand",
     "that said",
     "to be fair",
+}
+_OPEN_ENDING_WORDS = {
+    "from",
+    "would",
+    "could",
+    "should",
+    "might",
+    "may",
+    "can",
+    "will",
 }
 _STOPWORDS = {
     "a",
@@ -170,6 +182,9 @@ def filter_phrases(
             continue
         if tokens and tokens[-1] in _ARTICLES:
             _record_drop(stats, rule="drop:ends_with_article", phrase=value)
+            continue
+        if tokens and tokens[-1] in _OPEN_ENDING_WORDS:
+            _record_drop(stats, rule="drop:ends_with_open_word", phrase=value)
             continue
         if _stopword_ratio(value) >= (2 / 3):
             _record_drop(stats, rule="drop:stopword_ratio", phrase=value)

@@ -114,6 +114,12 @@ def run_single_build(
         explain_prompt_override=deps.as_str(explain_prompt),
         output_path=str(default_output_path),
         cfg=cfg,
+        env_snapshot_overrides={
+            "CLAWLEARN_MATERIAL_PROFILE": profile_value,
+            "CLAWLEARN_LEARNING_MODE": learning_mode_value,
+            "CLAWLEARN_EXTRACT_PROMPT": deps.as_str(extract_prompt),
+            "CLAWLEARN_EXPLAIN_PROMPT": deps.as_str(explain_prompt),
+        },
     )
 
     try:

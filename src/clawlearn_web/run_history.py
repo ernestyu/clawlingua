@@ -74,8 +74,12 @@ def status_text(lang: str, status: str, *, tr: Callable[[str, str, str], str]) -
     return tr(lang, normalized, normalized)
 
 
-def build_env_snapshot(cfg: Any) -> dict[str, str]:
-    return {
+def build_env_snapshot(
+    cfg: Any,
+    *,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    snapshot = {
         "CLAWLEARN_LLM_MODEL": as_str(getattr(cfg, "llm_model", "")),
         "CLAWLEARN_TRANSLATE_LLM_MODEL": as_str(
             getattr(cfg, "translate_llm_model", "")
@@ -92,6 +96,13 @@ def build_env_snapshot(cfg: Any) -> dict[str, str]:
         "CLAWLEARN_LINGUA_ANNOTATE_BATCH_SIZE": as_str(getattr(cfg, "lingua_annotate_batch_size", "")),
         "CLAWLEARN_LINGUA_ANNOTATE_MAX_ITEMS": as_str(getattr(cfg, "lingua_annotate_max_items", "")),
     }
+    if overrides:
+        for key, value in overrides.items():
+            env_key = as_str(key)
+            if not env_key:
+                continue
+            snapshot[env_key] = as_str(value)
+    return snapshot
 
 
 def write_run_summary(path: Path, payload: dict[str, Any]) -> None:
@@ -138,6 +149,7 @@ def record_run_start(
     explain_prompt_override: str,
     output_path: str,
     cfg: Any,
+    env_snapshot_overrides: dict[str, Any] | None = None,
 ) -> None:
     write_run_summary(
         summary_path,
@@ -159,7 +171,7 @@ def record_run_start(
             "cards": 0,
             "errors": 0,
             "output_path": output_path,
-            "env_snapshot": build_env_snapshot(cfg),
+            "env_snapshot": build_env_snapshot(cfg, overrides=env_snapshot_overrides),
         },
     )
 

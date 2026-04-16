@@ -85,6 +85,8 @@ _TAXONOMY_RETRYABLE_REASONS = (
 )
 _TAXONOMY_RETRYABLE_REASONS_LOWER = tuple(prefix.lower() for prefix in _TAXONOMY_RETRYABLE_REASONS)
 _CONTEXT_EXPAND_MAX_SENTENCE_CHARS = 360
+_CONTEXT_SUBSTRING_MATCH_MIN_CHARS = 24
+_CONTEXT_LEADING_CONNECTOR_RE = re.compile(r"^(?:and|but|so|then)\s+", re.IGNORECASE)
 _EMPTY_RAW_CANDIDATE_RATIO_GUARD = 0.95
 
 
@@ -739,17 +741,32 @@ def _expand_candidate_context_in_chunk(
     if len(chunk_sentences) < 2:
         return base_text, base_original, ""
 
+    def _normalized_context_key(value: str) -> str:
+        key = normalize_for_dedupe(value)
+        key = _CONTEXT_LEADING_CONNECTOR_RE.sub("", key).strip()
+        return key
+
     idx = -1
     for i, sentence in enumerate(chunk_sentences):
         if sentence == base_original:
             idx = i
             break
     if idx < 0:
-        original_key = normalize_for_dedupe(base_original)
+        original_key = _normalized_context_key(base_original)
         for i, sentence in enumerate(chunk_sentences):
-            if normalize_for_dedupe(sentence) == original_key:
+            if _normalized_context_key(sentence) == original_key:
                 idx = i
                 break
+    if idx < 0:
+        original_key = _normalized_context_key(base_original)
+        if len(original_key) >= _CONTEXT_SUBSTRING_MATCH_MIN_CHARS:
+            for i, sentence in enumerate(chunk_sentences):
+                sentence_key = _normalized_context_key(sentence)
+                if not sentence_key:
+                    continue
+                if original_key in sentence_key or sentence_key in original_key:
+                    idx = i
+                    break
     if idx < 0:
         return base_text, base_original, ""
 
