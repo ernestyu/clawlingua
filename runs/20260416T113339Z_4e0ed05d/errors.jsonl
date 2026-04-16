@@ -1,0 +1,3 @@
+{"stage":"phrase_filter","dropped_count":23,"dropped_by_rule":{"drop:stopword_ratio":7,"drop:advanced_min_phrase_score":13,"drop:blacklist_ngram":2,"drop:ends_with_article":1},"examples_by_rule":{"drop:stopword_ratio":["the age of","think this is","is that possible"],"drop:advanced_min_phrase_score":["You know","All this","what does it mean"],"drop:blacklist_ngram":["one of the","look at the"],"drop:ends_with_article":["brings back the"]}}
+{"stage":"lingua_taxonomy_pre_rank_phrase_quality_drop","candidate_id":"candidate_000012","dropped_count":2}
+{"stage":"lingua_taxonomy_pre_rank_phrase_quality_drop","candidate_id":"candidate_000015","dropped_count":2}

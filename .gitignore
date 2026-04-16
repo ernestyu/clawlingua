@@ -40,6 +40,5 @@ tmp/
 
 # user-specific files
 tests/
-runs/
 docs/
 outputs/

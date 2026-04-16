@@ -1,0 +1,179 @@
+{
+  "run_id": "20260416T090404Z_dde5b6c7",
+  "started_at": "2026-04-16T09:04:04.486443+00:00",
+  "finished_at": "2026-04-16T09:10:00.371311+00:00",
+  "status": "completed",
+  "title": "Ilya-Sutskever",
+  "source_lang": "en",
+  "target_lang": "zh",
+  "domain": "lingua",
+  "content_profile": "transcript_dialogue",
+  "material_profile": "transcript_dialogue",
+  "learning_mode": "lingua_expression",
+  "difficulty": "advanced",
+  "extract_prompt_override": "./prompts/cloze_transcript_advanced.json",
+  "explain_prompt_override": "./prompts/translate_rewrite.json",
+  "cards": 24,
+  "errors": 1,
+  "output_path": "/home/ernest/clawlingua/outputs/20260416T090404Z_dde5b6c7/output.apkg",
+  "env_snapshot": {
+    "CLAWLEARN_LLM_MODEL": "mistral-small3.2:latest",
+    "CLAWLEARN_TRANSLATE_LLM_MODEL": "mistral-small3.2:latest",
+    "CLAWLEARN_PROMPT_LANG": "zh",
+    "CLAWLEARN_EXTRACT_PROMPT": "./prompts/cloze_transcript_advanced.json",
+    "CLAWLEARN_EXPLAIN_PROMPT": "./prompts/translate_rewrite.json",
+    "CLAWLEARN_MATERIAL_PROFILE": "transcript_dialogue",
+    "CLAWLEARN_LEARNING_MODE": "lingua_expression",
+    "CLAWLEARN_LINGUA_TRANSCRIPT_MIN_CONTEXT_SENTENCES": "2",
+    "CLAWLEARN_LINGUA_ANNOTATE_ENABLE": "True",
+    "CLAWLEARN_LINGUA_ANNOTATE_BATCH_SIZE": "50",
+    "CLAWLEARN_LINGUA_ANNOTATE_MAX_ITEMS": ""
+  },
+  "metrics": {
+    "learning_mode": "lingua_expression",
+    "chunks_total": 9,
+    "raw_candidates": 27,
+    "raw_candidates_attributed": 27,
+    "raw_candidates_unattributed": 0,
+    "raw_candidates_unknown_chunk_id": 0,
+    "raw_candidates_missing_chunk_id": 0,
+    "validated_candidates": 27,
+    "deduped_candidates": 24,
+    "selected_candidates_attributed": 24,
+    "selected_candidates_unattributed": 0,
+    "selected_candidates_unknown_chunk_id": 0,
+    "selected_candidates_missing_chunk_id": 0,
+    "avg_raw_candidates_per_chunk": 3.0,
+    "avg_selected_candidates_per_chunk": 2.6667,
+    "selected_candidates_per_chunk": {
+      "chunk_0004_b5466e": 2,
+      "chunk_0003_b07743": 4,
+      "chunk_0001_366c72": 3,
+      "chunk_0002_2fe0f2": 3,
+      "chunk_0007_c84335": 3,
+      "chunk_0005_f794b9": 1,
+      "chunk_0006_13b210": 4,
+      "chunk_0009_caedb9": 3,
+      "chunk_0008_e2a49f": 1
+    },
+    "avg_clozes_per_candidate": 2.375,
+    "avg_target_phrases_per_candidate": 2.375,
+    "validation_pass_rate": 1.0,
+    "empty_chunk_count": 0,
+    "empty_chunk_ratio": 0.0,
+    "rejection_reason_histogram": {},
+    "rejection_reason_top": [],
+    "phrase_type_histogram": {
+      "discourse_organizer": 2,
+      "concession_contrast": 3,
+      "stance_positioning": 5,
+      "strong_collocation": 7,
+      "reusable_high_frequency_chunk": 9,
+      "phrasal_verb": 2
+    },
+    "taxonomy_model_histogram": {
+      "discourse_organizer": 1,
+      "reusable_high_frequency_chunk": 3,
+      "strong_collocation": 8,
+      "concession_contrast": 1,
+      "abstraction_bridge": 1,
+      "phrasal_verb": 2
+    },
+    "taxonomy_candidate_histogram": {
+      "discourse_organizer": 3,
+      "concession_contrast": 3,
+      "strong_collocation": 8,
+      "stance_positioning": 5,
+      "reusable_high_frequency_chunk": 11,
+      "phrasal_verb": 2
+    },
+    "taxonomy_selected_histogram": {
+      "discourse_organizer": 2,
+      "concession_contrast": 3,
+      "stance_positioning": 5,
+      "strong_collocation": 7,
+      "reusable_high_frequency_chunk": 9,
+      "phrasal_verb": 2
+    },
+    "taxonomy_average_score": {
+      "discourse_organizer": 8.3,
+      "concession_contrast": 7.7333,
+      "strong_collocation": 6.675,
+      "stance_positioning": 7.02,
+      "reusable_high_frequency_chunk": 6.0091,
+      "phrasal_verb": 3.1
+    },
+    "expression_transfer_non_empty_count": 24,
+    "expression_transfer_non_empty_ratio": 1.0,
+    "expression_transfer_non_empty_ratio_by_taxonomy": {
+      "discourse_organizer": 1.0,
+      "concession_contrast": 1.0,
+      "stance_positioning": 1.0,
+      "strong_collocation": 1.0,
+      "reusable_high_frequency_chunk": 1.0,
+      "phrasal_verb": 1.0
+    },
+    "format_retry": {
+      "attempt1_fixed_count": 0,
+      "llm_repair_success_count": 0,
+      "llm_regen_success_count": 0,
+      "total_extra_llm_calls": 0,
+      "recovered_candidates": 0
+    },
+    "phrase_filter": {
+      "enabled": true,
+      "source_lang": "en",
+      "language": "en",
+      "dropped_count": 21,
+      "dropped_by_rule": {
+        "drop:stopword_ratio": 4,
+        "drop:advanced_min_phrase_score": 15,
+        "drop:ends_with_open_word": 1,
+        "drop:ends_with_article": 1
+      },
+      "examples_by_rule": {
+        "drop:stopword_ratio": [
+          "the age of",
+          "to train on",
+          "the question of"
+        ],
+        "drop:advanced_min_phrase_score": [
+          "You know",
+          "we get used to things",
+          "this is an interesting discussion"
+        ],
+        "drop:ends_with_open_word": [
+          "economic impact would"
+        ],
+        "drop:ends_with_article": [
+          "brings back the"
+        ]
+      }
+    },
+    "taxonomy_reject_count": 0,
+    "taxonomy_repair_attempted": 0,
+    "taxonomy_repair_success": 0,
+    "taxonomy_repair_failed": 0,
+    "translation": {
+      "cards_total": 24,
+      "translated_non_empty": 24,
+      "translation_empty": 0,
+      "phrase_hints_requested": 57,
+      "phrase_hints_mapped": 57
+    },
+    "prompt_info": {
+      "extraction_prompt_name": "phrase_candidates_transcript_advanced",
+      "extraction_prompt_version": "2026-04-15d",
+      "extraction_prompt_path": "/home/ernest/clawlingua/prompts/cloze_transcript_advanced.json",
+      "explanation_prompt_name": "translate_rewrite",
+      "explanation_prompt_version": "2026-04-13",
+      "explanation_prompt_path": "/home/ernest/clawlingua/prompts/translate_rewrite.json",
+      "cloze_prompt_name": "phrase_candidates_transcript_advanced",
+      "cloze_prompt_version": "2026-04-15d",
+      "translate_prompt_name": "translate_rewrite",
+      "translate_prompt_version": "2026-04-13"
+    },
+    "difficulty": "advanced"
+  },
+  "last_error": null
+}
