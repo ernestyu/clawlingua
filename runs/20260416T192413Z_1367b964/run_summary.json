@@ -1,0 +1,32 @@
+{
+  "run_id": "20260416T192413Z_1367b964",
+  "started_at": "2026-04-16T19:24:13.196955+00:00",
+  "finished_at": null,
+  "status": "running",
+  "title": "Ilya-Sutskever",
+  "source_lang": "en",
+  "target_lang": "zh",
+  "domain": "lingua",
+  "content_profile": "transcript_dialogue",
+  "material_profile": "transcript_dialogue",
+  "learning_mode": "lingua_expression",
+  "difficulty": "advanced",
+  "extract_prompt_override": "./prompts/cloze_transcript_advanced.json",
+  "explain_prompt_override": "./prompts/translate_rewrite.json",
+  "cards": 0,
+  "errors": 0,
+  "output_path": "/home/ernest/clawlingua/outputs/20260416T192413Z_1367b964/output.apkg",
+  "env_snapshot": {
+    "CLAWLEARN_LLM_MODEL": "bjoernb/gemma4-26b-fast:latest",
+    "CLAWLEARN_TRANSLATE_LLM_MODEL": "gemma4:e4b",
+    "CLAWLEARN_PROMPT_LANG": "zh",
+    "CLAWLEARN_EXTRACT_PROMPT": "./prompts/cloze_transcript_advanced.json",
+    "CLAWLEARN_EXPLAIN_PROMPT": "./prompts/translate_rewrite.json",
+    "CLAWLEARN_MATERIAL_PROFILE": "transcript_dialogue",
+    "CLAWLEARN_LEARNING_MODE": "lingua_expression",
+    "CLAWLEARN_LINGUA_TRANSCRIPT_MIN_CONTEXT_SENTENCES": "2",
+    "CLAWLEARN_LINGUA_ANNOTATE_ENABLE": "True",
+    "CLAWLEARN_LINGUA_ANNOTATE_BATCH_SIZE": "10",
+    "CLAWLEARN_LINGUA_ANNOTATE_MAX_ITEMS": ""
+  }
+}

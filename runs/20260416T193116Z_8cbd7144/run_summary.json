@@ -1,0 +1,201 @@
+{
+  "run_id": "20260416T193116Z_8cbd7144",
+  "started_at": "2026-04-16T19:31:16.414359+00:00",
+  "finished_at": "2026-04-16T19:38:00.780939+00:00",
+  "status": "completed",
+  "title": "Ilya-Sutskever",
+  "source_lang": "en",
+  "target_lang": "zh",
+  "domain": "lingua",
+  "content_profile": "transcript_dialogue",
+  "material_profile": "transcript_dialogue",
+  "learning_mode": "lingua_expression",
+  "difficulty": "advanced",
+  "extract_prompt_override": "./prompts/cloze_transcript_advanced.json",
+  "explain_prompt_override": "./prompts/translate_rewrite.json",
+  "cards": 20,
+  "errors": 3,
+  "output_path": "/home/ernest/clawlingua/outputs/20260416T193116Z_8cbd7144/output.apkg",
+  "env_snapshot": {
+    "CLAWLEARN_LLM_MODEL": "mistral-small3.2:latest",
+    "CLAWLEARN_TRANSLATE_LLM_MODEL": "mistral-small3.2:latest",
+    "CLAWLEARN_PROMPT_LANG": "zh",
+    "CLAWLEARN_EXTRACT_PROMPT": "./prompts/cloze_transcript_advanced.json",
+    "CLAWLEARN_EXPLAIN_PROMPT": "./prompts/translate_rewrite.json",
+    "CLAWLEARN_MATERIAL_PROFILE": "transcript_dialogue",
+    "CLAWLEARN_LEARNING_MODE": "lingua_expression",
+    "CLAWLEARN_LINGUA_TRANSCRIPT_MIN_CONTEXT_SENTENCES": "2",
+    "CLAWLEARN_LINGUA_ANNOTATE_ENABLE": "True",
+    "CLAWLEARN_LINGUA_ANNOTATE_BATCH_SIZE": "10",
+    "CLAWLEARN_LINGUA_ANNOTATE_MAX_ITEMS": ""
+  },
+  "metrics": {
+    "learning_mode": "lingua_expression",
+    "chunks_total": 9,
+    "raw_candidates": 28,
+    "raw_candidates_attributed": 28,
+    "raw_candidates_unattributed": 0,
+    "raw_candidates_unknown_chunk_id": 0,
+    "raw_candidates_missing_chunk_id": 0,
+    "validated_candidates": 20,
+    "deduped_candidates": 20,
+    "selected_candidates_attributed": 20,
+    "selected_candidates_unattributed": 0,
+    "selected_candidates_unknown_chunk_id": 0,
+    "selected_candidates_missing_chunk_id": 0,
+    "avg_raw_candidates_per_chunk": 3.1111,
+    "avg_selected_candidates_per_chunk": 2.2222,
+    "selected_candidates_per_chunk": {
+      "chunk_0004_b5466e": 3,
+      "chunk_0002_2fe0f2": 3,
+      "chunk_0001_366c72": 3,
+      "chunk_0003_b07743": 3,
+      "chunk_0006_13b210": 2,
+      "chunk_0008_e2a49f": 1,
+      "chunk_0009_caedb9": 2,
+      "chunk_0007_c84335": 2,
+      "chunk_0005_f794b9": 1
+    },
+    "avg_clozes_per_candidate": 1.55,
+    "avg_target_phrases_per_candidate": 1.55,
+    "validation_pass_rate": 0.7143,
+    "empty_chunk_count": 0,
+    "empty_chunk_ratio": 0.0,
+    "rejection_reason_histogram": {},
+    "rejection_reason_top": [],
+    "phrase_type_histogram": {
+      "abstraction_bridge": 2,
+      "stance_positioning": 7,
+      "strong_collocation": 7,
+      "discourse_organizer": 4,
+      "phrasal_verb": 5
+    },
+    "taxonomy_model_histogram": {},
+    "taxonomy_candidate_histogram": {
+      "abstraction_bridge": 2,
+      "stance_positioning": 7,
+      "strong_collocation": 7,
+      "discourse_organizer": 4,
+      "phrasal_verb": 5
+    },
+    "taxonomy_selected_histogram": {
+      "abstraction_bridge": 2,
+      "stance_positioning": 7,
+      "strong_collocation": 7,
+      "discourse_organizer": 4,
+      "phrasal_verb": 5
+    },
+    "taxonomy_average_score": {
+      "abstraction_bridge": 7.4,
+      "stance_positioning": 6.8714,
+      "strong_collocation": 6.3857,
+      "discourse_organizer": 6.55,
+      "phrasal_verb": 5.13
+    },
+    "expression_transfer_non_empty_count": 20,
+    "expression_transfer_non_empty_ratio": 1.0,
+    "expression_transfer_non_empty_ratio_by_taxonomy": {
+      "abstraction_bridge": 1.0,
+      "stance_positioning": 1.0,
+      "strong_collocation": 1.0,
+      "discourse_organizer": 1.0,
+      "phrasal_verb": 1.0
+    },
+    "format_retry": {
+      "attempt1_fixed_count": 0,
+      "llm_repair_success_count": 0,
+      "llm_regen_success_count": 0,
+      "total_extra_llm_calls": 0,
+      "recovered_candidates": 0
+    },
+    "phrase_filter": {
+      "enabled": true,
+      "source_lang": "en",
+      "language": "en",
+      "dropped_count": 22,
+      "dropped_by_rule": {
+        "drop:stopword_ratio": 5,
+        "drop:advanced_min_phrase_score": 7,
+        "drop:discourse_placeholder_blacklist": 3,
+        "drop:ends_with_article": 2,
+        "drop:ends_with_open_word": 1,
+        "drop:blacklist_ngram": 2,
+        "drop:placeholder_token": 2
+      },
+      "examples_by_rule": {
+        "drop:stopword_ratio": [
+          "the age of",
+          "this is an interesting",
+          "nothing is that"
+        ],
+        "drop:advanced_min_phrase_score": [
+          "You know",
+          "we get used to",
+          "it’s kind of"
+        ],
+        "drop:discourse_placeholder_blacklist": [
+          "Another thing",
+          "there is another explanation",
+          "another explanation"
+        ],
+        "drop:ends_with_article": [
+          "even into the",
+          "brings back the"
+        ],
+        "drop:ends_with_open_word": [
+          "economic impact would"
+        ],
+        "drop:blacklist_ngram": [
+          "one of the",
+          "look at the"
+        ],
+        "drop:placeholder_token": [
+          "go to some place",
+          "suggest that something"
+        ]
+      }
+    },
+    "taxonomy_reject_count": 0,
+    "taxonomy_repair_attempted": 0,
+    "taxonomy_repair_success": 0,
+    "taxonomy_repair_failed": 0,
+    "taxonomy_pre_rank": {
+      "schema_version": "taxonomy_v2_phrase_level",
+      "candidates_input": 28,
+      "candidates_output": 20,
+      "candidates_context_only": 8,
+      "candidates_empty_label_dropped": 0,
+      "phrases_total": 65,
+      "phrases_annotated": 65,
+      "phrases_kept": 31,
+      "phrases_none": 34,
+      "phrases_dropped": 34,
+      "phrase_hit_rate": 0.4769,
+      "phrase_none_rate": 0.5231,
+      "partial_retry_count": 0,
+      "exhausted_count": 0,
+      "batch_error_count": 0
+    },
+    "translation": {
+      "cards_total": 20,
+      "translated_non_empty": 20,
+      "translation_empty": 0,
+      "phrase_hints_requested": 30,
+      "phrase_hints_mapped": 30
+    },
+    "prompt_info": {
+      "extraction_prompt_name": "phrase_candidates_transcript_advanced",
+      "extraction_prompt_version": "2026-04-15d",
+      "extraction_prompt_path": "/home/ernest/clawlingua/prompts/cloze_transcript_advanced.json",
+      "explanation_prompt_name": "translate_rewrite",
+      "explanation_prompt_version": "2026-04-13",
+      "explanation_prompt_path": "/home/ernest/clawlingua/prompts/translate_rewrite.json",
+      "cloze_prompt_name": "phrase_candidates_transcript_advanced",
+      "cloze_prompt_version": "2026-04-15d",
+      "translate_prompt_name": "translate_rewrite",
+      "translate_prompt_version": "2026-04-13"
+    },
+    "difficulty": "advanced"
+  },
+  "last_error": null
+}

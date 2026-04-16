@@ -1,0 +1,1 @@
+{"stage":"fatal","error":["ERROR | LLM_RESPONSE_PARSE_FAILED","CAUSE | 模型输出无法解析为 JSON。","DETAIL | raw_prefix='```json\\n[\\n  {\\n    \"chunk_id\": \"chunk_0001\",\\n    \"context_sentences\": [\\n      \"You go to some place and then you get a bu'","NEXT | 检查 prompt 是否要求严格 JSON 输出","NEXT | 尝试降低 temperature，例如 --temperature 0.1","NEXT | 使用 --save-intermediate 检查原始返回内容"]}

@@ -1,0 +1,199 @@
+{
+  "run_id": "20260416T185544Z_69c00f80",
+  "started_at": "2026-04-16T18:55:44.493063+00:00",
+  "finished_at": "2026-04-16T19:00:49.228194+00:00",
+  "status": "completed",
+  "title": "Ilya-Sutskever",
+  "source_lang": "en",
+  "target_lang": "zh",
+  "domain": "lingua",
+  "content_profile": "transcript_dialogue",
+  "material_profile": "transcript_dialogue",
+  "learning_mode": "lingua_expression",
+  "difficulty": "advanced",
+  "extract_prompt_override": "./prompts/cloze_transcript_advanced.json",
+  "explain_prompt_override": "./prompts/translate_rewrite.json",
+  "cards": 17,
+  "errors": 7,
+  "output_path": "/home/ernest/clawlingua/outputs/20260416T185544Z_69c00f80/output.apkg",
+  "env_snapshot": {
+    "CLAWLEARN_LLM_MODEL": "qwen3:30b-a3b-instruct-2507-q4_K_M",
+    "CLAWLEARN_TRANSLATE_LLM_MODEL": "gemma4:e4b",
+    "CLAWLEARN_PROMPT_LANG": "zh",
+    "CLAWLEARN_EXTRACT_PROMPT": "./prompts/cloze_transcript_advanced.json",
+    "CLAWLEARN_EXPLAIN_PROMPT": "./prompts/translate_rewrite.json",
+    "CLAWLEARN_MATERIAL_PROFILE": "transcript_dialogue",
+    "CLAWLEARN_LEARNING_MODE": "lingua_expression",
+    "CLAWLEARN_LINGUA_TRANSCRIPT_MIN_CONTEXT_SENTENCES": "2",
+    "CLAWLEARN_LINGUA_ANNOTATE_ENABLE": "True",
+    "CLAWLEARN_LINGUA_ANNOTATE_BATCH_SIZE": "10",
+    "CLAWLEARN_LINGUA_ANNOTATE_MAX_ITEMS": ""
+  },
+  "metrics": {
+    "learning_mode": "lingua_expression",
+    "chunks_total": 9,
+    "raw_candidates": 29,
+    "raw_candidates_attributed": 29,
+    "raw_candidates_unattributed": 0,
+    "raw_candidates_unknown_chunk_id": 0,
+    "raw_candidates_missing_chunk_id": 0,
+    "validated_candidates": 19,
+    "deduped_candidates": 17,
+    "selected_candidates_attributed": 17,
+    "selected_candidates_unattributed": 0,
+    "selected_candidates_unknown_chunk_id": 0,
+    "selected_candidates_missing_chunk_id": 0,
+    "avg_raw_candidates_per_chunk": 3.2222,
+    "avg_selected_candidates_per_chunk": 1.8889,
+    "selected_candidates_per_chunk": {
+      "chunk_0005_f794b9": 3,
+      "chunk_0002_2fe0f2": 2,
+      "chunk_0004_b5466e": 1,
+      "chunk_0008_e2a49f": 1,
+      "chunk_0006_13b210": 4,
+      "chunk_0009_caedb9": 2,
+      "chunk_0001_366c72": 1,
+      "chunk_0003_b07743": 2,
+      "chunk_0007_c84335": 1
+    },
+    "avg_clozes_per_candidate": 1.7059,
+    "avg_target_phrases_per_candidate": 1.7059,
+    "validation_pass_rate": 0.6552,
+    "empty_chunk_count": 0,
+    "empty_chunk_ratio": 0.0,
+    "rejection_reason_histogram": {
+      "quality": 2
+    },
+    "rejection_reason_top": [
+      {
+        "category": "quality",
+        "count": 2
+      }
+    ],
+    "phrase_type_histogram": {
+      "concession_contrast": 2,
+      "strong_collocation": 10,
+      "discourse_organizer": 3,
+      "abstraction_bridge": 4,
+      "stance_positioning": 3,
+      "phrasal_verb": 1
+    },
+    "taxonomy_model_histogram": {},
+    "taxonomy_candidate_histogram": {
+      "concession_contrast": 2,
+      "strong_collocation": 10,
+      "discourse_organizer": 3,
+      "abstraction_bridge": 4,
+      "stance_positioning": 4,
+      "phrasal_verb": 2
+    },
+    "taxonomy_selected_histogram": {
+      "concession_contrast": 2,
+      "strong_collocation": 10,
+      "discourse_organizer": 3,
+      "abstraction_bridge": 4,
+      "stance_positioning": 3,
+      "phrasal_verb": 1
+    },
+    "taxonomy_average_score": {
+      "concession_contrast": 6.9643,
+      "strong_collocation": 6.6734,
+      "discourse_organizer": 7.8334,
+      "abstraction_bridge": 7.7167,
+      "stance_positioning": 7.0167,
+      "phrasal_verb": 3.2
+    },
+    "expression_transfer_non_empty_count": 17,
+    "expression_transfer_non_empty_ratio": 1.0,
+    "expression_transfer_non_empty_ratio_by_taxonomy": {
+      "concession_contrast": 1.0,
+      "strong_collocation": 1.0,
+      "discourse_organizer": 1.0,
+      "abstraction_bridge": 1.0,
+      "stance_positioning": 1.0,
+      "phrasal_verb": 1.0
+    },
+    "format_retry": {
+      "attempt1_fixed_count": 1,
+      "llm_repair_success_count": 0,
+      "llm_regen_success_count": 0,
+      "total_extra_llm_calls": 0,
+      "recovered_candidates": 1
+    },
+    "phrase_filter": {
+      "enabled": true,
+      "source_lang": "en",
+      "language": "en",
+      "dropped_count": 32,
+      "dropped_by_rule": {
+        "drop:advanced_min_phrase_score": 19,
+        "drop:placeholder_token": 6,
+        "drop:stopword_ratio": 5,
+        "drop:discourse_placeholder_blacklist": 2
+      },
+      "examples_by_rule": {
+        "drop:advanced_min_phrase_score": [
+          "all of this is real",
+          "what does it mean",
+          "this is an interesting discussion"
+        ],
+        "drop:placeholder_token": [
+          "all this AI stuff",
+          "get used to things",
+          "do these amazing things"
+        ],
+        "drop:stopword_ratio": [
+          "it means that",
+          "you go to",
+          "it does suggest"
+        ],
+        "drop:discourse_placeholder_blacklist": [
+          "there is another explanation",
+          "another explanation"
+        ]
+      }
+    },
+    "taxonomy_reject_count": 0,
+    "taxonomy_repair_attempted": 0,
+    "taxonomy_repair_success": 0,
+    "taxonomy_repair_failed": 0,
+    "taxonomy_pre_rank": {
+      "schema_version": "taxonomy_v2_phrase_level",
+      "candidates_input": 27,
+      "candidates_output": 19,
+      "candidates_context_only": 8,
+      "candidates_empty_label_dropped": 0,
+      "phrases_total": 63,
+      "phrases_annotated": 63,
+      "phrases_kept": 31,
+      "phrases_none": 32,
+      "phrases_dropped": 32,
+      "phrase_hit_rate": 0.4921,
+      "phrase_none_rate": 0.5079,
+      "partial_retry_count": 0,
+      "exhausted_count": 0,
+      "batch_error_count": 0
+    },
+    "translation": {
+      "cards_total": 17,
+      "translated_non_empty": 17,
+      "translation_empty": 0,
+      "phrase_hints_requested": 26,
+      "phrase_hints_mapped": 26
+    },
+    "prompt_info": {
+      "extraction_prompt_name": "phrase_candidates_transcript_advanced",
+      "extraction_prompt_version": "2026-04-15d",
+      "extraction_prompt_path": "/home/ernest/clawlingua/prompts/cloze_transcript_advanced.json",
+      "explanation_prompt_name": "translate_rewrite",
+      "explanation_prompt_version": "2026-04-13",
+      "explanation_prompt_path": "/home/ernest/clawlingua/prompts/translate_rewrite.json",
+      "cloze_prompt_name": "phrase_candidates_transcript_advanced",
+      "cloze_prompt_version": "2026-04-15d",
+      "translate_prompt_name": "translate_rewrite",
+      "translate_prompt_version": "2026-04-13"
+    },
+    "difficulty": "advanced"
+  },
+  "last_error": null
+}

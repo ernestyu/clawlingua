@@ -23,6 +23,13 @@ def _as_int(value: Any, *, default: int = 0) -> int:
     return run_history.as_int(value, default=default)
 
 
+def _as_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _read_jsonl_dicts(
     path: Path,
     *,
@@ -89,9 +96,12 @@ def _bar(value: float, max_value: float, *, width: int = 18) -> str:
 def _render_count_histogram(title: str, hist: dict[str, int]) -> str:
     if not hist:
         return f"#### {title}\n- n/a"
-    max_value = max(hist.values())
+    normalized = {str(key): _as_int(value, default=0) for key, value in hist.items()}
+    if not normalized:
+        return f"#### {title}\n- n/a"
+    max_value = max(normalized.values())
     lines = [f"#### {title}"]
-    for key, value in sorted(hist.items(), key=lambda kv: kv[1], reverse=True):
+    for key, value in sorted(normalized.items(), key=lambda kv: kv[1], reverse=True):
         lines.append(f"- `{key}` `{value}` {_bar(float(value), float(max_value))}")
     return "\n".join(lines)
 
@@ -99,9 +109,14 @@ def _render_count_histogram(title: str, hist: dict[str, int]) -> str:
 def _render_score_histogram(title: str, hist: dict[str, float]) -> str:
     if not hist:
         return f"#### {title}\n- n/a"
-    max_value = max(hist.values())
+    normalized = {
+        str(key): _as_float(value, default=0.0) for key, value in hist.items()
+    }
+    if not normalized:
+        return f"#### {title}\n- n/a"
+    max_value = max(normalized.values())
     lines = [f"#### {title}"]
-    for key, value in sorted(hist.items(), key=lambda kv: kv[1], reverse=True):
+    for key, value in sorted(normalized.items(), key=lambda kv: kv[1], reverse=True):
         lines.append(f"- `{key}` `{value:.3f}` {_bar(float(value), float(max_value))}")
     return "\n".join(lines)
 
@@ -111,6 +126,19 @@ def _short_text(value: str, *, limit: int = 120) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3].rstrip() + "..."
+
+
+def _score_sort_value(item: dict[str, Any]) -> float:
+    return _as_float(item.get("learning_value_score"), default=0.0)
+
+
+def _score_display_value(item: dict[str, Any]) -> float | None:
+    score = item.get("learning_value_score")
+    if score is None:
+        return None
+    if isinstance(score, str) and not score.strip():
+        return None
+    return _as_float(score, default=0.0)
 
 
 def _run_analysis_payload(
@@ -146,9 +174,15 @@ def _run_analysis_payload(
         max_bytes=_DEFAULT_SAMPLE_MAX_BYTES,
     )
 
-    selected_candidates: list[dict[str, Any]] = cards
+    selected_candidates, validated_truncated = _read_candidates_stage(
+        run_dir,
+        stage="validated",
+        max_lines=_DEFAULT_SAMPLE_MAX_LINES,
+        max_bytes=_DEFAULT_SAMPLE_MAX_BYTES,
+    )
+    if not selected_candidates:
+        selected_candidates = cards
     raw_candidates: list[dict[str, Any]] = []
-    validated_truncated = False
     raw_truncated = False
 
     if load_full_candidates:
@@ -364,11 +398,18 @@ def build_run_analysis(
     raw_total = _as_int(metrics.get("raw_candidates"), default=0)
     valid_total = _as_int(metrics.get("validated_candidates"), default=0)
     selected_total = _as_int(metrics.get("deduped_candidates"), default=0)
-    transfer_ratio = float(metrics.get("expression_transfer_non_empty_ratio") or 0.0)
-    avg_clozes = float(metrics.get("avg_clozes_per_candidate") or 0.0)
-    avg_phrases = float(metrics.get("avg_target_phrases_per_candidate") or 0.0)
-    avg_selected_per_chunk = float(
-        metrics.get("avg_selected_candidates_per_chunk") or 0.0
+    transfer_ratio = _as_float(
+        metrics.get("expression_transfer_non_empty_ratio"),
+        default=0.0,
+    )
+    avg_clozes = _as_float(metrics.get("avg_clozes_per_candidate"), default=0.0)
+    avg_phrases = _as_float(
+        metrics.get("avg_target_phrases_per_candidate"),
+        default=0.0,
+    )
+    avg_selected_per_chunk = _as_float(
+        metrics.get("avg_selected_candidates_per_chunk"),
+        default=0.0,
     )
 
     model_hist = (
@@ -465,7 +506,7 @@ def build_run_analysis(
     if rejection_filter == "all":
         top_selected = sorted(
             filtered_selected,
-            key=lambda row: float(row.get("learning_value_score", 0.0)),
+            key=_score_sort_value,
             reverse=True,
         )[:5]
         for item in top_selected:
@@ -488,7 +529,7 @@ def build_run_analysis(
                             if _as_str(x)
                         ]
                     ),
-                    float(item.get("learning_value_score", 0.0)),
+                    _score_display_value(item),
                     _short_text(_as_str(item.get("text"))),
                     _short_text(_as_str(item.get("expression_transfer"))),
                     _short_text(_as_str(item.get("selection_reason"))),
@@ -498,7 +539,7 @@ def build_run_analysis(
         taxonomy_bucket: dict[str, dict[str, Any]] = {}
         for item in sorted(
             filtered_selected,
-            key=lambda row: float(row.get("learning_value_score", 0.0)),
+            key=_score_sort_value,
             reverse=True,
         ):
             for ptype in item.get("phrase_types", []) or []:
@@ -526,7 +567,7 @@ def build_run_analysis(
                             if _as_str(x)
                         ]
                     ),
-                    float(item.get("learning_value_score", 0.0)),
+                    _score_display_value(item),
                     _short_text(_as_str(item.get("text"))),
                     _short_text(_as_str(item.get("expression_transfer"))),
                     _short_text(_as_str(item.get("selection_reason"))),
@@ -558,7 +599,7 @@ def build_run_analysis(
                             if _as_str(x)
                         ]
                     ),
-                    float(item.get("learning_value_score", 0.0)),
+                    _score_display_value(item),
                     _short_text(_as_str(item.get("text"))),
                     _short_text(_as_str(item.get("expression_transfer"))),
                     _short_text(_as_str(item.get("selection_reason"))),
@@ -586,7 +627,7 @@ def build_run_analysis(
                         if _as_str(x)
                     ]
                 ),
-                float(candidate.get("learning_value_score", 0.0)),
+                _score_display_value(candidate),
                 _short_text(_as_str(candidate.get("text"))),
                 _short_text(_as_str(candidate.get("expression_transfer"))),
                 _short_text(_as_str(item.get("reason"))),
