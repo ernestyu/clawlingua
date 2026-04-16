@@ -34,7 +34,7 @@ from ..llm.cloze_generator import (
     generate_phrase_candidates_for_chunk,
 )
 from ..llm.taxonomy_classifier import classify_phrase_types_batch
-from ..llm.taxonomy_classifier import classify_phrase_annotations_batch
+from ..llm.taxonomy_classifier import classify_lingua_prerank_taxonomy_batch
 from ..llm.prompt_loader import load_prompt
 from ..llm.response_parser import parse_json_content
 from ..llm.translation_generator import (
@@ -1584,15 +1584,8 @@ def _repair_taxonomy_candidates(
                     client=client,
                     items=classifier_input,
                     temperature=temperature,
+                    allow_partial=True,
                 )
-                if len(repaired_phrase_types) != len(remaining):
-                    raise build_error(
-                        error_code="LLM_RESPONSE_SHAPE_INVALID",
-                        cause="Taxonomy repair response length mismatch.",
-                        detail=f"expected={len(remaining)}, got={len(repaired_phrase_types)}",
-                        next_steps=["Fix taxonomy classifier output contract"],
-                        exit_code=ExitCode.LLM_PARSE_ERROR,
-                    )
             except ClawLearnError as exc:
                 if _is_retryable_translation_batch_error(exc) and attempt < TRANSLATION_BATCH_MAX_RETRIES:
                     errors.append(
@@ -1623,7 +1616,43 @@ def _repair_taxonomy_candidates(
                 )
                 break
 
-            for entry, labels in zip(remaining, repaired_phrase_types, strict=False):
+            usable_count = min(len(repaired_phrase_types), len(remaining))
+            if usable_count <= 0:
+                if attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                    errors.append(
+                        {
+                            "stage": "taxonomy_repair_batch_partial_retry",
+                            "attempt": attempt,
+                            "received": 0,
+                            "remaining": len(remaining),
+                        }
+                    )
+                    delay = _translation_retry_delay_seconds(cfg, attempt)
+                    if delay > 0:
+                        time.sleep(delay)
+                    continue
+                _record_batch_failure(
+                    remaining,
+                    "taxonomy repair batch partial response exhausted",
+                    stage="taxonomy_repair_failed",
+                    attempt=attempt,
+                )
+                errors.append(
+                    {
+                        "stage": "taxonomy_repair_batch_error",
+                        "attempt": attempt,
+                        "remaining": len(remaining),
+                        "error": [
+                            "taxonomy repair partial response exhausted",
+                            f"attempts={TRANSLATION_BATCH_MAX_RETRIES}",
+                        ],
+                    }
+                )
+                break
+
+            current_entries = remaining[:usable_count]
+            current_labels = repaired_phrase_types[:usable_count]
+            for entry, labels in zip(current_entries, current_labels, strict=False):
                 candidate = copy.deepcopy(entry.get("item", {}))
                 candidate["phrase_types"] = normalize_phrase_types(labels, max_items=2)
                 ok, reason = validate_text_candidate(
@@ -1654,27 +1683,60 @@ def _repair_taxonomy_candidates(
                         "item": copy.deepcopy(candidate),
                     }
                 )
+            remaining = remaining[usable_count:]
+            if not remaining:
+                break
+            if attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                errors.append(
+                    {
+                        "stage": "taxonomy_repair_batch_partial_retry",
+                        "attempt": attempt,
+                        "received": usable_count,
+                        "remaining": len(remaining),
+                    }
+                )
+                delay = _translation_retry_delay_seconds(cfg, attempt)
+                if delay > 0:
+                    time.sleep(delay)
+                continue
+            _record_batch_failure(
+                remaining,
+                "taxonomy repair batch partial response exhausted",
+                stage="taxonomy_repair_failed",
+                attempt=attempt,
+            )
+            errors.append(
+                {
+                    "stage": "taxonomy_repair_batch_error",
+                    "attempt": attempt,
+                    "remaining": len(remaining),
+                    "error": [
+                        "taxonomy repair partial response exhausted",
+                        f"attempts={TRANSLATION_BATCH_MAX_RETRIES}",
+                    ],
+                }
+            )
             break
 
     return repaired_valid, stats
 
 
-def _annotate_lingua_transcript_candidates(
+def _annotate_lingua_candidates_pre_rank(
     *,
     items: list[dict[str, Any]],
     cfg: AppConfig,
-    material_profile: str,
     learning_mode: str,
+    source_lang: str,
     client: OpenAICompatibleClient,
     errors: list[dict[str, Any]],
     temperature: float | None = None,
-    classify_fn: Callable[..., list[dict[str, Any]]] = classify_phrase_annotations_batch,
+    classify_fn: Callable[..., list[dict[str, Any]]] = classify_lingua_prerank_taxonomy_batch,
 ) -> int:
     if not items:
         return 0
     if not cfg.lingua_annotate_enable:
         return 0
-    if material_profile != "transcript_dialogue" or learning_mode != "lingua_expression":
+    if learning_mode not in SUPPORTED_LINGUA_LEARNING_MODES:
         return 0
 
     max_items = int(cfg.lingua_annotate_max_items or 0)
@@ -1684,57 +1746,148 @@ def _annotate_lingua_transcript_candidates(
 
     batch_size = max(1, int(cfg.lingua_annotate_batch_size or 50))
     annotated = 0
-    for batch in iter_batches(target_items, batch_size):
-        classifier_input = [
-            {
-                "text_cloze": str(item.get("text", "")).strip(),
-                "text_original": str(item.get("original", "")).strip(),
-                "target_phrases": [str(x).strip() for x in (item.get("target_phrases") or []) if str(x).strip()],
-                "difficulty": cfg.cloze_difficulty,
-                "learning_mode": learning_mode,
-            }
-            for item in batch
-        ]
-        try:
-            annotations = classify_fn(
-                client=client,
-                items=classifier_input,
-                temperature=temperature,
-            )
-            if len(annotations) != len(batch):
-                raise build_error(
-                    error_code="LLM_RESPONSE_SHAPE_INVALID",
-                    cause="Stage-2 annotation response length mismatch.",
-                    detail=f"expected={len(batch)}, got={len(annotations)}",
-                    next_steps=["Fix Stage-2 annotation output contract"],
-                    exit_code=ExitCode.LLM_PARSE_ERROR,
+    indexed_items = [
+        {
+            "id": f"candidate_{idx:06d}",
+            "item": item,
+        }
+        for idx, item in enumerate(target_items)
+    ]
+    for batch in iter_batches(indexed_items, batch_size):
+        remaining = list(batch)
+        attempt = 0
+        while remaining:
+            attempt += 1
+            classifier_input = [
+                {
+                    "id": str(entry.get("id") or "").strip(),
+                    "text_cloze": str(entry.get("item", {}).get("text", "")).strip(),
+                    "text_original": str(entry.get("item", {}).get("original", "")).strip(),
+                    "target_phrases": [
+                        str(x).strip() for x in (entry.get("item", {}).get("target_phrases") or []) if str(x).strip()
+                    ],
+                    "difficulty": cfg.cloze_difficulty,
+                    "learning_mode": learning_mode,
+                }
+                for entry in remaining
+            ]
+            try:
+                annotations = classify_fn(
+                    client=client,
+                    items=classifier_input,
+                    temperature=temperature,
+                    allow_partial=True,
+                    source_lang=source_lang,
                 )
-        except ClawLearnError as exc:
+            except ClawLearnError as exc:
+                if _is_retryable_translation_batch_error(exc) and attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                    errors.append(
+                        {
+                            "stage": "lingua_taxonomy_pre_rank_batch_retry",
+                            "attempt": attempt,
+                            "remaining": len(remaining),
+                            "error": exc.to_lines(),
+                        }
+                    )
+                    delay = _translation_retry_delay_seconds(cfg, attempt)
+                    if delay > 0:
+                        time.sleep(delay)
+                    continue
+                errors.append(
+                    {
+                        "stage": "lingua_taxonomy_pre_rank_batch_error",
+                        "batch_size": len(batch),
+                        "remaining": len(remaining),
+                        "attempt": attempt,
+                        "error": exc.to_lines(),
+                    }
+                )
+                for entry in remaining:
+                    entry.get("item", {})["phrase_types"] = []
+                break
+
+            remaining_by_id = {
+                str(entry.get("id") or "").strip(): entry for entry in remaining if str(entry.get("id") or "").strip()
+            }
+            processed_ids: set[str] = set()
+            for payload in annotations:
+                payload_id = str((payload or {}).get("id") or "").strip()
+                if not payload_id or payload_id in processed_ids:
+                    continue
+                entry = remaining_by_id.get(payload_id)
+                if entry is None:
+                    continue
+                item = entry.get("item", {})
+                labels = normalize_phrase_types(
+                    payload.get("phrase_types") if isinstance(payload, dict) else [],
+                    max_items=1,
+                )
+                item["phrase_types"] = labels
+                processed_ids.add(payload_id)
+                annotated += 1
+
+            usable_count = len(processed_ids)
+            if usable_count == 0:
+                if attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                    errors.append(
+                        {
+                            "stage": "lingua_taxonomy_pre_rank_batch_partial_retry",
+                            "attempt": attempt,
+                            "received": 0,
+                            "remaining": len(remaining),
+                        }
+                    )
+                    delay = _translation_retry_delay_seconds(cfg, attempt)
+                    if delay > 0:
+                        time.sleep(delay)
+                    continue
+                errors.append(
+                    {
+                        "stage": "lingua_taxonomy_pre_rank_batch_error",
+                        "batch_size": len(batch),
+                        "remaining": len(remaining),
+                        "attempt": attempt,
+                        "error": [
+                            "lingua taxonomy pre-rank partial response exhausted",
+                            f"attempts={TRANSLATION_BATCH_MAX_RETRIES}",
+                        ],
+                    }
+                )
+                for entry in remaining:
+                    entry.get("item", {})["phrase_types"] = []
+                break
+
+            remaining = [entry for entry in remaining if str(entry.get("id") or "").strip() not in processed_ids]
+            if not remaining:
+                break
+            if attempt < TRANSLATION_BATCH_MAX_RETRIES:
+                errors.append(
+                    {
+                        "stage": "lingua_taxonomy_pre_rank_batch_partial_retry",
+                        "attempt": attempt,
+                        "received": usable_count,
+                        "remaining": len(remaining),
+                    }
+                )
+                delay = _translation_retry_delay_seconds(cfg, attempt)
+                if delay > 0:
+                    time.sleep(delay)
+                continue
             errors.append(
                 {
-                    "stage": "lingua_stage2_annotate_batch_error",
+                    "stage": "lingua_taxonomy_pre_rank_batch_error",
                     "batch_size": len(batch),
-                    "error": exc.to_lines(),
+                    "remaining": len(remaining),
+                    "attempt": attempt,
+                    "error": [
+                        "lingua taxonomy pre-rank partial response exhausted",
+                        f"attempts={TRANSLATION_BATCH_MAX_RETRIES}",
+                    ],
                 }
             )
-            for item in batch:
-                item["phrase_types"] = []
-                item["selection_reason"] = ""
-                item["reason"] = ""
-            continue
-
-        for item, payload in zip(batch, annotations, strict=False):
-            labels = normalize_phrase_types(
-                payload.get("phrase_types") if isinstance(payload, dict) else [],
-                max_items=1,
-            )
-            reason = ""
-            if isinstance(payload, dict):
-                reason = str(payload.get("reason") or payload.get("selection_reason") or "").strip()
-            item["phrase_types"] = labels
-            item["selection_reason"] = reason if labels else ""
-            item["reason"] = reason if labels else ""
-            annotated += 1
+            for entry in remaining:
+                entry.get("item", {})["phrase_types"] = []
+            break
     return annotated
 
 
@@ -2232,7 +2385,23 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
         _save_failure_snapshot(err)
         raise err
 
+    pre_rank_annotated_count = 0
     if valid_candidates:
+        pre_rank_annotated_count = _annotate_lingua_candidates_pre_rank(
+            items=valid_candidates,
+            cfg=cfg,
+            learning_mode=learning_mode,
+            source_lang=document.source_lang,
+            client=translate_client,
+            errors=errors,
+            temperature=options.temperature,
+        )
+        if pre_rank_annotated_count > 0:
+            logger.info(
+                "lingua taxonomy pre-rank complete | annotated=%d batch_size=%d",
+                pre_rank_annotated_count,
+                max(1, int(cfg.lingua_annotate_batch_size or 50)),
+            )
         ranked_candidates = rank_candidates(
             valid_candidates,
             difficulty=cfg.cloze_difficulty,
@@ -2263,21 +2432,6 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
             "transcript context fallback expanded | count=%d min_sentences=%d",
             context_expanded_count,
             max(2, int(cfg.lingua_transcript_min_context_sentences or 2)),
-        )
-    stage2_annotated_count = _annotate_lingua_transcript_candidates(
-        items=deduped,
-        cfg=cfg,
-        material_profile=material_profile,
-        learning_mode=learning_mode,
-        client=translate_client,
-        errors=errors,
-        temperature=options.temperature,
-    )
-    if stage2_annotated_count > 0:
-        logger.info(
-            "lingua stage2 annotation complete | annotated=%d batch_size=%d",
-            stage2_annotated_count,
-            max(1, int(cfg.lingua_annotate_batch_size or 50)),
         )
     logger.info(
         "text generation complete | raw=%d valid=%d deduped=%d",

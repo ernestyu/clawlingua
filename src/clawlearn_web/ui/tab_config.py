@@ -42,6 +42,9 @@ class ConfigTabComponents:
     validate_retry_enable_env: Any
     validate_retry_max_env: Any
     validate_retry_llm_enable_env: Any
+    lingua_annotate_enable_env: Any
+    lingua_annotate_batch_size_env: Any
+    lingua_annotate_max_items_env: Any
     content_profile_env: Any
     cloze_difficulty_env: Any
     prompt_lang_env: Any
@@ -271,6 +274,33 @@ def build_tab(
                 label="CLAWLEARN_VALIDATE_FORMAT_RETRY_LLM_ENABLE",
                 value=cfg_view.get("CLAWLEARN_VALIDATE_FORMAT_RETRY_LLM_ENABLE", "true"),
             )
+            lingua_annotate_enable_env = gr.Textbox(
+                label="CLAWLEARN_LINGUA_ANNOTATE_ENABLE",
+                value=cfg_view.get("CLAWLEARN_LINGUA_ANNOTATE_ENABLE", "false"),
+                info=tr(
+                    initial_ui_lang,
+                    "Enable Lingua taxonomy pre-rank annotation.",
+                    "Enable Lingua taxonomy pre-rank annotation.",
+                ),
+            )
+            lingua_annotate_batch_size_env = gr.Textbox(
+                label="CLAWLEARN_LINGUA_ANNOTATE_BATCH_SIZE",
+                value=cfg_view.get("CLAWLEARN_LINGUA_ANNOTATE_BATCH_SIZE", "50"),
+                info=tr(
+                    initial_ui_lang,
+                    "Batch size for Lingua taxonomy pre-rank requests.",
+                    "Batch size for Lingua taxonomy pre-rank requests.",
+                ),
+            )
+            lingua_annotate_max_items_env = gr.Textbox(
+                label="CLAWLEARN_LINGUA_ANNOTATE_MAX_ITEMS",
+                value=cfg_view.get("CLAWLEARN_LINGUA_ANNOTATE_MAX_ITEMS", ""),
+                info=tr(
+                    initial_ui_lang,
+                    "Optional max candidates to annotate per run. Empty means all.",
+                    "Optional max candidates to annotate per run. Empty means all.",
+                ),
+            )
             content_profile_env = gr.Textbox(
                 label="CLAWLEARN_CONTENT_PROFILE",
                 value=cfg_view.get("CLAWLEARN_CONTENT_PROFILE", "prose_article"),
@@ -399,6 +429,9 @@ def build_tab(
         validate_retry_enable_env=validate_retry_enable_env,
         validate_retry_max_env=validate_retry_max_env,
         validate_retry_llm_enable_env=validate_retry_llm_enable_env,
+        lingua_annotate_enable_env=lingua_annotate_enable_env,
+        lingua_annotate_batch_size_env=lingua_annotate_batch_size_env,
+        lingua_annotate_max_items_env=lingua_annotate_max_items_env,
         content_profile_env=content_profile_env,
         cloze_difficulty_env=cloze_difficulty_env,
         prompt_lang_env=prompt_lang_env,
@@ -443,6 +476,9 @@ def bind_events(
         components.validate_retry_enable_env,
         components.validate_retry_max_env,
         components.validate_retry_llm_enable_env,
+        components.lingua_annotate_enable_env,
+        components.lingua_annotate_batch_size_env,
+        components.lingua_annotate_max_items_env,
         components.content_profile_env,
         components.cloze_difficulty_env,
         components.prompt_lang_env,
@@ -525,6 +561,9 @@ def bind_events(
         validate_retry_enable_val: str,
         validate_retry_max_val: str,
         validate_retry_llm_enable_val: str,
+        lingua_annotate_enable_val: str,
+        lingua_annotate_batch_size_val: str,
+        lingua_annotate_max_items_val: str,
         content_profile_val: str,
         cloze_difficulty_val: str,
         prompt_lang_val: str,
@@ -558,6 +597,9 @@ def bind_events(
             validate_retry_enable_val,
             validate_retry_max_val,
             validate_retry_llm_enable_val,
+            lingua_annotate_enable_val,
+            lingua_annotate_batch_size_val,
+            lingua_annotate_max_items_val,
             content_profile_val,
             cloze_difficulty_val,
             prompt_lang_val,
@@ -595,6 +637,9 @@ def bind_events(
             components.validate_retry_enable_env,
             components.validate_retry_max_env,
             components.validate_retry_llm_enable_env,
+            components.lingua_annotate_enable_env,
+            components.lingua_annotate_batch_size_env,
+            components.lingua_annotate_max_items_env,
             components.content_profile_env,
             components.cloze_difficulty_env,
             components.prompt_lang_env,
@@ -631,6 +676,9 @@ def bind_events(
         validate_retry_enable_val: Any,
         validate_retry_max_val: Any,
         validate_retry_llm_enable_val: Any,
+        lingua_annotate_enable_val: Any,
+        lingua_annotate_batch_size_val: Any,
+        lingua_annotate_max_items_val: Any,
         content_profile_val: Any,
         cloze_difficulty_val: Any,
         prompt_lang_val: Any,
@@ -664,6 +712,9 @@ def bind_events(
             validate_retry_enable_val,
             validate_retry_max_val,
             validate_retry_llm_enable_val,
+            lingua_annotate_enable_val,
+            lingua_annotate_batch_size_val,
+            lingua_annotate_max_items_val,
             content_profile_val,
             cloze_difficulty_val,
             prompt_lang_val,
@@ -711,6 +762,9 @@ def bind_events(
             components.validate_retry_enable_env,
             components.validate_retry_max_env,
             components.validate_retry_llm_enable_env,
+            components.lingua_annotate_enable_env,
+            components.lingua_annotate_batch_size_env,
+            components.lingua_annotate_max_items_env,
             components.content_profile_env,
             components.cloze_difficulty_env,
             components.prompt_lang_env,

@@ -93,6 +93,21 @@ _TYPE_WEIGHTS: dict[str, dict[str, float]] = {
     },
 }
 
+_LANG_PLACEHOLDER_CODES: set[str] = {"en", "zh", "ja", "de", "fr", "es"}
+
+
+def get_allowed_taxonomy(source_lang: str | None) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Return taxonomy labels and aliases for a source language.
+
+    v1 keeps a shared internal taxonomy for all languages while preserving
+    a language-routed entry point for future language-specific schemas.
+    """
+
+    lang = str(source_lang or "").strip().lower()
+    if lang in _LANG_PLACEHOLDER_CODES:
+        return PHRASE_TAXONOMY, _TAXONOMY_ALIASES
+    return PHRASE_TAXONOMY, _TAXONOMY_ALIASES
+
 
 def normalize_phrase_type(value: str) -> str | None:
     key = _NORMALIZE_LABEL_RE.sub("_", str(value or "").strip().lower())

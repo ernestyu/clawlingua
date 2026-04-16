@@ -363,6 +363,21 @@ def lingua_build_deck(
         "--difficulty",
         help="Cloze difficulty override: beginner|intermediate|advanced (overrides env).",
     ),
+    lingua_annotate: bool | None = typer.Option(
+        None,
+        "--lingua-annotate/--no-lingua-annotate",
+        help="Enable taxonomy pre-rank annotation (overrides env).",
+    ),
+    lingua_annotate_batch_size: int | None = typer.Option(
+        None,
+        "--lingua-annotate-batch-size",
+        help="Batch size for taxonomy pre-rank annotation (overrides env).",
+    ),
+    lingua_annotate_max_items: int | None = typer.Option(
+        None,
+        "--lingua-annotate-max-items",
+        help="Optional max candidates for taxonomy pre-rank annotation (overrides env).",
+    ),
     prompt_lang: str | None = typer.Option(
         None,
         "--prompt-lang",
@@ -421,10 +436,33 @@ def lingua_build_deck(
                 next_steps=[f"Use one of: {allowed}"],
                 exit_code=ExitCode.ARGUMENT_ERROR,
             )
+        if lingua_annotate_batch_size is not None and lingua_annotate_batch_size <= 0:
+            raise build_error(
+                error_code="ARG_LINGUA_ANNOTATE_BATCH_SIZE_INVALID",
+                cause="lingua-annotate-batch-size value is invalid.",
+                detail=f"lingua_annotate_batch_size={lingua_annotate_batch_size}",
+                next_steps=["Use a positive integer, e.g. --lingua-annotate-batch-size 50"],
+                exit_code=ExitCode.ARGUMENT_ERROR,
+            )
+        if lingua_annotate_max_items is not None and lingua_annotate_max_items <= 0:
+            raise build_error(
+                error_code="ARG_LINGUA_ANNOTATE_MAX_ITEMS_INVALID",
+                cause="lingua-annotate-max-items value is invalid.",
+                detail=f"lingua_annotate_max_items={lingua_annotate_max_items}",
+                next_steps=["Use a positive integer, e.g. --lingua-annotate-max-items 100"],
+                exit_code=ExitCode.ARGUMENT_ERROR,
+            )
 
         # Prompt language override: CLI > env
         if prompt_lang:
             cfg.prompt_lang = prompt_lang.strip().lower()
+        # Taxonomy pre-rank overrides: CLI > env
+        if lingua_annotate is not None:
+            cfg.lingua_annotate_enable = bool(lingua_annotate)
+        if lingua_annotate_batch_size is not None:
+            cfg.lingua_annotate_batch_size = int(lingua_annotate_batch_size)
+        if lingua_annotate_max_items is not None:
+            cfg.lingua_annotate_max_items = int(lingua_annotate_max_items)
 
         result = run_build_lingua_deck(
             cfg,
