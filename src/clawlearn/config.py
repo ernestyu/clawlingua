@@ -241,6 +241,7 @@ class AppConfig(BaseModel):
     llm_chunk_batch_size: int = 1
     # Optional second-pass extraction model settings.
     secondary_extract_enable: bool = False
+    secondary_extract_parallel: bool = False
     secondary_extract_llm_base_url: str | None = None
     secondary_extract_llm_api_key: str | None = None
     secondary_extract_llm_model: str | None = None
@@ -836,6 +837,10 @@ def load_config(
         "cloze_max_per_chunk": _env_value(merged.get("CLAWLEARN_CLOZE_MAX_PER_CHUNK"), None),
         "llm_chunk_batch_size": _env_value(merged.get("CLAWLEARN_LLM_CHUNK_BATCH_SIZE"), 1),
         "secondary_extract_enable": _env_value(merged.get("CLAWLEARN_SECONDARY_EXTRACT_ENABLE"), False),
+        "secondary_extract_parallel": _env_value(
+            merged.get("CLAWLEARN_SECONDARY_EXTRACT_PARALLEL"),
+            False,
+        ),
         "secondary_extract_llm_base_url": _env_value(
             merged.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL"),
             None,

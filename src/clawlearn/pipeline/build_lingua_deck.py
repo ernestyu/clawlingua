@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Callable
@@ -91,6 +92,7 @@ _CONTEXT_LEADING_CONNECTOR_RE = re.compile(r"^(?:and|but|so|then)\s+", re.IGNORE
 _EMPTY_RAW_CANDIDATE_RATIO_GUARD = 0.95
 _SECONDARY_CONTEXT_OVERLAP_MIN = 0.6
 _SECONDARY_CONTEXT_TOKEN_RE = re.compile(r"[a-z0-9']+")
+_LINGUA_PRE_RANK_FALLBACK_MIN_SCORE = 1.0
 _SECONDARY_CONTEXT_STOPWORDS = {
     "the",
     "a",
@@ -991,11 +993,18 @@ def _extract_chunk_index(chunk_id: str | None) -> int | None:
         return None
 
 
-def _empty_secondary_extract_stats(*, requested: bool, model: str) -> dict[str, Any]:
+def _empty_secondary_extract_stats(
+    *,
+    requested: bool,
+    model: str,
+    parallel_requested: bool = False,
+) -> dict[str, Any]:
     return {
         "requested": bool(requested),
         "enabled": False,
         "configured": False,
+        "parallel": bool(parallel_requested),
+        "execution_mode": "disabled",
         "secondary_model": str(model or "").strip(),
         "candidates_primary_count": 0,
         "candidates_secondary_count": 0,
@@ -1256,6 +1265,22 @@ def _merge_secondary_extraction_candidates(
     )
 
 
+def _run_extraction_passes(
+    *,
+    run_primary: Callable[[], Exception | None],
+    run_secondary: Callable[[], Exception | None] | None = None,
+    secondary_parallel: bool = False,
+) -> tuple[Exception | None, Exception | None]:
+    if run_secondary is None:
+        return run_primary(), None
+    if not secondary_parallel:
+        return run_primary(), run_secondary()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        primary_future = pool.submit(run_primary)
+        secondary_future = pool.submit(run_secondary)
+        return primary_future.result(), secondary_future.result()
+
+
 def _build_pipeline_metrics(
     *,
     chunks: list[Any],
@@ -1390,6 +1415,7 @@ def _build_pipeline_metrics(
     secondary_stats = secondary_extract_stats or _empty_secondary_extract_stats(
         requested=False,
         model="",
+        parallel_requested=False,
     )
     return {
         "learning_mode": learning_mode,
@@ -1447,6 +1473,8 @@ def _build_pipeline_metrics(
             "requested": bool(secondary_stats.get("requested", False)),
             "enabled": bool(secondary_stats.get("enabled", False)),
             "configured": bool(secondary_stats.get("configured", False)),
+            "parallel": bool(secondary_stats.get("parallel", False)),
+            "execution_mode": str(secondary_stats.get("execution_mode", "")).strip(),
             "secondary_model": str(secondary_stats.get("secondary_model", "")).strip(),
             "candidates_primary_count": int(secondary_stats.get("candidates_primary_count", 0)),
             "candidates_secondary_count": int(secondary_stats.get("candidates_secondary_count", 0)),
@@ -2522,20 +2550,60 @@ def _annotate_lingua_candidates_pre_rank(
         phrases = [str(x).strip() for x in (item.get("target_phrases") or []) if str(x).strip()]
         keep_indices: set[int] = set()
         labels: list[str] = []
+        used_quality_fallback = False
+        phrase_debug_rows: list[dict[str, Any]] = []
         for phrase_idx in range(len(phrases)):
             pid = f"{candidate_id}_phrase_{phrase_idx:02d}"
             decision = phrase_decisions.get(pid)
             if decision is None:
                 decision = {"label": "none", "keep": False, "confidence": 0.0}
+            label = str(decision.get("label") or "none").strip().lower() or "none"
+            keep = bool(decision.get("keep", False))
+            confidence_raw = decision.get("confidence", 0.0)
+            try:
+                confidence = float(confidence_raw)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            confidence = max(0.0, min(1.0, confidence))
             stats.phrases_annotated += 1
-            if bool(decision.get("keep", False)):
+            phrase_debug_rows.append(
+                {
+                    "phrase_index": phrase_idx,
+                    "phrase_text": phrases[phrase_idx],
+                    "label": label,
+                    "keep": keep,
+                    "confidence": confidence,
+                }
+            )
+            if keep:
                 keep_indices.add(phrase_idx)
-                label = str(decision.get("label") or "").strip()
                 if label and label not in labels:
                     labels.append(label)
                 stats.phrases_kept += 1
             else:
                 stats.phrases_none += 1
+
+        if not keep_indices:
+            fallback_indices = {
+                idx
+                for idx, phrase in enumerate(phrases)
+                if phrase_quality_score(phrase) >= _LINGUA_PRE_RANK_FALLBACK_MIN_SCORE
+            }
+            if fallback_indices:
+                keep_indices = fallback_indices
+                used_quality_fallback = True
+                rescued_count = len(fallback_indices)
+                stats.phrases_kept += rescued_count
+                stats.phrases_none = max(0, stats.phrases_none - rescued_count)
+                errors.append(
+                    {
+                        "stage": "lingua_taxonomy_pre_rank_all_none_fallback",
+                        "candidate_id": candidate_id,
+                        "rescued_count": rescued_count,
+                        "phrase_count": len(phrases),
+                        "score_threshold": _LINGUA_PRE_RANK_FALLBACK_MIN_SCORE,
+                    }
+                )
 
         rewritten = _rewrite_candidate_by_kept_phrase_indices(
             item=item,
@@ -2543,8 +2611,23 @@ def _annotate_lingua_candidates_pre_rank(
         )
         if rewritten is None:
             stats.candidates_context_only += 1
+            if not keep_indices:
+                errors.append(
+                    {
+                        "stage": "lingua_taxonomy_pre_rank_context_only_drop",
+                        "candidate_id": candidate_id,
+                        "chunk_id": str(item.get("chunk_id") or "").strip(),
+                        "original": str(item.get("original") or "").strip(),
+                        "phrases": phrase_debug_rows,
+                    }
+                )
             continue
-        rewritten["phrase_types"] = labels[:2]
+        if labels:
+            rewritten["phrase_types"] = labels[:2]
+        elif used_quality_fallback:
+            rewritten["phrase_types"] = normalize_phrase_types(item.get("phrase_types"), max_items=2)
+        else:
+            rewritten["phrase_types"] = []
         rewritten_after_quality, dropped_by_quality = _apply_advanced_phrase_quality_gate(
             item=rewritten,
             source_lang=source_lang,
@@ -2728,6 +2811,7 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
     secondary_extract_stats = _empty_secondary_extract_stats(
         requested=secondary_requested,
         model=str(cfg.secondary_extract_llm_model or "").strip(),
+        parallel_requested=bool(cfg.secondary_extract_parallel),
     )
 
     def _save_failure_snapshot(exc: ClawLearnError) -> None:
@@ -2921,19 +3005,13 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
         return last_error
 
     primary_raw_extraction_candidates: list[dict[str, Any]] = []
-    _run_extraction_pass(
-        stage_name="cloze",
-        client_for_pass=client,
-        batch_size_for_pass=batch_size,
-        sink=primary_raw_extraction_candidates,
-        fail_hard=not options.continue_on_error,
-    )
+    secondary_raw_extraction_candidates: list[dict[str, Any]] = []
     raw_extraction_candidates = list(primary_raw_extraction_candidates)
 
-    secondary_extract_stats["candidates_primary_count"] = len(primary_raw_extraction_candidates)
-    secondary_extract_stats["candidates_merged_count"] = len(primary_raw_extraction_candidates)
-
+    secondary_parallel_enabled = False
     secondary_model_name = str(cfg.secondary_extract_llm_model or "").strip()
+    secondary_batch_size = max(1, int(batch_size))
+    secondary_client: OpenAICompatibleClient | None = None
     if secondary_requested:
         if not secondary_model_name:
             secondary_extract_stats["fallback_to_primary"] = True
@@ -2947,6 +3025,11 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
         else:
             secondary_extract_stats["configured"] = True
             secondary_extract_stats["enabled"] = True
+            secondary_parallel_enabled = bool(cfg.secondary_extract_parallel)
+            secondary_extract_stats["parallel"] = secondary_parallel_enabled
+            secondary_extract_stats["execution_mode"] = (
+                "parallel" if secondary_parallel_enabled else "serial"
+            )
             secondary_cfg = cfg.model_copy(deep=True)
             secondary_cfg.llm_model = secondary_model_name
             if cfg.secondary_extract_llm_base_url:
@@ -2967,47 +3050,67 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
                 secondary_cfg.llm_chunk_batch_size = (
                     cfg.secondary_extract_llm_chunk_batch_size
                 )
-
             secondary_client = OpenAICompatibleClient(secondary_cfg)
             secondary_batch_size = max(1, int(secondary_cfg.llm_chunk_batch_size or 1))
-            secondary_raw_extraction_candidates: list[dict[str, Any]] = []
-            secondary_error = _run_extraction_pass(
-                stage_name="secondary_extract",
-                client_for_pass=secondary_client,
-                batch_size_for_pass=secondary_batch_size,
-                sink=secondary_raw_extraction_candidates,
-                fail_hard=False,
+            logger.info(
+                "secondary extraction mode | parallel=%s primary_batch=%d secondary_batch=%d",
+                secondary_parallel_enabled,
+                batch_size,
+                secondary_batch_size,
             )
-            secondary_extract_stats["candidates_secondary_count"] = len(
-                secondary_raw_extraction_candidates
-            )
-            merged_raw, unique_gain = _merge_secondary_extraction_candidates(
-                use_phrase_pipeline=use_phrase_pipeline,
-                primary_items=primary_raw_extraction_candidates,
-                secondary_items=secondary_raw_extraction_candidates,
-            )
-            raw_extraction_candidates = merged_raw
-            secondary_extract_stats["candidates_merged_count"] = len(merged_raw)
-            secondary_extract_stats["dedup_removed_count"] = max(
-                0,
-                len(primary_raw_extraction_candidates)
-                + len(secondary_raw_extraction_candidates)
-                - len(merged_raw),
-            )
-            secondary_extract_stats["unique_phrase_gain_from_secondary"] = unique_gain
 
-            if secondary_error is not None:
-                secondary_extract_stats["secondary_error_type"] = _secondary_error_type(
-                    secondary_error
-                )
-                secondary_extract_stats["secondary_error_message"] = str(secondary_error).strip()
-                if not secondary_raw_extraction_candidates:
-                    secondary_extract_stats["fallback_to_primary"] = True
-                logger.warning(
-                    "secondary extraction had errors | type=%s msg=%s",
-                    secondary_extract_stats["secondary_error_type"],
-                    secondary_extract_stats["secondary_error_message"],
-                )
+    def _run_primary_pass() -> Exception | None:
+        return _run_extraction_pass(
+            stage_name="cloze",
+            client_for_pass=client,
+            batch_size_for_pass=batch_size,
+            sink=primary_raw_extraction_candidates,
+            fail_hard=not options.continue_on_error,
+        )
+
+    def _run_secondary_pass() -> Exception | None:
+        if secondary_client is None:
+            return None
+        return _run_extraction_pass(
+            stage_name="secondary_extract",
+            client_for_pass=secondary_client,
+            batch_size_for_pass=secondary_batch_size,
+            sink=secondary_raw_extraction_candidates,
+            fail_hard=False,
+        )
+
+    _primary_error, secondary_error = _run_extraction_passes(
+        run_primary=_run_primary_pass,
+        run_secondary=_run_secondary_pass if secondary_client is not None else None,
+        secondary_parallel=secondary_parallel_enabled,
+    )
+    secondary_extract_stats["candidates_primary_count"] = len(primary_raw_extraction_candidates)
+    secondary_extract_stats["candidates_secondary_count"] = len(secondary_raw_extraction_candidates)
+    raw_extraction_candidates, unique_gain = _merge_secondary_extraction_candidates(
+        use_phrase_pipeline=use_phrase_pipeline,
+        primary_items=primary_raw_extraction_candidates,
+        secondary_items=secondary_raw_extraction_candidates,
+    )
+    secondary_extract_stats["candidates_merged_count"] = len(raw_extraction_candidates)
+    secondary_extract_stats["dedup_removed_count"] = max(
+        0,
+        len(primary_raw_extraction_candidates)
+        + len(secondary_raw_extraction_candidates)
+        - len(raw_extraction_candidates),
+    )
+    secondary_extract_stats["unique_phrase_gain_from_secondary"] = unique_gain
+    if secondary_error is not None:
+        secondary_extract_stats["secondary_error_type"] = _secondary_error_type(
+            secondary_error
+        )
+        secondary_extract_stats["secondary_error_message"] = str(secondary_error).strip()
+        if not secondary_raw_extraction_candidates:
+            secondary_extract_stats["fallback_to_primary"] = True
+        logger.warning(
+            "secondary extraction had errors | type=%s msg=%s",
+            secondary_extract_stats["secondary_error_type"],
+            secondary_extract_stats["secondary_error_message"],
+        )
 
     if use_phrase_pipeline:
         raw_candidates, initial_phrase_filter_stats = _materialize_cloze_candidates_from_phrase_items(

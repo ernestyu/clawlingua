@@ -57,6 +57,7 @@ def _config_values_from_view(cfg_view: dict[str, str]) -> tuple[str, ...]:
         cfg_view.get("CLAWLEARN_TTS_EDGE_VOICE3", ""),
         cfg_view.get("CLAWLEARN_TTS_EDGE_VOICE4", ""),
         cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_ENABLE", "false"),
+        cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_PARALLEL", "false"),
         cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL", ""),
         cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_API_KEY", ""),
         cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_LLM_MODEL", ""),
@@ -275,6 +276,7 @@ def on_load_defaults(
     tts_voice3_val: str,
     tts_voice4_val: str,
     secondary_extract_enable_val: str,
+    secondary_extract_parallel_val: str,
     secondary_extract_base_url_val: str,
     secondary_extract_api_key_val: str,
     secondary_extract_model_val: str,
@@ -337,6 +339,7 @@ def on_load_defaults(
         dv("CLAWLEARN_TTS_EDGE_VOICE3", tts_voice3_val),
         dv("CLAWLEARN_TTS_EDGE_VOICE4", tts_voice4_val),
         dv("CLAWLEARN_SECONDARY_EXTRACT_ENABLE", secondary_extract_enable_val),
+        dv("CLAWLEARN_SECONDARY_EXTRACT_PARALLEL", secondary_extract_parallel_val),
         dv(
             "CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL",
             secondary_extract_base_url_val,
@@ -405,6 +408,7 @@ def on_save_config(
     tts_voice3_val: Any,
     tts_voice4_val: Any,
     secondary_extract_enable_val: Any,
+    secondary_extract_parallel_val: Any,
     secondary_extract_base_url_val: Any,
     secondary_extract_api_key_val: Any,
     secondary_extract_model_val: Any,
@@ -452,6 +456,7 @@ def on_save_config(
         "CLAWLEARN_TTS_EDGE_VOICE3": tts_voice3_val or "",
         "CLAWLEARN_TTS_EDGE_VOICE4": tts_voice4_val or "",
         "CLAWLEARN_SECONDARY_EXTRACT_ENABLE": secondary_extract_enable_val or "",
+        "CLAWLEARN_SECONDARY_EXTRACT_PARALLEL": secondary_extract_parallel_val or "",
         "CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL": secondary_extract_base_url_val
         or "",
         "CLAWLEARN_SECONDARY_EXTRACT_LLM_API_KEY": secondary_extract_api_key_val

@@ -27,6 +27,7 @@ class ConfigTabComponents:
     llm_status: Any
     secondary_extract_accordion: Any
     secondary_extract_enable_env: Any
+    secondary_extract_parallel_env: Any
     secondary_extract_base_url: Any
     secondary_extract_api_key: Any
     secondary_extract_model: Any
@@ -180,6 +181,15 @@ def build_tab(
                     initial_ui_lang,
                     "Enable optional second-pass phrase extraction.",
                     "Enable optional second-pass phrase extraction.",
+                ),
+            )
+            secondary_extract_parallel_env = gr.Textbox(
+                label="CLAWLEARN_SECONDARY_EXTRACT_PARALLEL",
+                value=cfg_view.get("CLAWLEARN_SECONDARY_EXTRACT_PARALLEL", "false"),
+                info=tr(
+                    initial_ui_lang,
+                    "Run primary and secondary extraction in parallel when enabled.",
+                    "Run primary and secondary extraction in parallel when enabled.",
                 ),
             )
             secondary_extract_base_url = gr.Textbox(
@@ -486,6 +496,7 @@ def build_tab(
         llm_status=llm_status,
         secondary_extract_accordion=secondary_extract_accordion,
         secondary_extract_enable_env=secondary_extract_enable_env,
+        secondary_extract_parallel_env=secondary_extract_parallel_env,
         secondary_extract_base_url=secondary_extract_base_url,
         secondary_extract_api_key=secondary_extract_api_key,
         secondary_extract_model=secondary_extract_model,
@@ -575,6 +586,7 @@ def bind_events(
         components.tts_voice3_env,
         components.tts_voice4_env,
         components.secondary_extract_enable_env,
+        components.secondary_extract_parallel_env,
         components.secondary_extract_base_url,
         components.secondary_extract_api_key,
         components.secondary_extract_model,
@@ -669,6 +681,7 @@ def bind_events(
         tts_voice3_val: str,
         tts_voice4_val: str,
         secondary_extract_enable_val: str,
+        secondary_extract_parallel_val: str,
         secondary_extract_base_url_val: str,
         secondary_extract_api_key_val: str,
         secondary_extract_model_val: str,
@@ -714,6 +727,7 @@ def bind_events(
             tts_voice3_val,
             tts_voice4_val,
             secondary_extract_enable_val,
+            secondary_extract_parallel_val,
             secondary_extract_base_url_val,
             secondary_extract_api_key_val,
             secondary_extract_model_val,
@@ -763,6 +777,7 @@ def bind_events(
             components.tts_voice3_env,
             components.tts_voice4_env,
             components.secondary_extract_enable_env,
+            components.secondary_extract_parallel_env,
             components.secondary_extract_base_url,
             components.secondary_extract_api_key,
             components.secondary_extract_model,
@@ -811,6 +826,7 @@ def bind_events(
         tts_voice3_val: Any,
         tts_voice4_val: Any,
         secondary_extract_enable_val: Any,
+        secondary_extract_parallel_val: Any,
         secondary_extract_base_url_val: Any,
         secondary_extract_api_key_val: Any,
         secondary_extract_model_val: Any,
@@ -856,6 +872,7 @@ def bind_events(
             tts_voice3_val,
             tts_voice4_val,
             secondary_extract_enable_val,
+            secondary_extract_parallel_val,
             secondary_extract_base_url_val,
             secondary_extract_api_key_val,
             secondary_extract_model_val,
@@ -915,6 +932,7 @@ def bind_events(
             components.tts_voice3_env,
             components.tts_voice4_env,
             components.secondary_extract_enable_env,
+            components.secondary_extract_parallel_env,
             components.secondary_extract_base_url,
             components.secondary_extract_api_key,
             components.secondary_extract_model,

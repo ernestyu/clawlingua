@@ -84,6 +84,9 @@ def build_env_snapshot(
         "CLAWLEARN_SECONDARY_EXTRACT_ENABLE": as_str(
             getattr(cfg, "secondary_extract_enable", "")
         ),
+        "CLAWLEARN_SECONDARY_EXTRACT_PARALLEL": as_str(
+            getattr(cfg, "secondary_extract_parallel", "")
+        ),
         "CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL": as_str(
             getattr(cfg, "secondary_extract_llm_base_url", "")
         ),

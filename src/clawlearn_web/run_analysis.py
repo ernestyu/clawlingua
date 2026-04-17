@@ -451,6 +451,8 @@ def build_run_analysis(
     )
     secondary_enabled = bool(secondary_metrics.get("enabled", False))
     secondary_requested = bool(secondary_metrics.get("requested", False))
+    secondary_parallel = bool(secondary_metrics.get("parallel", False))
+    secondary_execution_mode = _as_str(secondary_metrics.get("execution_mode"))
     secondary_model = _as_str(secondary_metrics.get("secondary_model"))
     secondary_primary_count = _as_int(
         secondary_metrics.get("candidates_primary_count"),
@@ -493,6 +495,8 @@ def build_run_analysis(
         f"- {tr(lang, 'Filtered rejected items', 'Filtered rejected items')}: **{len(filtered_rejected)}**",
         f"- {tr(lang, 'Secondary extraction requested', 'Secondary extraction requested')}: **{secondary_requested}**",
         f"- {tr(lang, 'Secondary extraction enabled', 'Secondary extraction enabled')}: **{secondary_enabled}**",
+        f"- {tr(lang, 'Secondary extraction parallel', 'Secondary extraction parallel')}: **{secondary_parallel}**",
+        f"- {tr(lang, 'Secondary extraction mode', 'Secondary extraction mode')}: `{secondary_execution_mode or '-'}`",
         f"- {tr(lang, 'Secondary extraction model', 'Secondary extraction model')}: `{secondary_model or '-'}`",
         f"- {tr(lang, 'Secondary candidates (primary/secondary/merged)', 'Secondary candidates (primary/secondary/merged)')}: **{secondary_primary_count}/{secondary_count}/{secondary_merged_count}**",
         f"- {tr(lang, 'Secondary dedup removed', 'Secondary dedup removed')}: **{secondary_dedup_removed}**",
