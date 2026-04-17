@@ -1,7 +1,7 @@
 clawlearn(1) -- Build Anki cloze decks from local text/EPUB files
 
 SYNOPSIS
-    python -m clawlearn.cli COMMAND [OPTIONS]
+    python -m clawlearn.cli [GROUP] COMMAND [OPTIONS]
 
 DESCRIPTION
     ClawLearn converts real-world text (podcast transcripts, articles,
@@ -29,14 +29,16 @@ COMMANDS
         Usage:
             python -m clawlearn.cli doctor [--env-file FILE]
 
-    build deck
-        Build an Anki .apkg from a local file.
+    lingua build deck
+        Build an Anki .apkg from a local file (lingua pipelines).
 
         Usage:
-            python -m clawlearn.cli build deck INPUT \
+            python -m clawlearn.cli lingua build deck INPUT \
               --source-lang CODE \
               --target-lang CODE \
-              [--content-profile general|textbook_examples] \
+              [--material-profile prose_article|transcript_dialogue|textbook_examples] \
+              [--learning-mode lingua_expression|lingua_reading] \
+              [--content-profile <deprecated>] \
               [--input-char-limit N] \
               [--env-file FILE] \
               [--output PATH] \
@@ -46,8 +48,59 @@ COMMANDS
               [--max-notes N] \
               [--temperature FLOAT] \
               [--difficulty beginner|intermediate|advanced] \
+              [--prompt-lang en|zh] \
+              [--extract-prompt PATH] \
+              [--explain-prompt PATH] \
+              [--lingua-annotate/--no-lingua-annotate] \
+              [--lingua-annotate-batch-size N] \
+              [--lingua-annotate-max-items N] \
               [--save-intermediate/--no-save-intermediate] \
               [--continue-on-error] \
+              [--verbose] \
+              [--debug]
+
+    textbook build deck
+        Build an Anki .apkg from a local file (textbook pipelines).
+
+        Usage:
+            python -m clawlearn.cli textbook build deck INPUT \
+              --source-lang CODE \
+              --target-lang CODE \
+              [--learning-mode textbook_focus|textbook_review] \
+              [--input-char-limit N] \
+              [--env-file FILE] \
+              [--output PATH] \
+              [--deck-name NAME] \
+              [--max-chars N] \
+              [--max-notes N] \
+              [--save-intermediate/--no-save-intermediate] \
+              [--continue-on-error] \
+              [--verbose] \
+              [--debug]
+
+    build deck
+        (Deprecated) Legacy alias. Prefer `lingua build deck`.
+
+        Usage:
+            python -m clawlearn.cli build deck INPUT \
+              --source-lang CODE \
+              --target-lang CODE \
+              [--content-profile <deprecated>] \
+              [--material-profile prose_article|transcript_dialogue|textbook_examples] \
+              [--learning-mode lingua_expression|lingua_reading] \
+              [--input-char-limit N] \
+              [--env-file FILE] \
+              [--output PATH] \
+              [--deck-name NAME] \
+              [--max-chars N] \
+              [--cloze-min-chars N] \
+              [--max-notes N] \
+              [--temperature FLOAT] \
+              [--difficulty beginner|intermediate|advanced] \
+              [--prompt-lang en|zh] \
+              [--save-intermediate/--no-save-intermediate] \
+              [--continue-on-error] \
+              [--verbose] \
               [--debug]
 
         INPUT
@@ -60,14 +113,17 @@ COMMANDS
             --target-lang
                 Override target language (default from env).
 
+            --material-profile
+                Material profile. Supported values:
+                    prose_article | transcript_dialogue | textbook_examples
+
+            --learning-mode
+                Learning mode selector.
+                - lingua: lingua_expression | lingua_reading
+                - textbook: textbook_focus | textbook_review
+
             --content-profile
-                Content profile. Supported values:
-                    general
-                        Generic contextual content.
-                    textbook_examples
-                        Textbook-style examples; uses
-                        prompts/cloze_textbook_examples.json and enforces
-                        a shorter CLOZE_MIN_CHARS.
+                (Deprecated) Alias of --material-profile. Legacy `general` maps to `prose_article`.
 
             --input-char-limit
                 Only process the first N characters of input. Useful for
@@ -137,7 +193,9 @@ ENVIRONMENT
     CLAWLEARN_CHUNK_*           Chunking controls
     CLAWLEARN_CLOZE_*           Cloze-level controls
     CLAWLEARN_PROMPT_LANG       Default prompt language (en|zh)
-    CLAWLEARN_CONTENT_PROFILE   Default content profile
+    CLAWLEARN_MATERIAL_PROFILE  Default material profile
+    CLAWLEARN_LEARNING_MODE     Default learning mode
+    CLAWLEARN_CONTENT_PROFILE   Legacy alias (maps to material profile)
     CLAWLEARN_TTS_*             TTS provider and voice lists
     CLAWLEARN_OUTPUT_DIR        Output directory for run data (JSONL, media)
     CLAWLEARN_EXPORT_DIR        Output directory for exported decks

@@ -45,10 +45,13 @@ CLAWLEARN_TRANSLATE_LLM_TEMPERATURE=
 CLAWLEARN_TRANSLATE_BATCH_SIZE=4
 
 # Legacy alias (kept for backward compatibility): general|textbook_examples
+# NOTE: legacy "general" is an alias of "prose_article".
 CLAWLEARN_CONTENT_PROFILE=prose_article
 # V2 selectors
 CLAWLEARN_MATERIAL_PROFILE=prose_article
-CLAWLEARN_LEARNING_MODE=expression_mining
+# learning_mode controls which pipeline + prompt family is used.
+# Supported: lingua_expression|lingua_reading (lingua); textbook_focus|textbook_review (textbook).
+CLAWLEARN_LEARNING_MODE=lingua_expression
 
 # Legacy generic cloze prompt path (still supported)
 CLAWLEARN_PROMPT_CLOZE=./prompts/cloze_contextual.json

@@ -184,7 +184,7 @@ CLAWLEARN_TRANSLATE_BATCH_SIZE=4
 ```env
 CLAWLEARN_CONTENT_PROFILE=prose_article
 CLAWLEARN_MATERIAL_PROFILE=prose_article
-CLAWLEARN_LEARNING_MODE=expression_mining
+CLAWLEARN_LEARNING_MODE=lingua_expression
 CLAWLEARN_PROMPT_CLOZE=./prompts/cloze_contextual.json
 CLAWLEARN_PROMPT_CLOZE_TEXTBOOK=./prompts/cloze_textbook_examples.json
 CLAWLEARN_PROMPT_CLOZE_PROSE_BEGINNER=./prompts/cloze_prose_beginner.json
@@ -213,7 +213,7 @@ CLAWLEARN_DEFAULT_DECK_NAME=ClawLearn Default Deck
 
 - `CLAWLEARN_MATERIAL_PROFILE` chooses material strategy: `prose_article`,
   `transcript_dialogue`, `textbook_examples`.
-- `CLAWLEARN_LEARNING_MODE` is currently `expression_mining` (explicit in V2 model).
+- `CLAWLEARN_LEARNING_MODE` defaults to `lingua_expression` (see supported modes in `src/clawlearn/constants.py`).
 - Prompt selection is now **profile + difficulty** driven:
   - prose: `cloze_prose_{beginner|intermediate|advanced}.json`
   - transcript: `cloze_transcript_{beginner|intermediate|advanced}.json`
@@ -266,7 +266,26 @@ It uses `source_lang`, `target_lang`, `learning_mode`, `difficulty`, `cloze_max_
 a merged `chunk_text` (possibly containing multiple chunk blocks) as
 placeholders.
 
-The expected output is **JSON array**, each element roughly:
+The expected output depends on the selected extraction prompt schema:
+
+- **Phrase extraction pipeline** (current default prompts, schema `phrase_candidates_*`):
+
+```json
+{
+  "chunk_id": "chunk_0001",
+  "context_sentences": [
+    "Sentence 1 copied verbatim from chunk_text.",
+    "Sentence 2 copied verbatim from chunk_text."
+  ],
+  "phrases": [
+    { "text": "short phrase copied verbatim" }
+  ]
+}
+```
+
+In this pipeline, the LLM does **not** output any cloze markers. Cloze markup is generated later by code by injecting selected phrase spans into the original sentence text.
+
+- **Legacy cloze-cards pipeline** (schema `cloze_cards_*`, kept for backward compatibility):
 
 ```json
 {
@@ -382,11 +401,18 @@ Performs a series of checks:
 Core command:
 
 ```bash
-python -m clawlearn.cli build deck INPUT \
+python -m clawlearn.cli lingua build deck INPUT \
   --source-lang en \
   --target-lang zh \
   --material-profile prose_article|transcript_dialogue|textbook_examples \
-  --learning-mode expression_mining \
+  --learning-mode lingua_expression|lingua_reading \ 
+  --lingua-annotate \
+  --lingua-annotate-batch-size 50 \
+  --lingua-annotate-max-items 200 \
+  --extract-prompt ./prompts/cloze_transcript_advanced.json \
+  --explain-prompt ./prompts/translate_rewrite.json \
+  --verbose \
+
   --input-char-limit 4000 \
   --env-file .env \
   --output deck.apkg \
@@ -409,7 +435,7 @@ Where:
 - `INPUT`: path to `.txt`/`.md`/`.epub` file.
 - `--source-lang` / `--target-lang` override defaults from env.
 - `--material-profile` selects material strategy and cloze prompt family.
-- `--learning-mode` is explicit in V2 model (`expression_mining` for now).
+- `--learning-mode` selects the pipeline behavior. For lingua pipelines: `lingua_expression|lingua_reading`. For textbook pipelines: `textbook_focus|textbook_review`.
 - `--content-profile` is kept as a deprecated alias of `--material-profile`.
 - `--input-char-limit` lets you process only the first N characters for quick tests.
 - `--difficulty` overrides `CLAWLEARN_CLOZE_DIFFICULTY`.
@@ -484,10 +510,11 @@ it if you want different field names or card faces.
 3. **Build a deck from a podcast transcript**
 
    ```bash
-   python -m clawlearn.cli build deck ./podcast_transcript.md \
+   python -m clawlearn.cli lingua build deck ./podcast_transcript.md \
      --source-lang en --target-lang zh --env-file .env \
+     --material-profile transcript_dialogue --learning-mode lingua_expression \
      --difficulty intermediate --max-chars 1500 \
-     --save-intermediate --continue-on-error
+     --save-intermediate --continue-on-error --verbose
    ```
 
 4. **Import the generated `.apkg` into Anki** and review cards.
