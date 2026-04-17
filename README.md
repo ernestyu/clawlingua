@@ -179,6 +179,31 @@ CLAWLEARN_TRANSLATE_BATCH_SIZE=4
 - Translation batches use request-level retries (max 3 attempts). For partial
   responses, successful items are consumed first and only remaining items are retried.
 
+### 2.X Secondary extraction (dual-LLM phrase extraction)
+
+ClawLearn can optionally run a **secondary extraction pass** using a different LLM configuration.
+This is useful when your primary model is conservative (high precision) and a secondary model can
+provide recall, or when you want to compare/merge candidates from two models.
+
+- Enable via `CLAWLEARN_SECONDARY_EXTRACT_ENABLE=true`.
+- Secondary pass never aborts the whole run; errors are recorded and the build falls back to primary.
+- Candidates from both passes are deduped and merged. `run_summary.json` reports the unique gain.
+
+Relevant env vars:
+
+```env
+CLAWLEARN_SECONDARY_EXTRACT_ENABLE=false
+CLAWLEARN_SECONDARY_EXTRACT_PARALLEL=false
+CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_API_KEY=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_MODEL=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_TIMEOUT_SECONDS=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_TEMPERATURE=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_MAX_RETRIES=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_RETRY_BACKOFF_SECONDS=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_CHUNK_BATCH_SIZE=
+```
+
 ### 2.6 Prompts, templates, output
 
 ```env

@@ -188,18 +188,19 @@ COMMANDS
             python -m clawlearn.cli config validate [--env-file FILE]
 
 ENVIRONMENT
-    CLAWLEARN_LLM_*             OpenAI-compatible LLM configuration
-    CLAWLEARN_TRANSLATE_LLM_*   Optional small LLM for translation
-    CLAWLEARN_CHUNK_*           Chunking controls
-    CLAWLEARN_CLOZE_*           Cloze-level controls
-    CLAWLEARN_PROMPT_LANG       Default prompt language (en|zh)
-    CLAWLEARN_MATERIAL_PROFILE  Default material profile
-    CLAWLEARN_LEARNING_MODE     Default learning mode
-    CLAWLEARN_CONTENT_PROFILE   Legacy alias (maps to material profile)
-    CLAWLEARN_TTS_*             TTS provider and voice lists
-    CLAWLEARN_OUTPUT_DIR        Output directory for run data (JSONL, media)
-    CLAWLEARN_EXPORT_DIR        Output directory for exported decks
-    CLAWLEARN_LOG_DIR           Directory for log files
+    CLAWLEARN_LLM_*                     OpenAI-compatible LLM configuration
+    CLAWLEARN_TRANSLATE_LLM_*           Optional small LLM for translation
+    CLAWLEARN_SECONDARY_EXTRACT_*       Optional secondary extraction pass (dual-LLM)
+    CLAWLEARN_CHUNK_*                   Chunking controls
+    CLAWLEARN_CLOZE_*                   Cloze-level controls
+    CLAWLEARN_PROMPT_LANG               Default prompt language (en|zh)
+    CLAWLEARN_MATERIAL_PROFILE          Default material profile
+    CLAWLEARN_LEARNING_MODE             Default learning mode
+    CLAWLEARN_CONTENT_PROFILE           Legacy alias (maps to material profile)
+    CLAWLEARN_TTS_*                     TTS provider and voice lists
+    CLAWLEARN_OUTPUT_DIR                Output directory for run data (JSONL, media)
+    CLAWLEARN_EXPORT_DIR                Output directory for exported decks
+    CLAWLEARN_LOG_DIR                   Directory for log files
 
 SEE ALSO
     README.md, README_zh.md, ENV_EXAMPLE.md

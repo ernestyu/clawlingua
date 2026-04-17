@@ -153,6 +153,35 @@ CLAWLEARN_TRANSLATE_LLM_TEMPERATURE=
 - 建议主 LLM 用较贵的模型（如 Gemini），翻译 LLM 用便宜模型（如本地 Qwen）；
 - 若 `TRANSLATE_LLM_BASE_URL`/`MODEL` 为空，则翻译与 cloze 共用主 LLM。
 
+### 2.X Secondary extraction（双 LLM 取词）
+
+可选启用 **secondary extraction pass**：使用另一套 LLM 配置再跑一遍抽取（取词/短语候选），
+然后将 primary + secondary 的候选去重合并。
+
+典型用途：
+- primary 模型偏保守（precision 高、recall 低），secondary 模型补 recall；
+- 或者需要对比两套模型抽取差异。
+
+行为约定：
+- 通过 `CLAWLEARN_SECONDARY_EXTRACT_ENABLE=true` 开启；
+- secondary pass 出错不会导致整次构建失败，会记录错误并回退到 primary；
+- 合并结果会写入 run_summary.json（包含 unique gain 等指标）。
+
+相关环境变量：
+
+```env
+CLAWLEARN_SECONDARY_EXTRACT_ENABLE=false
+CLAWLEARN_SECONDARY_EXTRACT_PARALLEL=false
+CLAWLEARN_SECONDARY_EXTRACT_LLM_BASE_URL=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_API_KEY=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_MODEL=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_TIMEOUT_SECONDS=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_TEMPERATURE=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_MAX_RETRIES=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_RETRY_BACKOFF_SECONDS=
+CLAWLEARN_SECONDARY_EXTRACT_LLM_CHUNK_BATCH_SIZE=
+```
+
 ### 2.6 Prompt、模板与输出
 
 ```env
