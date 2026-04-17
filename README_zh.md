@@ -401,7 +401,29 @@ python -m clawlearn.cli config validate --env-file .env
 
 ---
 
-## 6. 典型使用流程
+## 6. 迁移说明（V1 -> V2）
+
+如果你有旧的脚本/配置，下面是关键变化：
+
+- **命令结构**：
+  - 推荐新命令：`python -m clawlearn.cli lingua build deck ...`
+  - `python -m clawlearn.cli build deck ...` 仍保留，但属于 **deprecated alias**。
+
+- **Profile 选择**：
+  - 推荐使用 `--material-profile` / `CLAWLEARN_MATERIAL_PROFILE`。
+  - `--content-profile` / `CLAWLEARN_CONTENT_PROFILE` 为兼容旧配置的 deprecated alias。
+  - 旧值 `content_profile=general` 会映射为 `material_profile=prose_article`。
+
+- **learning_mode**：
+  - `CLAWLEARN_LEARNING_MODE` 默认是 `lingua_expression`。
+  - 所有支持的 mode 以 `src/clawlearn/constants.py` 为准。
+
+- **两阶段抽取（重要）**：
+  - 当前默认 prompts 输出 schema 为 `phrase_candidates_*`：LLM 只输出 context + phrase JSON，不包含 cloze。
+  - Cloze 标记（`{{cN::<b>...</b>}}(hint)`）由后续代码统一注入生成。
+  - 旧 prompts 可能输出 `cloze_cards_*`（由 LLM 直接生成 cloze 文本），该路径仍作为兼容方案保留。
+
+## 7. 典型使用流程
 
 1. 配好 `.env`：LLM、chunking、cloze 控制、TTS。
 2. 运行 doctor 确认配置无误：
