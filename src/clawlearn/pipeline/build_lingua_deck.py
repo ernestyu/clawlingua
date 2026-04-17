@@ -72,6 +72,8 @@ _FORMAT_RETRY_TEXT_EXCEEDS_RE = re.compile(r"^format:text exceeds (\d+) sentence
 _FORMAT_RETRY_MIN_CHARS_RE = re.compile(r"^format:text chars < (\d+)$")
 _CLOZE_BLOCK_GENERIC_RE = re.compile(r"\{\{c(\d+)::(.*?)\}\}", re.DOTALL)
 _CLOZE_WITH_HINT_RE = re.compile(r"(\{\{c\d+::\s*<b>(.*?)</b>\s*\}\})\(([^)]*)\)", re.DOTALL)
+_EXPORT_FORBIDDEN_TRIPLE_CLOZE_RE = re.compile(r"\{\{\{c\d+::", re.IGNORECASE)
+_EXPORT_FORBIDDEN_SINGLE_BRACE_HINT_RE = re.compile(r"\{[^{}]+\}\(hint\)", re.IGNORECASE)
 _CHUNK_ID_INDEX_RE = re.compile(r"^chunk_(\d+)(?:_|$)", re.IGNORECASE)
 _FORMAT_RETRYABLE_REASONS = (
     "format:missing cloze marker",
@@ -612,6 +614,36 @@ def _resolve_deck_name(*, cfg: AppConfig, options: BuildDeckOptions, document: D
     if source_name:
         return source_name
     return cfg.default_deck_name
+
+
+def _filter_cards_for_export_cloze_format(
+    *,
+    cards: list[CardRecord],
+    errors: list[dict[str, Any]],
+) -> list[CardRecord]:
+    filtered: list[CardRecord] = []
+    for card in cards:
+        text = str(card.text or "")
+        reason = ""
+        if _EXPORT_FORBIDDEN_TRIPLE_CLOZE_RE.search(text):
+            reason = "contains triple-brace cloze marker"
+        elif _EXPORT_FORBIDDEN_SINGLE_BRACE_HINT_RE.search(text):
+            reason = "contains single-brace hint block"
+        elif not _CLOZE_WITH_HINT_RE.search(text):
+            reason = "missing canonical cloze block"
+        if reason:
+            errors.append(
+                {
+                    "stage": "export_cloze_format_guard",
+                    "card_id": card.card_id,
+                    "chunk_id": card.chunk_id,
+                    "reason": reason,
+                    "text_prefix": text[:120],
+                }
+            )
+            continue
+        filtered.append(card)
+    return filtered
 
 
 def _save_intermediate(
@@ -1539,16 +1571,22 @@ def _normalize_cloze_markup(text: str) -> str:
     normalized = value
     normalized = re.sub(r"\{\{cN::", "{{c1::", normalized)
     normalized = re.sub(r"\{\{cN:", "{{c1::", normalized)
-    normalized = re.sub(r"\{cN::", "{{c1::", normalized)
-    normalized = re.sub(r"\{c(\d+)::", r"{{c\1::", normalized)
-    normalized = re.sub(r"\{\{c(\d+)::([^}]+)\}", r"{{c\1::\2}}", normalized)
+    normalized = re.sub(r"(?<!\{)\{cN::", "{{c1::", normalized)
+    normalized = re.sub(r"(?<!\{)\{c(\d+)::", r"{{c\1::", normalized)
+    normalized = re.sub(r"\{\{c(\d+)::([^}]+)\}(?!\})", r"{{c\1::\2}}", normalized)
+
+    cloze_with_optional_hint_re = re.compile(
+        r"\{\{c(\d+)::(.*?)\}\}(?:\(([^)]*)\))?",
+        re.DOTALL,
+    )
 
     def _fmt(match: re.Match[str]) -> str:
         idx = match.group(1)
         body = re.sub(r"</?b>", "", match.group(2), flags=re.IGNORECASE).strip()
-        return f"{{{{c{idx}::<b>{body}</b>}}}}(hint)" if body else ""
+        hint = str(match.group(3) or "").strip() or "hint"
+        return f"{{{{c{idx}::<b>{body}</b>}}}}({hint})" if body else ""
 
-    normalized = _CLOZE_BLOCK_GENERIC_RE.sub(_fmt, normalized)
+    normalized = cloze_with_optional_hint_re.sub(_fmt, normalized)
     return normalized.strip()
 
 
@@ -1615,16 +1653,6 @@ def _attempt_format_canonicalize(
         if parsed:
             candidate["target_phrases"] = parsed
 
-    if reason_value.startswith("format:missing cloze marker"):
-        if "{{cn:" in text.lower() or "{cn::" in text.lower():
-            text = _normalize_cloze_markup(text)
-        if "{{c" not in text.lower() and original:
-            text = original
-        candidate["text"] = text
-
-    if reason_value.startswith("format:cloze style must be {{cN::<b>...</b>}}(hint)"):
-        candidate["text"] = _normalize_cloze_markup(text)
-
     match_sent = _FORMAT_RETRY_TEXT_EXCEEDS_RE.match(reason_value)
     if match_sent:
         cap = max(1, int(match_sent.group(1)))
@@ -1636,12 +1664,6 @@ def _attempt_format_canonicalize(
         current = str(candidate.get("text", ""))
         if len(current) < min_chars and original:
             candidate["text"] = original
-
-    if "{{c" in str(candidate.get("text", "")).lower():
-        candidate["text"] = _normalize_cloze_markup(str(candidate.get("text", "")))
-
-    # Keep text compact if canonicalization expanded context too much.
-    candidate["text"] = _trim_text_to_sentence_cap(str(candidate.get("text", "")), max_sentences)
 
     if not candidate.get("target_phrases"):
         parsed = _extract_cloze_phrases(str(candidate.get("text", "")))
@@ -2932,6 +2954,7 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
                     document=document,
                     chunk=chunk,
                     temperature=options.temperature,
+                    events=errors,
                 )
             return generate_cloze_candidates_for_chunk(
                 client=client_for_pass,
@@ -2939,6 +2962,7 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
                 document=document,
                 chunk=chunk,
                 temperature=options.temperature,
+                events=errors,
             )
 
         if use_phrase_pipeline:
@@ -2948,6 +2972,7 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
                 document=document,
                 chunks=batch,
                 temperature=options.temperature,
+                events=errors,
             )
         return generate_cloze_candidates_for_batch(
             client=client_for_pass,
@@ -2955,6 +2980,7 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
             document=document,
             chunks=batch,
             temperature=options.temperature,
+            events=errors,
         )
 
     def _run_extraction_pass(
@@ -3737,6 +3763,19 @@ def run_build_lingua_deck(cfg: AppConfig, options: BuildDeckOptions) -> BuildDec
                 attempt=attempt,
             )
             break
+
+    cards_before_export_guard = len(cards)
+    if cards:
+        cards = _filter_cards_for_export_cloze_format(
+            cards=cards,
+            errors=errors,
+        )
+    dropped_by_export_guard = max(0, cards_before_export_guard - len(cards))
+    if dropped_by_export_guard > 0:
+        logger.warning(
+            "export cloze format guard dropped cards | dropped=%d",
+            dropped_by_export_guard,
+        )
 
     if not cards and not cfg.allow_empty_deck:
         err = build_error(

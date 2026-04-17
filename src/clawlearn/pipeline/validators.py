@@ -376,26 +376,8 @@ def validate_text_candidate(
         return _reject("format", "original contains html tags")
 
     has_double = bool(_CLOZE_MARK_RE.search(text))
-    has_single = bool(_CLOZE_MARK_SINGLE_RE.search(text))
-
-    # Normalize single-brace cloze markers.
-    if has_single and not has_double:
-        text = _normalize_single_cloze(text)
-        item["text"] = text
-        has_double = bool(_CLOZE_MARK_RE.search(text))
-
-    # Fallback auto-injection when target phrases exist but cloze markers missing.
-    if not has_double and not has_single and target_phrases:
-        text = _auto_inject_cloze(text, target_phrases)
-        item["text"] = text
-        has_double = bool(_CLOZE_MARK_RE.search(text))
-
     if not has_double:
         return _reject("format", "missing cloze marker")
-
-    # Reindex c1/c2/c3 by order.
-    text = _reindex_cloze_numbers(text)
-    item["text"] = text
 
     if not _CLOZE_STYLE_RE.search(text):
         return _reject("format", "cloze style must be {{cN::<b>...</b>}}(hint)")

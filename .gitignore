@@ -39,6 +39,6 @@ pytest-cache-files-*
 tmp/
 
 # user-specific files
-tests/
 docs/
 outputs/
+runs/
